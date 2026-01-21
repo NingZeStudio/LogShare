@@ -40,7 +40,7 @@ McLogs Next 是一个用于粘贴、分享和分析 Minecraft 服务器日志的
 
 ## 界面预览
 
-![40e696461198e900.jpeg](https://cdn.zeinklab.com/myfile/images/40e696461198e900.jpeg)
+![9b9490de733e28a7.png](https://cdn.zeinklab.com/myfile/images/9b9490de733e28a7.png)
 
 ## 快速部署
 
