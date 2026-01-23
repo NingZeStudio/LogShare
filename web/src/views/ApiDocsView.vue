@@ -147,6 +147,34 @@ curl -X POST --data-urlencode 'content@path/to/latest.log' 'https://api.mclogs.l
                     https://api.mclogs.lemwood.icu/1/insights/[id]
                 </div>
                 <p class="text-sm text-muted-foreground">获取日志的分析结果，包括服务器版本、安装的插件/模组以及检测到的问题。</p>
+
+                <div class="space-y-4">
+                    <div class="flex items-center justify-between">
+                        <h3 class="text-lg font-medium">调用示例</h3>
+                        <div class="flex bg-muted rounded-md p-1 border border-border">
+                            <button @click="setTab('js')" :class="['px-3 py-1 text-xs rounded-sm transition-all', activeTab === 'js' ? 'bg-background shadow-sm text-foreground' : 'text-muted-foreground hover:text-foreground']">JavaScript</button>
+                            <button @click="setTab('php')" :class="['px-3 py-1 text-xs rounded-sm transition-all', activeTab === 'php' ? 'bg-background shadow-sm text-foreground' : 'text-muted-foreground hover:text-foreground']">PHP</button>
+                            <button @click="setTab('curl')" :class="['px-3 py-1 text-xs rounded-sm transition-all', activeTab === 'curl' ? 'bg-background shadow-sm text-foreground' : 'text-muted-foreground hover:text-foreground']">cURL</button>
+                        </div>
+                    </div>
+                    <div v-show="activeTab === 'js'" class="relative animate-in fade-in duration-300">
+                        <pre class="bg-slate-950 text-slate-50 p-4 rounded-lg text-xs overflow-x-auto whitespace-pre leading-relaxed border border-slate-800">
+<span class="text-cyan-400">const</span> response = <span class="text-cyan-400">await</span> <span class="text-yellow-400">fetch</span>(<span class="text-green-400">'https://api.mclogs.lemwood.icu/1/insights/8FlTowW'</span>);
+<span class="text-cyan-400">const</span> data = <span class="text-cyan-400">await</span> response.<span class="text-yellow-400">json</span>();
+<span class="text-cyan-400">console</span>.<span class="text-yellow-400">log</span>(data);</pre>
+                    </div>
+                    <div v-show="activeTab === 'php'" class="relative animate-in fade-in duration-300">
+                        <pre class="bg-slate-950 text-slate-50 p-4 rounded-lg text-xs overflow-x-auto whitespace-pre leading-relaxed border border-slate-800">
+<span class="text-cyan-400">&lt;?php</span>
+<span class="text-pink-400">$data</span> = <span class="text-yellow-400">json_decode</span>(<span class="text-yellow-400">file_get_contents</span>(<span class="text-green-400">'https://api.mclogs.lemwood.icu/1/insights/8FlTowW'</span>), <span class="text-cyan-400">true</span>);
+<span class="text-yellow-400">print_r</span>(<span class="text-pink-400">$data</span>);</pre>
+                    </div>
+                    <div v-show="activeTab === 'curl'" class="relative animate-in fade-in duration-300">
+                        <pre class="bg-slate-950 text-slate-50 p-4 rounded-lg text-xs overflow-x-auto whitespace-pre leading-relaxed border border-slate-800">
+curl https://api.mclogs.lemwood.icu/1/insights/8FlTowW</pre>
+                    </div>
+                </div>
+
                 <div class="space-y-2">
                     <h3 class="font-semibold text-sm">响应示例</h3>
                     <pre class="bg-muted p-3 rounded-md text-xs overflow-x-auto whitespace-pre max-h-64 border border-border">{
@@ -162,6 +190,185 @@ curl -X POST --data-urlencode 'content@path/to/latest.log' 'https://api.mclogs.l
             }
         ]
     }
+}</pre>
+                </div>
+            </section>
+
+            <!-- Raw Log -->
+            <section class="space-y-6">
+                <div class="flex items-center gap-4">
+                    <h2 class="text-2xl font-semibold">获取原始日志</h2>
+                    <span class="bg-green-600 text-white px-2 py-1 rounded text-xs font-bold">GET</span>
+                </div>
+                <div class="font-mono bg-muted p-3 rounded-md overflow-x-auto text-sm border border-border">
+                    https://api.mclogs.lemwood.icu/1/raw/[id]
+                </div>
+                <p class="text-sm text-muted-foreground">获取日志文件的原始内容 (text/plain)。</p>
+
+                <div class="space-y-4">
+                    <div class="flex items-center justify-between">
+                        <h3 class="text-lg font-medium">调用示例</h3>
+                        <div class="flex bg-muted rounded-md p-1 border border-border">
+                            <button @click="setTab('js')" :class="['px-3 py-1 text-xs rounded-sm transition-all', activeTab === 'js' ? 'bg-background shadow-sm text-foreground' : 'text-muted-foreground hover:text-foreground']">JavaScript</button>
+                            <button @click="setTab('php')" :class="['px-3 py-1 text-xs rounded-sm transition-all', activeTab === 'php' ? 'bg-background shadow-sm text-foreground' : 'text-muted-foreground hover:text-foreground']">PHP</button>
+                            <button @click="setTab('curl')" :class="['px-3 py-1 text-xs rounded-sm transition-all', activeTab === 'curl' ? 'bg-background shadow-sm text-foreground' : 'text-muted-foreground hover:text-foreground']">cURL</button>
+                        </div>
+                    </div>
+                    <div v-show="activeTab === 'js'" class="relative animate-in fade-in duration-300">
+                        <pre class="bg-slate-950 text-slate-50 p-4 rounded-lg text-xs overflow-x-auto whitespace-pre leading-relaxed border border-slate-800">
+<span class="text-cyan-400">const</span> response = <span class="text-cyan-400">await</span> <span class="text-yellow-400">fetch</span>(<span class="text-green-400">'https://api.mclogs.lemwood.icu/1/raw/8FlTowW'</span>);
+<span class="text-cyan-400">const</span> text = <span class="text-cyan-400">await</span> response.<span class="text-yellow-400">text</span>();
+<span class="text-cyan-400">console</span>.<span class="text-yellow-400">log</span>(text);</pre>
+                    </div>
+                    <div v-show="activeTab === 'php'" class="relative animate-in fade-in duration-300">
+                        <pre class="bg-slate-950 text-slate-50 p-4 rounded-lg text-xs overflow-x-auto whitespace-pre leading-relaxed border border-slate-800">
+<span class="text-cyan-400">echo</span> <span class="text-yellow-400">file_get_contents</span>(<span class="text-green-400">'https://api.mclogs.lemwood.icu/1/raw/8FlTowW'</span>);</pre>
+                    </div>
+                    <div v-show="activeTab === 'curl'" class="relative animate-in fade-in duration-300">
+                        <pre class="bg-slate-950 text-slate-50 p-4 rounded-lg text-xs overflow-x-auto whitespace-pre leading-relaxed border border-slate-800">
+curl https://api.mclogs.lemwood.icu/1/raw/8FlTowW</pre>
+                    </div>
+                </div>
+            </section>
+
+            <!-- AI Analysis -->
+            <section class="space-y-6">
+                <div class="flex items-center gap-4">
+                    <h2 class="text-2xl font-semibold">AI 智能分析</h2>
+                    <span class="bg-green-600 text-white px-2 py-1 rounded text-xs font-bold">GET</span>
+                </div>
+                <div class="font-mono bg-muted p-3 rounded-md overflow-x-auto text-sm border border-border">
+                    https://api.mclogs.lemwood.icu/1/ai-analysis/[id]
+                </div>
+                <p class="text-sm text-muted-foreground">使用大语言模型（Gemini）对日志进行深度分析，识别根本原因并提供建议。此接口会处理日志中的错误片段并返回 Markdown 格式的分析报告。</p>
+
+                <div class="space-y-4">
+                    <div class="flex items-center justify-between">
+                        <h3 class="text-lg font-medium">调用示例</h3>
+                        <div class="flex bg-muted rounded-md p-1 border border-border">
+                            <button @click="setTab('js')" :class="['px-3 py-1 text-xs rounded-sm transition-all', activeTab === 'js' ? 'bg-background shadow-sm text-foreground' : 'text-muted-foreground hover:text-foreground']">JavaScript</button>
+                            <button @click="setTab('php')" :class="['px-3 py-1 text-xs rounded-sm transition-all', activeTab === 'php' ? 'bg-background shadow-sm text-foreground' : 'text-muted-foreground hover:text-foreground']">PHP</button>
+                            <button @click="setTab('curl')" :class="['px-3 py-1 text-xs rounded-sm transition-all', activeTab === 'curl' ? 'bg-background shadow-sm text-foreground' : 'text-muted-foreground hover:text-foreground']">cURL</button>
+                        </div>
+                    </div>
+                    <div v-show="activeTab === 'js'" class="relative animate-in fade-in duration-300">
+                        <pre class="bg-slate-950 text-slate-50 p-4 rounded-lg text-xs overflow-x-auto whitespace-pre leading-relaxed border border-slate-800">
+<span class="text-cyan-400">const</span> response = <span class="text-cyan-400">await</span> <span class="text-yellow-400">fetch</span>(<span class="text-green-400">'https://api.mclogs.lemwood.icu/1/ai-analysis/8FlTowW'</span>);
+<span class="text-cyan-400">const</span> data = <span class="text-cyan-400">await</span> response.<span class="text-yellow-400">json</span>();
+<span class="text-cyan-400">console</span>.<span class="text-yellow-400">log</span>(data);</pre>
+                    </div>
+                    <div v-show="activeTab === 'php'" class="relative animate-in fade-in duration-300">
+                        <pre class="bg-slate-950 text-slate-50 p-4 rounded-lg text-xs overflow-x-auto whitespace-pre leading-relaxed border border-slate-800">
+<span class="text-cyan-400">&lt;?php</span>
+<span class="text-pink-400">$data</span> = <span class="text-yellow-400">json_decode</span>(<span class="text-yellow-400">file_get_contents</span>(<span class="text-green-400">'https://api.mclogs.lemwood.icu/1/ai-analysis/8FlTowW'</span>), <span class="text-cyan-400">true</span>);
+<span class="text-yellow-400">print_r</span>(<span class="text-pink-400">$data</span>);</pre>
+                    </div>
+                    <div v-show="activeTab === 'curl'" class="relative animate-in fade-in duration-300">
+                        <pre class="bg-slate-950 text-slate-50 p-4 rounded-lg text-xs overflow-x-auto whitespace-pre leading-relaxed border border-slate-800">
+curl https://api.mclogs.lemwood.icu/1/ai-analysis/8FlTowW</pre>
+                    </div>
+                </div>
+
+                <div class="space-y-2">
+                    <h3 class="font-semibold text-sm">响应示例</h3>
+                    <pre class="bg-muted p-3 rounded-md text-xs overflow-x-auto whitespace-pre max-h-64 border border-border">{
+    "success": true,
+    "analysis": "### 分析结果\n\n检测到内存溢出错误 (java.lang.OutOfMemoryError)...\n\n### 解决方案\n\n1. 增加 JVM 分配的内存..."
+}</pre>
+                </div>
+            </section>
+
+            <!-- Limits -->
+            <section class="space-y-6">
+                <div class="flex items-center gap-4">
+                    <h2 class="text-2xl font-semibold">获取存储限制</h2>
+                    <span class="bg-green-600 text-white px-2 py-1 rounded text-xs font-bold">GET</span>
+                </div>
+                <div class="font-mono bg-muted p-3 rounded-md overflow-x-auto text-sm border border-border">
+                    https://api.mclogs.lemwood.icu/1/limits
+                </div>
+                <p class="text-sm text-muted-foreground">获取当前服务器配置的日志存储限制参数。</p>
+
+                <div class="space-y-4">
+                    <div class="flex items-center justify-between">
+                        <h3 class="text-lg font-medium">调用示例</h3>
+                        <div class="flex bg-muted rounded-md p-1 border border-border">
+                            <button @click="setTab('js')" :class="['px-3 py-1 text-xs rounded-sm transition-all', activeTab === 'js' ? 'bg-background shadow-sm text-foreground' : 'text-muted-foreground hover:text-foreground']">JavaScript</button>
+                            <button @click="setTab('php')" :class="['px-3 py-1 text-xs rounded-sm transition-all', activeTab === 'php' ? 'bg-background shadow-sm text-foreground' : 'text-muted-foreground hover:text-foreground']">PHP</button>
+                            <button @click="setTab('curl')" :class="['px-3 py-1 text-xs rounded-sm transition-all', activeTab === 'curl' ? 'bg-background shadow-sm text-foreground' : 'text-muted-foreground hover:text-foreground']">cURL</button>
+                        </div>
+                    </div>
+                    <div v-show="activeTab === 'js'" class="relative animate-in fade-in duration-300">
+                        <pre class="bg-slate-950 text-slate-50 p-4 rounded-lg text-xs overflow-x-auto whitespace-pre leading-relaxed border border-slate-800">
+<span class="text-cyan-400">const</span> response = <span class="text-cyan-400">await</span> <span class="text-yellow-400">fetch</span>(<span class="text-green-400">'https://api.mclogs.lemwood.icu/1/limits'</span>);
+<span class="text-cyan-400">const</span> data = <span class="text-cyan-400">await</span> response.<span class="text-yellow-400">json</span>();
+<span class="text-cyan-400">console</span>.<span class="text-yellow-400">log</span>(data);</pre>
+                    </div>
+                    <div v-show="activeTab === 'php'" class="relative animate-in fade-in duration-300">
+                        <pre class="bg-slate-950 text-slate-50 p-4 rounded-lg text-xs overflow-x-auto whitespace-pre leading-relaxed border border-slate-800">
+<span class="text-cyan-400">&lt;?php</span>
+<span class="text-pink-400">$data</span> = <span class="text-yellow-400">json_decode</span>(<span class="text-yellow-400">file_get_contents</span>(<span class="text-green-400">'https://api.mclogs.lemwood.icu/1/limits'</span>), <span class="text-cyan-400">true</span>);
+<span class="text-yellow-400">print_r</span>(<span class="text-pink-400">$data</span>);</pre>
+                    </div>
+                    <div v-show="activeTab === 'curl'" class="relative animate-in fade-in duration-300">
+                        <pre class="bg-slate-950 text-slate-50 p-4 rounded-lg text-xs overflow-x-auto whitespace-pre leading-relaxed border border-slate-800">
+curl https://api.mclogs.lemwood.icu/1/limits</pre>
+                    </div>
+                </div>
+
+                <div class="space-y-2">
+                    <h3 class="font-semibold text-sm">响应示例</h3>
+                    <pre class="bg-muted p-3 rounded-md text-xs overflow-x-auto whitespace-pre border border-border">{
+    "storageTime": 86400,
+    "maxLength": 10485760,
+    "maxLines": 25000
+}</pre>
+                </div>
+            </section>
+
+            <!-- Rate Error -->
+            <section class="space-y-6">
+                <div class="flex items-center gap-4">
+                    <h2 class="text-2xl font-semibold">速率限制错误信息</h2>
+                    <span class="bg-green-600 text-white px-2 py-1 rounded text-xs font-bold">GET</span>
+                </div>
+                <div class="font-mono bg-muted p-3 rounded-md overflow-x-auto text-sm border border-border">
+                    https://api.mclogs.lemwood.icu/1/errors/rate
+                </div>
+                <p class="text-sm text-muted-foreground">返回标准的 429 Too Many Requests 错误响应。这主要用于测试或前端显示标准错误消息。</p>
+
+                <div class="space-y-4">
+                    <div class="flex items-center justify-between">
+                        <h3 class="text-lg font-medium">调用示例</h3>
+                        <div class="flex bg-muted rounded-md p-1 border border-border">
+                            <button @click="setTab('js')" :class="['px-3 py-1 text-xs rounded-sm transition-all', activeTab === 'js' ? 'bg-background shadow-sm text-foreground' : 'text-muted-foreground hover:text-foreground']">JavaScript</button>
+                            <button @click="setTab('php')" :class="['px-3 py-1 text-xs rounded-sm transition-all', activeTab === 'php' ? 'bg-background shadow-sm text-foreground' : 'text-muted-foreground hover:text-foreground']">PHP</button>
+                            <button @click="setTab('curl')" :class="['px-3 py-1 text-xs rounded-sm transition-all', activeTab === 'curl' ? 'bg-background shadow-sm text-foreground' : 'text-muted-foreground hover:text-foreground']">cURL</button>
+                        </div>
+                    </div>
+                    <div v-show="activeTab === 'js'" class="relative animate-in fade-in duration-300">
+                        <pre class="bg-slate-950 text-slate-50 p-4 rounded-lg text-xs overflow-x-auto whitespace-pre leading-relaxed border border-slate-800">
+<span class="text-cyan-400">const</span> response = <span class="text-cyan-400">await</span> <span class="text-yellow-400">fetch</span>(<span class="text-green-400">'https://api.mclogs.lemwood.icu/1/errors/rate'</span>);
+<span class="text-cyan-400">const</span> data = <span class="text-cyan-400">await</span> response.<span class="text-yellow-400">json</span>();
+<span class="text-cyan-400">console</span>.<span class="text-yellow-400">log</span>(data);</pre>
+                    </div>
+                    <div v-show="activeTab === 'php'" class="relative animate-in fade-in duration-300">
+                        <pre class="bg-slate-950 text-slate-50 p-4 rounded-lg text-xs overflow-x-auto whitespace-pre leading-relaxed border border-slate-800">
+<span class="text-cyan-400">&lt;?php</span>
+<span class="text-pink-400">$data</span> = <span class="text-yellow-400">json_decode</span>(<span class="text-yellow-400">file_get_contents</span>(<span class="text-green-400">'https://api.mclogs.lemwood.icu/1/errors/rate'</span>), <span class="text-cyan-400">true</span>);
+<span class="text-yellow-400">print_r</span>(<span class="text-pink-400">$data</span>);</pre>
+                    </div>
+                    <div v-show="activeTab === 'curl'" class="relative animate-in fade-in duration-300">
+                        <pre class="bg-slate-950 text-slate-50 p-4 rounded-lg text-xs overflow-x-auto whitespace-pre leading-relaxed border border-slate-800">
+curl https://api.mclogs.lemwood.icu/1/errors/rate</pre>
+                    </div>
+                </div>
+
+                <div class="space-y-2">
+                    <h3 class="font-semibold text-sm">响应示例</h3>
+                    <pre class="bg-muted p-3 rounded-md text-xs overflow-x-auto whitespace-pre border border-border">{
+    "success": false,
+    "error": "Unfortunately you have exceeded the rate limit for the current time period. Please try again later."
 }</pre>
                 </div>
             </section>

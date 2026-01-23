@@ -10,7 +10,7 @@ import { RouterView, RouterLink } from 'vue-router'
           <img src="/img/logo.png" alt="Logo" class="h-8" /> <!-- Assuming I copy img to public -->
         </RouterLink>
         <nav class="flex gap-4">
-          <RouterLink to="/api-docs" class="text-sm font-medium hover:underline">API</RouterLink>
+          <RouterLink to="/api-docs" class="text-sm font-bold bg-primary text-primary-foreground px-4 py-2 rounded-md hover:bg-primary/90 transition-colors">API 文档</RouterLink>
         </nav>
       </div>
     </header>

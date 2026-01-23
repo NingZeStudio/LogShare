@@ -18,7 +18,7 @@ class RedisClient
     {
         if(self::$connection === null) {
             self::$connection = new Redis();
-            self::$connection->connect('172.0.0.1', 6379);
+            self::$connection->connect('mclogs-redis', 6379);
         }
     }
 }

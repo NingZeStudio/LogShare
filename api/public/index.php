@@ -33,6 +33,10 @@ switch ($_SERVER['REQUEST_URI']) {
             require_once("../endpoints/raw.php");
             break;
         }
+        if (preg_match('#^/1/ai-analysis/#', $_SERVER['REQUEST_URI'])) {
+            require_once("../endpoints/ai-analysis.php");
+            break;
+        }
         if (preg_match('#^/1/insights/#', $_SERVER['REQUEST_URI'])) {
             require_once("../endpoints/insights.php");
             break;

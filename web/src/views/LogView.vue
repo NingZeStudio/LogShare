@@ -1,8 +1,26 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { onMounted, ref, computed } from 'vue'
 import { useRoute } from 'vue-router'
 import { apiClient, getApiUrl } from '@/lib/api'
 import { parseLog } from '@/lib/logParser'
+import MarkdownIt from 'markdown-it'
+import hljs from 'highlight.js'
+import 'highlight.js/styles/github-dark.css'
+
+const md = new MarkdownIt({
+    html: false,
+    linkify: true,
+    highlight: function (str: string, lang: string): string {
+        if (lang && hljs.getLanguage(lang)) {
+            try {
+                return '<pre class="hljs"><code>' +
+                    hljs.highlight(str, { language: lang, ignoreIllegals: true }).value +
+                    '</code></pre>';
+            } catch (__) { }
+        }
+        return ''; // use external default escaping
+    }
+})
 
 const route = useRoute()
 const id = route.params.id as string
@@ -12,6 +30,36 @@ const loading = ref(true)
 const error = ref('')
 const showErrorsOnly = ref(false)
 const wrapLines = ref(true)
+const analyzing = ref(false)
+const aiResult = ref('')
+
+const formattedAiResult = computed(() => {
+    if (!aiResult.value) return ''
+    if (aiResult.value.startsWith('Error') || aiResult.value.startsWith('Analysis failed')) {
+        // Render errors as plain text (or wrap in a warning block if preferred)
+        return `<div class="text-destructive">${aiResult.value}</div>`
+    }
+    return md.render(aiResult.value)
+})
+
+const analyzeLog = async () => {
+    analyzing.value = true
+    aiResult.value = ''
+    try {
+        const { data } = await apiClient.get(`/1/ai-analysis/${id}`)
+        if (data.success) {
+            aiResult.value = data.analysis
+        } else {
+            aiResult.value = "Analysis failed: " + (data.analysis || 'Unknown error')
+        }
+    } catch (e: any) {
+        console.error(e)
+        const msg = e.response?.data?.analysis || e.response?.data?.error || e.message || "Unknown error";
+        aiResult.value = "Error requesting analysis: " + msg
+    } finally {
+        analyzing.value = false
+    }
+}
 
 onMounted(async () => {
   try {
@@ -90,10 +138,30 @@ const scrollToTop = () => window.scrollTo({ top: 0, behavior: 'smooth' })
                     </div>
                     <div v-if="prob.solutions && prob.solutions.length" class="mt-1 pl-2 border-l-2 border-destructive/30">
                         <div v-for="sol in prob.solutions" :key="sol.message" class="text-muted-foreground text-xs">
-                             💡 {{ sol.message }}
+                              {{ sol.message }}
                         </div>
                     </div>
                 </div>
+            </div>
+        </div>
+
+        <!-- AI Analysis -->
+        <div class="bg-card border rounded-lg p-4 shadow-sm text-card-foreground">
+            <h3 class="font-bold mb-3 flex items-center gap-2">
+                <span>大模型智能分析</span>
+            </h3>
+            <div v-if="!aiResult && !analyzing">
+                <button @click="analyzeLog" class="w-full bg-[#3b82f6] text-white hover:bg-[#2563eb] px-4 py-2 rounded font-medium transition-colors">
+                    开始智能分析
+                </button>
+                <p class="text-xs text-muted-foreground mt-2 text-center">内容由AI生成，本站不对AI生成的内容负责</p>
+            </div>
+            <div v-else-if="analyzing" class="text-center py-4">
+                <div class="animate-spin rounded-full h-6 w-6 border-b-2 border-[#3b82f6] mx-auto"></div>
+                <p class="text-sm text-muted-foreground mt-2">正在分析日志...</p>
+            </div>
+            <div v-else class="text-sm bg-secondary/50 p-4 rounded border overflow-x-auto">
+                <div class="prose prose-sm dark:prose-invert max-w-none break-words" v-html="formattedAiResult"></div>
             </div>
         </div>
 
