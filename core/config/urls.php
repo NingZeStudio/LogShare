@@ -1,5 +1,3 @@
-<?php
-
 $config = [
 
     /**
@@ -7,13 +5,13 @@ $config = [
      *
      * Should not end with a slash
      */
-    'https://mclogs.lemwood.icu',
+    'baseUrl' => 'https://mclogs.lemwood.icu',
 
     /**
      * The base URL for the API
      *
      * Should not end with a slash
      */
-    'https://api.mclogs.lemwood.icu',
+    'apiBaseUrl' => 'https://api.mclogs.lemwood.icu',
 
 ];
