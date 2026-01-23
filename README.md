@@ -52,11 +52,17 @@ McLogs Next 是一个用于粘贴、分享和分析 Minecraft 服务器日志的
 
 1.  Docker (20.10+)
 2.  Docker Compose (2.0+)
-3.  Node.js (16+，仅用于构建前端资源)
+3.  Node.js (20+，仅用于构建前端资源)
 
-### 2. 构建前端资源
+### 2. 安装依赖和构建静态资源
 
-在启动 Docker 容器前，必须先编译前端代码：
+在启动 Docker 容器前，需要安装PHP依赖：
+
+```bash
+composer install
+```
+
+编译前端代码：
 
 ```bash
 # 进入前端目录
