@@ -27,4 +27,12 @@ interface StorageInterface
      * @return bool Success
      */
     public static function Renew(\Id $id): bool;
+
+    /**
+     * Delete data from the storage by id
+     *
+     * @param \Id $id
+     * @return bool Success
+     */
+    public static function Delete(\Id $id): bool;
 }

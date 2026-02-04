@@ -49,13 +49,11 @@ body {
 }
 
 .logo {
-    width: 256px;
     margin-right: auto;
-}
-
-.logo img {
-    width: 100%;
-    height: auto;
+    font-size: 1.5rem;
+    font-weight: bold;
+    display: flex;
+    align-items: center;
 }
 
 .menu-item,

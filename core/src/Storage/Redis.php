@@ -55,4 +55,19 @@ class Redis extends RedisClient implements StorageInterface {
         self::$connection->expire($id->getRaw(), $config['storageTime']);
         return true;
     }
+
+    /**
+     * Delete data from the storage by id
+     *
+     * @param \Id $id
+     * @return bool Success
+     */
+    public static function Delete(\Id $id): bool
+    {
+        self::Connect();
+
+        $result = self::$connection->del($id->getRaw());
+
+        return $result > 0;
+    }
 }

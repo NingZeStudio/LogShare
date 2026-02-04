@@ -41,6 +41,10 @@ switch ($_SERVER['REQUEST_URI']) {
             require_once("../endpoints/insights.php");
             break;
         }
+        if (preg_match('#^/1/delete/#', $_SERVER['REQUEST_URI'])) {
+            require_once("../endpoints/delete.php");
+            break;
+        }
 
         $error = new ApiError(404, "Could not find endpoint. URI: " . $_SERVER['REQUEST_URI']);
         $error->output();

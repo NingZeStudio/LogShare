@@ -326,6 +326,116 @@ curl https://api.mclogs.lemwood.icu/1/limits</pre>
                 </div>
             </section>
 
+            <!-- Delete Log -->
+            <section class="space-y-6">
+                <div class="flex items-center gap-4">
+                    <h2 class="text-2xl font-semibold">删除日志文件</h2>
+                    <span class="bg-red-600 text-white px-2 py-1 rounded text-xs font-bold">DELETE</span>
+                </div>
+
+                <div class="font-mono bg-muted p-3 rounded-md overflow-x-auto text-sm border border-border">
+                    https://api.mclogs.lemwood.icu/1/delete/[id]
+                </div>
+
+                <p class="text-sm text-muted-foreground">删除指定 ID 的日志文件。此操作不可逆，请谨慎使用。</p>
+
+                <div class="space-y-4">
+                    <h3 class="text-lg font-medium">请求参数</h3>
+                    <div class="overflow-x-auto">
+                        <table class="w-full text-sm border-collapse border border-border">
+                            <thead class="bg-muted">
+                                <tr>
+                                    <th class="border border-border p-2 text-left">字段</th>
+                                    <th class="border border-border p-2 text-left">类型</th>
+                                    <th class="border border-border p-2 text-left">描述</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr>
+                                    <td class="border border-border p-2 font-mono text-primary">id</td>
+                                    <td class="border border-border p-2">string</td>
+                                    <td class="border border-border p-2">要删除的日志文件的唯一标识符</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <div class="space-y-4">
+                    <div class="flex items-center justify-between">
+                        <h3 class="text-lg font-medium">调用示例</h3>
+                        <div class="flex bg-muted rounded-md p-1 border border-border">
+                            <button
+                                @click="setTab('js')"
+                                :class="['px-3 py-1 text-xs rounded-sm transition-all', activeTab === 'js' ? 'bg-background shadow-sm text-foreground' : 'text-muted-foreground hover:text-foreground']"
+                            >JavaScript</button>
+                            <button
+                                @click="setTab('php')"
+                                :class="['px-3 py-1 text-xs rounded-sm transition-all', activeTab === 'php' ? 'bg-background shadow-sm text-foreground' : 'text-muted-foreground hover:text-foreground']"
+                            >PHP</button>
+                            <button
+                                @click="setTab('curl')"
+                                :class="['px-3 py-1 text-xs rounded-sm transition-all', activeTab === 'curl' ? 'bg-background shadow-sm text-foreground' : 'text-muted-foreground hover:text-foreground']"
+                            >cURL</button>
+                        </div>
+                    </div>
+
+                    <!-- JS Example -->
+                    <div v-show="activeTab === 'js'" class="relative animate-in fade-in duration-300">
+                        <pre class="bg-slate-950 text-slate-50 p-4 rounded-lg text-xs overflow-x-auto whitespace-pre leading-relaxed border border-slate-800">
+<span class="text-cyan-400">const</span> logId = <span class="text-green-400">"8FlTowW"</span>;
+<span class="text-cyan-400">const</span> response = <span class="text-cyan-400">await</span> <span class="text-yellow-400">fetch</span>(<span class="text-green-400">`https://api.mclogs.lemwood.icu/1/delete/<span class="text-yellow-400">${logId}</span>`</span>, {
+    method: <span class="text-green-400">'DELETE'</span>,
+    headers: {
+        'Content-Type': 'application/json'
+    }
+});
+<span class="text-cyan-400">const</span> data = <span class="text-cyan-400">await</span> response.<span class="text-yellow-400">json</span>();
+<span class="text-cyan-400">console</span>.<span class="text-yellow-400">log</span>(data);</pre>
+                    </div>
+
+                    <!-- PHP Example -->
+                    <div v-show="activeTab === 'php'" class="relative animate-in fade-in duration-300">
+                        <pre class="bg-slate-950 text-slate-50 p-4 rounded-lg text-xs overflow-x-auto whitespace-pre leading-relaxed border border-slate-800">
+<span class="text-cyan-400">&lt;?php</span>
+<span class="text-pink-400">$logId</span> = <span class="text-green-400">"8FlTowW"</span>;
+<span class="text-pink-400">$ch</span> = <span class="text-yellow-400">curl_init</span>(<span class="text-green-400">"https://api.mclogs.lemwood.icu/1/delete/<span class="text-pink-400">$logId</span>"</span>);
+<span class="text-yellow-400">curl_setopt</span>(<span class="text-pink-400">$ch</span>, CURLOPT_CUSTOMREQUEST, <span class="text-green-400">"DELETE"</span>);
+<span class="text-yellow-400">curl_setopt</span>(<span class="text-pink-400">$ch</span>, CURLOPT_RETURNTRANSFER, <span class="text-cyan-400">true</span>);
+<span class="text-yellow-400">curl_setopt</span>(<span class="text-pink-400">$ch</span>, CURLOPT_HTTPHEADER, [
+    <span class="text-green-400">"Content-Type: application/json"</span>
+]);
+<span class="text-pink-400">$response</span> = <span class="text-yellow-400">curl_exec</span>(<span class="text-pink-400">$ch</span>);
+<span class="text-pink-400">$data</span> = <span class="text-yellow-400">json_decode</span>(<span class="text-pink-400">$response</span>, <span class="text-cyan-400">true</span>);
+<span class="text-yellow-400">curl_close</span>(<span class="text-pink-400">$ch</span>);
+<span class="text-yellow-400">print_r</span>(<span class="text-pink-400">$data</span>);</pre>
+                    </div>
+
+                    <!-- cURL Example -->
+                    <div v-show="activeTab === 'curl'" class="relative animate-in fade-in duration-300">
+                        <pre class="bg-slate-950 text-slate-50 p-4 rounded-lg text-xs overflow-x-auto whitespace-pre leading-relaxed border border-slate-800">
+curl -X DELETE -H "Content-Type: application/json" 'https://api.mclogs.lemwood.icu/1/delete/8FlTowW'</pre>
+                    </div>
+                </div>
+
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div class="space-y-2">
+                        <h3 class="font-semibold text-sm">成功响应 (200 OK)</h3>
+                        <pre class="bg-muted p-3 rounded-md text-xs border border-border overflow-x-auto whitespace-pre">{
+    "success": true,
+    "message": "Log deleted successfully"
+}</pre>
+                    </div>
+                    <div class="space-y-2">
+                        <h3 class="font-semibold text-sm">错误响应</h3>
+                        <pre class="bg-muted p-3 rounded-md text-xs border border-border overflow-x-auto whitespace-pre">{
+    "success": false,
+    "error": "Log not found"
+}</pre>
+                    </div>
+                </div>
+            </section>
+
             <!-- Rate Error -->
             <section class="space-y-6">
                 <div class="flex items-center gap-4">

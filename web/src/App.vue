@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
-import { RouterView, RouterLink } from 'vue-router'
+import { RouterView, RouterLink, useRoute } from 'vue-router'
 import { Sun, Moon, X } from 'lucide-vue-next'
+import { setPageTitle, getCurrentPageTemplate } from '@/lib/pageTitle'
 
 const isDark = ref(false)
 const toggleCount = ref(0)
@@ -17,7 +18,7 @@ const easterEggImages = [
 const toggleTheme = () => {
   isDark.value = !isDark.value
   updateTheme()
-  
+
   toggleCount.value++
   if (toggleCount.value >= 10) {
     showEasterEgg.value = true
@@ -26,6 +27,9 @@ const toggleTheme = () => {
 }
 
 const updateTheme = () => {
+  // 添加过渡类以实现平滑切换
+  document.documentElement.classList.add('transition-colors', 'duration-500')
+
   if (isDark.value) {
     document.documentElement.classList.add('dark')
     localStorage.setItem('theme', 'dark')
@@ -33,6 +37,11 @@ const updateTheme = () => {
     document.documentElement.classList.remove('dark')
     localStorage.setItem('theme', 'light')
   }
+
+  // 移除过渡类以避免不必要的过渡
+  setTimeout(() => {
+    document.documentElement.classList.remove('transition-colors', 'duration-500')
+  }, 500)
 }
 
 const closeEasterEgg = () => {
@@ -54,15 +63,20 @@ onMounted(() => {
   if (!localStorage.getItem('cookie_consent')) {
     showCookieConsent.value = true
   }
+
+  // 初始化页面标题
+  const route = useRoute();
+  const template = getCurrentPageTemplate(route.name?.toString());
+  setPageTitle(template);
 })
 </script>
 
 <template>
-  <div class="min-h-screen bg-background text-foreground flex flex-col font-sans antialiased transition-colors duration-300">
+  <div class="min-h-screen bg-background text-foreground flex flex-col font-sans antialiased transition-colors duration-500">
     <header class="border-b bg-card sticky top-0 z-40 w-full backdrop-blur">
       <div class="container mx-auto px-4 h-16 flex items-center justify-between">
         <RouterLink to="/" class="flex items-center gap-2 font-bold text-xl">
-          <img src="/img/logo.png" alt="Logo" class="h-8" /> 
+          <span class="text-primary">NingZeLogs</span><sup class="text-xs text-muted-foreground">ᴺᵉˣᵀ</sup>
         </RouterLink>
         <nav class="flex items-center gap-4">
           <RouterLink to="/api-docs" class="text-sm font-bold bg-primary text-primary-foreground px-4 py-2 rounded-md hover:bg-primary/90 transition-colors">API 文档</RouterLink>

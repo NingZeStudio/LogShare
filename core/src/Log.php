@@ -336,4 +336,40 @@ class Log
             $this->data = $preFilterClass::Filter($this->data);
         }
     }
+
+    /**
+     * Delete the log from storage
+     *
+     * @return bool Success
+     */
+    public function delete(): bool
+    {
+        if (!$this->id) {
+            return false;
+        }
+
+        $config = Config::Get('storage');
+
+        if (!isset($config['storages'][$this->id->getStorage()])) {
+            return false;
+        }
+
+        if (!$config['storages'][$this->id->getStorage()]['enabled']) {
+            return false;
+        }
+
+        /**
+         * @var StorageInterface $storage
+         */
+        $storage = $config['storages'][$this->id->getStorage()]['class'];
+
+        $result = $storage::Delete($this->id);
+
+        if ($result) {
+            $this->exists = false;
+            $this->data = null;
+        }
+
+        return $result;
+    }
 }

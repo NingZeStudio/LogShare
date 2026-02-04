@@ -1,172 +1,226 @@
-<div align="center">
+# McLogs Next
 
-  # McLogs Next
+**现代化 Minecraft 服务器日志分析与分享平台**
 
-  **现代化 Minecraft 服务器日志分析与分享平台**
+[![License](https://img.shields.io/badge/license-MIT-blue.svg?style=flat-square)](LICENSE)
+[![PHP](https://img.shields.io/badge/PHP-8.4+-777BB4.svg?style=flat-square&logo=php&logoColor=white)](https://www.php.net/)
+[![Vue](https://img.shields.io/badge/Vue.js-3.x-4FC08D.svg?style=flat-square&logo=vue.js&logoColor=white)](https://vuejs.org/)
+[![Docker](https://img.shields.io/badge/Docker-Ready-2496ED.svg?style=flat-square&logo=docker&logoColor=white)](https://www.docker.com/)
 
-  [![License](https://img.shields.io/badge/license-MIT-blue.svg?style=flat-square)](LICENSE)
-  [![PHP](https://img.shields.io/badge/PHP-8.1+-777BB4.svg?style=flat-square&logo=php&logoColor=white)](https://www.php.net/)
-  [![Vue](https://img.shields.io/badge/Vue.js-3.x-4FC08D.svg?style=flat-square&logo=vue.js&logoColor=white)](https://vuejs.org/)
-  [![Docker](https://img.shields.io/badge/Docker-Ready-2496ED.svg?style=flat-square&logo=docker&logoColor=white)](https://www.docker.com/)
+## 🚀 项目简介
 
-</div>
+McLogs Next 是一个现代化的 Web 应用程序，专为 Minecraft 服务器管理员设计，用于分享、分析和诊断服务器日志。该项目从传统的 PHP 前端重构为基于 Vue 3 + TypeScript + Tailwind CSS 的单页应用（SPA），提供了更流畅的用户体验和更强大的功能。
 
----
+主要特点：
+- **简化日志分享**：通过唯一 URL 轻松分享大型日志文件
+- **智能错误分析**：利用先进的分析库自动检测问题并提供解决方案
+- **隐私保护**：内置过滤机制，自动隐藏敏感信息
+- **现代化界面**：响应式设计，支持深色模式
 
-## 项目简介
+## ✨ 核心功能
 
-McLogs Next 是一个用于粘贴、分享和分析 Minecraft 服务器日志的现代化 Web 应用程序。它解决了分享大体积日志文件的难题，并提供语法高亮和自动错误分析功能，帮助管理员快速定位服务器问题。
+- **日志分享**：通过唯一 URL 分享大型日志文件，无需复杂上传流程
+- **智能分析**：集成 aternos/codex 库，自动识别服务器软件类型，精准检测错误并提供解决方案
+- **隐私保护**：智能过滤算法，自动隐藏日志中的敏感信息（如 IP 地址）
+- **现代化 UI**：基于 Shadcn/Vue 和 Tailwind CSS 构建，完美适配移动端和桌面端，支持深色模式
+- **多后端存储**：灵活的存储策略，支持 MongoDB（默认）、Redis 和本地文件系统
+- **语法高亮**：为日志文件提供专业的语法高亮显示
 
-本项目已从传统的 PHP 前端重构为基于 Vue 3 + TypeScript + Tailwind CSS 的现代化单页应用（SPA），提供更流畅的用户体验。
+## 🛠️ 技术栈
 
-## 功能特性
+| 层级 | 技术 | 描述 |
+|------|------|------|
+| **前端** | Vue 3, Vite, TypeScript | 现代化 SPA 架构 |
+| **UI 框架** | Tailwind CSS, Shadcn/Vue | 极简且高度可定制的 UI 组件 |
+| **构建工具** | Vite | 快速的构建和开发体验 |
+| **后端** | PHP 8.4+ | 提供稳健的 REST API 服务 |
+| **数据库** | MongoDB | 高性能日志存储（默认） |
+| **缓存** | Redis | 可选的高速缓存层 |
+| **基础设施** | Docker, Docker Compose, Nginx | 容器化部署与统一服务管理 |
 
-*   日志分享：通过唯一 URL 轻松分享大型日志文件，无需复杂的上传流程。
-*   智能分析：集成 aternos/codex 库，自动识别服务器软件，精准检测错误并提供解决方案。
-*   隐私保护：智能过滤算法，自动隐藏日志中的敏感信息（如 IP 地址）。
-*   现代化 UI：基于 Shadcn/Vue 和 Tailwind CSS 构建，完美适配移动端和桌面端，支持深色模式。
-*   多后端存储：灵活的存储策略，支持 MongoDB（默认）、Redis 和本地文件系统。
+## 📦 依赖组件
 
-## 技术栈
+### PHP 依赖
+- `mongodb/mongodb`: 2.1.2
+- `aternos/codex-minecraft`: ^5.0.1 (日志分析)
+- `aternos/sherlock`: ^1.0.2 (日志分析)
+- `aternos/codex-hytale`: ^1.0 (Hytale 日志分析)
+- 必需扩展: json, zlib, mbstring
 
-| 模块 | 技术 | 说明 |
-| :--- | :--- | :--- |
-| **Frontend** | Vue 3, Vite, TypeScript | 现代化 SPA 架构 |
-| **UI Framework** | Tailwind CSS, Shadcn/Vue | 极简且高度可定制的 UI 组件 |
-| **Backend** | PHP 8.1+ | 提供稳健的 REST API 服务 |
-| **Database** | MongoDB | 高性能日志存储（默认） |
-| **Cache** | Redis | 可选的高速缓存层 |
-| **Infrastructure** | Docker, Nginx | 容器化部署与统一流量分发 |
+### 前端依赖
+- `Vue 3`: ^3.5.24
+- `TypeScript`: ~5.9.3
+- `Tailwind CSS`: ^3.4.17
+- `Axios`: ^1.13.2 (HTTP 客户端)
+- `Highlight.js`: ^11.11.1 (语法高亮)
+- `Radix-Vue`: ^1.9.17 (UI 组件)
 
-## 界面预览
+## 🚀 快速部署
 
-![9b9490de733e28a7.png](https://cdn.zeinklab.com/myfile/images/9b9490de733e28a7.png)
+### 环境要求
+- Docker (20.10+)
+- Docker Compose (2.0+)
+- Node.js (20+, 用于构建前端资源)
+- PHP 8.4+ (用于本地开发)
 
-## 快速部署
+### 部署步骤
 
-本项目包含前后端两个服务，共用同一端口，因此反向代理配置至关重要。请严格按照以下步骤操作。
+1. **克隆项目**
+   ```bash
+   git clone https://github.com/your-repo/McLogs_Next.git
+   cd McLogs_Next
+   ```
 
-### 1. 环境准备
+2. **安装 PHP 依赖**
+   ```bash
+   composer install
+   ```
 
-确保您的服务器已安装以下环境：
+3. **构建前端资源**
+   ```bash
+   cd web
+   npm install
+   npm run build
+   cd ..
+   ```
 
-1.  Docker (20.10+)
-2.  Docker Compose (2.0+)
-3.  Node.js (20+，仅用于构建前端资源)
+4. **配置环境变量**
+   ```bash
+   cd docker
+   cp .env.example .env
+   # 编辑 .env 文件以配置您的设置
+   ```
 
-### 2. 安装依赖和构建静态资源
+5. **修改 Nginx 配置**
+   
+   编辑 `docker/mclogs.conf` 文件，将域名替换为您的实际域名：
+   
+   ```nginx
+   # 前端服务
+   server {
+       ...
+       server_name logs.yourdomain.com;  # 替换为您的前端域名
+       ...
+   }
+   
+   # API 服务
+   server {
+       ...
+       server_name api.logs.yourdomain.com;  # 替换为您的 API 域名
+       ...
+   }
+   ```
 
-在启动 Docker 容器前，需要安装PHP依赖：
+6. **启动服务**
+   ```bash
+   docker-compose up -d
+   ```
 
-```bash
-composer install
-```
+7. **配置反向代理**
+   
+   由于容器内的 Nginx 使用 server_name 区分 API 和前端请求，您需要在宿主机上配置反向代理，将域名流量转发到容器的 9300 端口：
+   
+   ```nginx
+   # 前端反向代理
+   server {
+       listen 80;
+       server_name logs.yourdomain.com;
+       
+       location / {
+           proxy_pass http://127.0.0.1:9300;
+           proxy_set_header Host $host;
+           proxy_set_header X-Real-IP $remote_addr;
+           proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+       }
+   }
+   
+   # API 反向代理
+   server {
+       listen 80;
+       server_name api.logs.yourdomain.com;
+       
+       location / {
+           proxy_pass http://127.0.0.1:9300;
+           proxy_set_header Host $host;
+           proxy_set_header X-Real-IP $remote_addr;
+           proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+       }
+   }
+   ```
 
-编译前端代码：
+## 🔧 开发指南
 
-```bash
-# 进入前端目录
-cd web
+### 本地开发
 
-# 安装依赖
-npm install
+1. **启动后端服务**
+   ```bash
+   cd docker
+   docker-compose up -d
+   ```
 
-# 执行构建
-npm run build
-```
+2. **启动前端开发服务器**
+   ```bash
+   cd web
+   npm install
+   npm run dev
+   ```
+   
+   前端开发服务器将在 http://localhost:5173 上运行。
 
-构建产物将生成在 web/dist 目录下，该目录将自动映射到 Nginx 容器中。
+3. **API 端点**
+   
+   API 遵循版本化结构 (`/1/`)：
+   - `/` - 主前端处理器
+   - `/1/log` - 提交新日志
+   - `/1/analyse` - 分析日志
+   - `/1/errors/rate` - 错误率信息
+   - `/1/limits` - 系统限制信息
+   - `/1/raw/{id}` - 原始日志内容检索
+   - `/1/ai-analysis/{id}` - 特定日志的 AI 分析
+   - `/1/insights/{id}` - 特定日志的洞察
 
-### 3. 修改 Nginx 配置
+### 配置文件
 
-由于容器内的 Nginx 使用 server_name 区分 API 和前端请求，您必须修改配置文件以匹配您的实际域名。
+配置通过 `core/config/` 目录中的 PHP 文件管理：
+- `storage.php` - 存储后端配置（MongoDB、Redis、文件系统）
+- `urls.php` - 前端和 API 的基础 URL 配置
+- `ai.php` - AI 分析设置
+- `cache.php` - 缓存配置
+- `filter.php` - 日志过滤设置
+- `id.php` - ID 生成设置
+- `legal.php` - 法律合规设置
 
-1.  编辑配置文件：`docker/mclogs.conf`
-2.  修改两个 server 块中的 server_name：
+## 🤝 贡献指南
 
-```nginx
-# 前端服务块
-server {
-    ...
-    server_name logs.example.com; # 修改为您的前端域名
-    root /web/mclogs/web/dist;
-    ...
-}
+我们欢迎社区贡献！以下是参与项目的方式：
 
-# API 服务块
-server {
-    ...
-    server_name api.logs.example.com; # 修改为您的 API 域名
-    root /web/mclogs/api/public;
-    ...
-}
-```
+1. Fork 项目
+2. 创建功能分支 (`git checkout -b feature/AmazingFeature`)
+3. 提交更改 (`git commit -m 'Add some AmazingFeature'`)
+4. 推送到分支 (`git push origin feature/AmazingFeature`)
+5. 创建 Pull Request
 
-### 4. 启动服务
+### 开发约定
 
-使用 Docker Compose 启动所有服务（Nginx, PHP-FPM, MongoDB）：
+- PHP 8.4+ 是必需的
+- 使用 PSR-4 自动加载，通过 `core.php` 中的自定义加载器实现
+- 前端遵循 Vue 3 Composition API 模式与 TypeScript
+- 使用 Tailwind CSS 实用优先方法进行样式设计
+- 遵循 RESTful API 设计原则
+- 采用 Docker 优先的部署方式
 
-```bash
-cd docker
-docker-compose up -d
-```
+## 📄 许可证
 
-### 5. 配置反向代理（强制要求）
+本项目基于 [MIT License](LICENSE) 开源。
 
-Docker 容器将 80 端口映射到了宿主机的 127.0.0.1:9300。由于容器内部依赖 Host 请求头来区分是访问前端还是 API，您无法直接通过 IP 访问。
+## 📞 支持
 
-您必须在宿主机搭建一层反向代理（如 Nginx、Caddy 或 Apache），将域名流量转发到本地的 9300 端口，并传递 Host 头。
+如果您遇到任何问题或有改进建议，请：
+- 查看 [Issues](https://github.com/your-repo/McLogs_Next/issues) 页面
+- 提交新的 Issue
+- 查阅文档
 
-#### 宿主机 Nginx 配置示例
+## 🙏 致谢
 
-```nginx
-# 前端反向代理
-server {
-    listen 80;
-    server_name logs.example.com; # 必须与步骤 3 中的前端域名一致
-
-    location / {
-        proxy_pass http://127.0.0.1:9300;
-        
-        # 必须传递 Host 头，否则容器内 Nginx 无法正确路由请求
-        proxy_set_header Host $host; 
-        
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-    }
-}
-
-# API 反向代理
-server {
-    listen 80;
-    server_name api.logs.example.com; # 必须与步骤 3 中的 API 域名一致
-
-    location / {
-        proxy_pass http://127.0.0.1:9300;
-        
-        # 必须传递 Host 头
-        proxy_set_header Host $host;
-        
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-    }
-}
-```
-
-## 开发指南
-
-如果您希望参与开发或进行本地调试：
-
-1.  启动后端服务：使用 Docker 启动数据库和 PHP 环境。
-2.  启动前端热更新服务器：
-
-```bash
-cd web
-npm run dev
-```
-
-前端开发服默认运行在 http://localhost:5173。
-
-## 许可证
-
-本项目基于 [MIT License](LICENSE) 开源
+- 感谢 [aternos/codex-minecraft](https://github.com/aternosorg/codex) 提供的日志分析能力
+- 感谢 Vue.js、Tailwind CSS、Docker 等优秀开源项目的贡献

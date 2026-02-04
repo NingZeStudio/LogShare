@@ -68,4 +68,22 @@ class Filesystem implements StorageInterface
 
         return touch($basePath . $id->getRaw());
     }
+
+    /**
+     * Delete data from the storage by id
+     *
+     * @param \Id $id
+     * @return bool Success
+     */
+    public static function Delete(\Id $id): bool
+    {
+        $config = \Config::Get("filesystem");
+        $basePath = CORE_PATH . $config['path'];
+
+        if (!file_exists($basePath . $id->getRaw())) {
+            return false;
+        }
+
+        return unlink($basePath . $id->getRaw());
+    }
 }

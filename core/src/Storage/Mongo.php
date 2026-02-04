@@ -67,4 +67,17 @@ class Mongo extends \Client\MongoDBClient implements StorageInterface
 
         return true;
     }
+
+    /**
+     * Delete data from the storage by id
+     *
+     * @param \Id $id
+     * @return bool Success
+     */
+    public static function Delete(\Id $id): bool
+    {
+        $result = self::getCollection()->deleteOne(["_id" => $id->getRaw()]);
+
+        return $result->getDeletedCount() > 0;
+    }
 }
