@@ -1,46 +1,77 @@
 <script setup lang="ts">
+import { ref } from 'vue';
+
+// 固定使用繁體中文（台灣）
+const imprintContent = {
+  title: "法律聲明 (Imprint)",
+  serviceProvider: {
+    heading: "服務提供方",
+    description: "本服務 (NingZeLogs) 由以下團隊聯合提供：",
+    providers: [
+      { name: "ZeinkLab", url: "zeinklab.com" },
+      { name: "Lemwood", url: "lemwood.cn" }
+    ]
+  },
+  contact: {
+    heading: "聯絡方式",
+    description: "如有任何疑問或需要支援，請透過以下方式聯絡我們：",
+    email: "電子郵件: mengze2@foxmail.com"
+  },
+  contentDisclaimer: {
+    heading: "內容免責聲明",
+    text: "我們不對使用者上傳的記錄內容的準確性、完整性或合法性負責。記錄內容由使用者自行上傳並承擔責任。作為服務提供者，根據相關法律法規，我們僅對自己提供的原創內容負責。我們沒有義務監控第三方傳輸或儲存的資訊，也沒有義務調查表明非法活動的情況。"
+  },
+  linkDisclaimer: {
+    heading: "連結免責聲明",
+    text: "我們的服務可能包含指向第三方外部網站的連結，我們無法控制這些網站的內容。因此，我們不對這些外部內容承擔任何責任。連結頁面的提供者或營運者始終對內容負責。"
+  },
+  copyright: {
+    heading: "版權說明",
+    text: "本網站上的內容和作品受著作權法保護。複製、編輯、分發以及任何超出著作權法限制的使用都需要相關作者或創作者的書面同意。"
+  }
+};
 </script>
 
 <template>
   <div class="container mx-auto px-4 py-12 max-w-4xl">
     <div class="bg-card text-card-foreground border rounded-xl shadow-sm p-6 md:p-10">
       <div class="prose prose-neutral dark:prose-invert max-w-none">
-        <h1 class="text-3xl font-bold mb-6 text-foreground">法律声明 (Imprint)</h1>
-        
+        <h1 class="text-3xl font-bold mb-6 text-foreground">{{ imprintContent.title }}</h1>
+
         <section class="mb-8">
-          <h2 class="text-xl font-semibold mb-4 text-foreground">服务提供方</h2>
-          <p class="text-foreground/90">本服务 (NingZeLogs) 由以下团队联合提供：</p>
+          <h2 class="text-xl font-semibold mb-4 text-foreground">{{ imprintContent.serviceProvider.heading }}</h2>
+          <p class="text-foreground/90">{{ imprintContent.serviceProvider.description }}</p>
           <ul class="list-disc pl-6 mt-2 space-y-2 text-foreground/90">
-              <li><strong>ZeinkLab</strong> (zeinklab.com)</li>
-              <li><strong>Lemwood</strong> (lemwood.cn)</li>
+              <li v-for="(provider, index) in imprintContent.serviceProvider.providers" :key="index">
+                <strong>{{ provider.name }}</strong> ({{ provider.url }})
+              </li>
           </ul>
         </section>
 
         <section class="mb-8">
-          <h2 class="text-xl font-semibold mb-4 text-foreground">联系方式</h2>
-          <p class="text-foreground/90">如有任何疑问或需要支持，请通过以下方式联系我们：</p>
-          <p class="mt-2 text-foreground/90">电子邮件: mengze2@foxmail.com</p>
+          <h2 class="text-xl font-semibold mb-4 text-foreground">{{ imprintContent.contact.heading }}</h2>
+          <p class="text-foreground/90">{{ imprintContent.contact.description }}</p>
+          <p class="mt-2 text-foreground/90">{{ imprintContent.contact.email }}</p>
         </section>
 
         <section class="mb-8">
-          <h2 class="text-xl font-semibold mb-4 text-foreground">内容免责声明</h2>
+          <h2 class="text-xl font-semibold mb-4 text-foreground">{{ imprintContent.contentDisclaimer.heading }}</h2>
           <p class="text-foreground/90">
-              我们不对用户上传的日志内容的准确性、完整性或合法性负责。日志内容由用户自行上传并承担责任。
-              作为服务提供商，根据相关法律法规，我们仅对自己提供的原创内容负责。我们没有义务监控第三方传输或存储的信息，也没有义务调查表明非法活动的情况。
+              {{ imprintContent.contentDisclaimer.text }}
           </p>
         </section>
 
         <section class="mb-8">
-          <h2 class="text-xl font-semibold mb-4 text-foreground">链接免责声明</h2>
+          <h2 class="text-xl font-semibold mb-4 text-foreground">{{ imprintContent.linkDisclaimer.heading }}</h2>
           <p class="text-foreground/90">
-              我们的服务可能包含指向第三方外部网站的链接，我们无法控制这些网站的内容。因此，我们不对这些外部内容承担任何责任。链接页面的提供者或运营者始终对内容负责。
+              {{ imprintContent.linkDisclaimer.text }}
           </p>
         </section>
 
         <section class="mb-8">
-          <h2 class="text-xl font-semibold mb-4 text-foreground">版权说明</h2>
+          <h2 class="text-xl font-semibold mb-4 text-foreground">{{ imprintContent.copyright.heading }}</h2>
           <p class="text-foreground/90">
-              本网站上的内容和作品受版权法保护。复制、编辑、分发以及任何超出版权法限制的使用都需要相关作者或创作者的书面同意。
+              {{ imprintContent.copyright.text }}
           </p>
         </section>
       </div>

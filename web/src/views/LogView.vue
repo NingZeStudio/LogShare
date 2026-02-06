@@ -11,6 +11,7 @@ import {
   getAIAnalysisRecords
 } from '@/lib/localStorage'
 import { setPageTitle } from '@/lib/pageTitle'
+import { t } from '@/lib/i18n'
 
 const md = new MarkdownIt({
     html: false,
@@ -42,6 +43,9 @@ const searchIndex = ref(0)
 const searchResults = ref<number[]>([])
 const isFullscreen = ref(false)
 const isCopySuccess = ref(false)
+// 缓存所有AI分析记录，避免重复解析localStorage
+let cachedAllRecords: any[] | null = null;
+
 const showHistory = ref(false)
 const aiAnalysisHistory = ref<any[]>([])
 
@@ -51,7 +55,18 @@ const formattedAiResult = computed(() => {
         // Render errors as plain text (or wrap in a warning block if preferred)
         return `<div class="text-destructive">${aiResult.value}</div>`
     }
-    return md.render(aiResult.value)
+    
+    // 添加安全检查，防止过长内容导致崩溃
+    if (aiResult.value.length > 50000) { // 限制内容长度为50k字符
+        return `<div class="text-destructive">分析结果过长，已截断。请直接查看原始日志。</div>`
+    }
+    
+    try {
+        return md.render(aiResult.value)
+    } catch (error) {
+        console.error('Markdown渲染失败:', error)
+        return `<div class="text-destructive">渲染分析结果时发生错误: ${(error as Error).message}</div>`
+    }
 })
 
 const analyzeLog = async () => {
@@ -63,21 +78,35 @@ const analyzeLog = async () => {
             aiResult.value = data.analysis
             // 保存到本地存储
             saveAIAnalysisRecord(id, data.analysis)
+            
+            // 更新缓存
+            cachedAllRecords = null;
         } else {
-            aiResult.value = "Analysis failed: " + (data.analysis || 'Unknown error')
+            aiResult.value = t('analysis_failed') + ": " + (data.analysis || t('unknown_error'))
         }
     } catch (e: any) {
         console.error(e)
-        const msg = e.response?.data?.analysis || e.response?.data?.error || e.message || "Unknown error";
-        aiResult.value = "Error requesting analysis: " + msg
+        const msg = e.response?.data?.analysis || e.response?.data?.error || e.message || t('unknown_error');
+        aiResult.value = t('analysis_failed') + ": " + msg
     } finally {
         analyzing.value = false
     }
 }
 
-// 加载AI分析历史记录
+// 加载AI分析历史记录（优化版本）
 const loadAIAnalysisHistory = () => {
-    aiAnalysisHistory.value = getAIAnalysisRecords(id)
+    if (cachedAllRecords === null) {
+        // 首次加载或缓存失效时，从localStorage获取所有记录
+        try {
+            cachedAllRecords = JSON.parse(localStorage.getItem('ai_analysis_history') || '[]');
+        } catch (error) {
+            console.error('解析AI分析历史记录失败:', error);
+            cachedAllRecords = [];
+        }
+    }
+    
+    // 过滤出当前日志ID的记录
+    aiAnalysisHistory.value = cachedAllRecords.filter((record: any) => record.logId === id);
 }
 
 // 切换历史记录显示
@@ -102,7 +131,16 @@ onMounted(async () => {
     ]);
 
     log.value = insightsRes.data;
-    const rawText = typeof rawRes.data === 'string' ? rawRes.data : JSON.stringify(rawRes.data);
+    let rawText = typeof rawRes.data === 'string' ? rawRes.data : JSON.stringify(rawRes.data);
+    
+    // 检查日志大小，如果太大则截断以防止性能问题
+    if (rawText.length > 1000000) { // 限制为1MB
+      rawText = rawText.substring(0, 1000000) + '\n\n[日志过长，已截断...]';
+    }
+    
+    // 保存原始日志文本用于搜索功能
+    originalLogText.value = rawText;
+    
     logContent.value = parseLog(rawText);
 
     // 更新页面标题
@@ -114,7 +152,7 @@ onMounted(async () => {
 
   } catch (e: any) {
     console.error("Failed to load log:", e)
-    error.value = e.response?.data?.error || '日志未找到或网络错误'
+    error.value = e.response?.data?.error || t('log_not_found')
   } finally {
     loading.value = false
   }
@@ -125,7 +163,7 @@ const toggleErrors = () => {
 }
 
 const deleteLog = async () => {
-  if (!confirm('确定要删除这个日志吗？此操作不可撤销。')) {
+  if (!confirm(t('delete_log_confirm'))) {
     return
   }
 
@@ -140,15 +178,15 @@ const deleteLog = async () => {
     const data = await response.json()
 
     if (data.success) {
-      alert('日志已成功删除')
+      alert(t('delete_log_success'))
       // Redirect to home page after deletion
       window.location.href = '/'
     } else {
-      alert('删除失败: ' + (data.error || '未知错误'))
+      alert(t('delete_log_failed') + ': ' + (data.error || t('unknown_error')))
     }
   } catch (e: any) {
     console.error('Failed to delete log:', e)
-    alert('删除失败: ' + (e.message || '网络错误'))
+    alert(t('delete_log_failed') + ': ' + (e.message || t('network_error')))
   }
 }
 
@@ -244,85 +282,87 @@ const toggleFullscreen = () => {
   }
 }
 
+// Store the original log text for reference
+const originalLogText = ref('');
+
 // Search functions
 const performSearch = () => {
   if (!searchTerm.value.trim()) {
-    // Clear search highlights and show all lines
-    const logElement = document.querySelector('.log-content')
-    if (logElement) {
-      const allLines = logElement.querySelectorAll('.log-line')
-      allLines.forEach(line => {
-        line.classList.remove('hidden-search-result')
-        line.classList.remove('search-highlight')
-      })
-    }
-    searchResults.value = []
-    searchIndex.value = 0
-    return
+    // Clear search and restore original content
+    logContent.value = parseLog(originalLogText.value);
+    searchResults.value = [];
+    searchIndex.value = 0;
+    return;
   }
 
-  // Get all lines from the log content
-  const logElement = document.querySelector('.log-content')
-  if (!logElement) return
+  // Split the original log text into lines
+  const lines = originalLogText.value.split('\n');
+  const results: number[] = [];
+  const matchingLines: string[] = [];
 
-  // Find all elements that contain the search term
-  const allLines = logElement.querySelectorAll('.log-line')
-  const results: number[] = []
-
-  allLines.forEach((line, index) => {
-    if (line.textContent && line.textContent.toLowerCase().includes(searchTerm.value.toLowerCase())) {
-      results.push(index)
-      line.classList.remove('hidden-search-result')
-    } else {
-      line.classList.add('hidden-search-result')
+  // Process each line to check for matches and highlight terms
+  lines.forEach((line, index) => {
+    const lowerLine = line.toLowerCase();
+    const searchTerms = searchTerm.value.toLowerCase().split(/\s+/).filter(term => term.length > 0);
+    
+    if (searchTerms.length > 0 && searchTerms.every(term => lowerLine.includes(term))) {
+      results.push(index);
+      
+      // Highlight search terms in the matching line
+      let highlightedLine = line;
+      const sortedTerms = [...searchTerms].sort((a, b) => b.length - a.length);
+      
+      sortedTerms.forEach(term => {
+        const escapedTerm = term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const regex = new RegExp(`(${escapedTerm})`, 'gi');
+        highlightedLine = highlightedLine.replace(regex, '<mark>$1</mark>');
+      });
+      
+      matchingLines.push(highlightedLine);
     }
-  })
+  });
 
-  searchResults.value = results
-  searchIndex.value = 0
-
-  if (results.length > 0 && results[0] !== undefined) {
-    scrollToSearchResult(results[0])
+  if (matchingLines.length > 0) {
+    // Update the displayed log content with highlighted terms
+    const highlightedContent = matchingLines.join('\n');
+    logContent.value = parseLog(highlightedContent);
   } else {
-    alert('未找到匹配项')
+    // Show message if no matches found
+    logContent.value = `<div class="text-center p-8 text-gray-500 dark:text-gray-400">${t('no_results')}</div>`;
+  }
+
+  searchResults.value = results;
+  searchIndex.value = 0;
+
+  if (results.length === 0) {
+    alert(t('no_results'));
   }
 }
 
+// Scroll to a specific search result
 const scrollToSearchResult = (index: number) => {
-  const logElement = document.querySelector('.log-content')
-  if (!logElement) return
-
-  const lines = logElement.querySelectorAll('.log-line')
-  if (lines[index]) {
-    // Remove highlight from all lines
-    lines.forEach(line => line.classList.remove('search-highlight'))
-
-    // Add highlight to current result
-    lines[index].classList.add('search-highlight')
-
-    lines[index].scrollIntoView({ behavior: 'smooth', block: 'center' })
+  // For now, scroll to top of content since we're filtering the content itself
+  const element = document.querySelector('.log-content');
+  if (element) {
+    element.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }
 }
 
 const goToNextResult = () => {
-  if (searchResults.value.length === 0) return
+  if (searchResults.value.length === 0) return;
 
-  searchIndex.value = (searchIndex.value + 1) % searchResults.value.length
-  const index = searchResults.value[searchIndex.value]
-  if (index !== undefined) {
-    scrollToSearchResult(index)
-  }
+  searchIndex.value = (searchIndex.value + 1) % searchResults.value.length;
+  // Since we're filtering content, we just re-run the search with same term
+  performSearch();
 }
 
 const goToPrevResult = () => {
-  if (searchResults.value.length === 0) return
+  if (searchResults.value.length === 0) return;
 
-  const len = searchResults.value.length
-  searchIndex.value = (searchIndex.value - 1 + len) % searchResults.value.length
-  const index = searchResults.value[searchIndex.value]
-  if (index !== undefined) {
-    scrollToSearchResult(index)
-  }
+  const len = searchResults.value.length;
+  searchIndex.value = (searchIndex.value - 1 + len) % searchResults.value.length;
+  // Since we're filtering content, we just re-run the search with same term
+  performSearch();
 }
 
 const handleSearchInput = (event: KeyboardEvent) => {
@@ -353,12 +393,12 @@ const scrollToTop = () => window.scrollTo({ top: 0, behavior: 'smooth' })
       <div v-if="!isFullscreen" class="w-full lg:w-1/3 space-y-6">
         <div class="bg-card dark:bg-gray-800 border dark:border-gray-700 rounded-lg p-5 shadow-sm text-card-foreground dark:text-gray-100 transition-colors duration-300">
            <h1 class="text-xl font-bold break-all transition-colors duration-300">{{ log.title }}</h1>
-           <div class="text-xs text-muted-foreground dark:text-gray-400 mt-1 transition-colors duration-300">类型: {{ log.id }}</div>
+           <div class="text-xs text-muted-foreground dark:text-gray-400 mt-1 transition-colors duration-300">{{ t('log') }}: {{ log.id }}</div>
 
            <!-- Hint for users who don't understand the page -->
            <div class="mt-3 p-3 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800/30 rounded-md transition-colors duration-300">
                <p class="text-sm text-blue-800 dark:text-blue-200 transition-colors duration-300">
-                   <strong>提示：</strong>如果你看不懂本页面的信息，请点击"分享链接"按钮将本页面分享给别人
+                   <strong>{{ t('info') }}：</strong>{{ t('home_subtitle') }}{{ t('share') }}{{ t('log') }}
                </p>
            </div>
 
@@ -370,11 +410,11 @@ const scrollToTop = () => window.scrollTo({ top: 0, behavior: 'smooth' })
                  <polyline points="7 10 12 15 17 10"></polyline>
                  <line x1="12" y1="15" x2="12" y2="3"></line>
                </svg>
-               下载日志
+               {{ t('download') }}{{ t('log') }}
              </button>
 
              <button @click="toggleErrors" class="text-sm px-3 py-2 rounded transition-colors text-center transition-colors duration-300" :class="showErrorsOnly ? 'bg-destructive text-destructive-foreground' : 'bg-secondary hover:bg-secondary/80 text-secondary-foreground'">
-                 {{ showErrorsOnly ? '显示全部' : '只看错误' }}
+                 {{ showErrorsOnly ? t('show_all') : t('show_errors_only') }}
              </button>
 
              <button @click="scrollToTop" class="text-sm bg-secondary hover:bg-secondary/80 text-secondary-foreground px-3 py-2 rounded flex items-center justify-center gap-1 transition-colors duration-300">
@@ -382,14 +422,14 @@ const scrollToTop = () => window.scrollTo({ top: 0, behavior: 'smooth' })
                    <line x1="12" y1="19" x2="12" y2="5"></line>
                    <polyline points="5 12 12 5 19 12"></polyline>
                  </svg>
-                 顶部
+                 {{ t('scroll_top') }}
              </button>
              <button @click="scrollToBottom" class="text-sm bg-secondary hover:bg-secondary/80 text-secondary-foreground px-3 py-2 rounded flex items-center justify-center gap-1 transition-colors duration-300">
                  <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                    <line x1="12" y1="5" x2="12" y2="19"></line>
                    <polyline points="19 12 12 19 5 12"></polyline>
                  </svg>
-                 底部
+                 {{ t('scroll_bottom') }}
              </button>
            </div>
 
@@ -401,7 +441,7 @@ const scrollToTop = () => window.scrollTo({ top: 0, behavior: 'smooth' })
                    <path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"></path>
                    <path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"></path>
                  </svg>
-                 删除日志
+                 {{ t('delete') }}{{ t('log') }}
              </button>
 
              <button @click="copyShareMessage" class="text-sm bg-primary hover:bg-primary/90 text-primary-foreground px-3 py-2 rounded flex items-center justify-center gap-2 transition-colors duration-300" :class="isCopySuccess ? 'bg-green-600 hover:bg-green-700' : ''">
@@ -412,7 +452,7 @@ const scrollToTop = () => window.scrollTo({ top: 0, behavior: 'smooth' })
                    <line x1="8.59" y1="13.51" x2="15.42" y2="17.49"></line>
                    <line x1="15.41" y1="6.51" x2="8.59" y2="10.49"></line>
                  </svg>
-                 <span>{{ isCopySuccess ? '✓ 已复制!' : '分享链接' }}</span>
+                 <span>{{ isCopySuccess ? '✓ ' + t('copied') : t('share') + t('log') }}</span>
              </button>
            </div>
 
@@ -425,13 +465,13 @@ const scrollToTop = () => window.scrollTo({ top: 0, behavior: 'smooth' })
                    <path d="M3 16v3a2 2 0 0 0 2 2h3"></path>
                    <path d="M16 21h3a2 2 0 0 0 2-2v-3"></path>
                  </svg>
-                 {{ isFullscreen ? '退出全屏' : '全屏模式' }}
+                 {{ isFullscreen ? t('exit_fullscreen') : t('fullscreen') }}
              </button>
            </div>
 
            <!-- Options -->
            <div class="mt-4 flex items-center gap-2 pt-3 border-t dark:border-gray-700 transition-colors duration-300">
-               <label class="text-sm text-muted-foreground dark:text-gray-400 select-none cursor-pointer transition-colors duration-300">自动换行</label>
+               <label class="text-sm text-muted-foreground dark:text-gray-400 select-none cursor-pointer transition-colors duration-300">{{ t('auto_wrap') }}</label>
                <button
                  @click="wrapLines = !wrapLines"
                  :class="wrapLines ? 'bg-primary' : 'bg-gray-600'"
@@ -453,7 +493,7 @@ const scrollToTop = () => window.scrollTo({ top: 0, behavior: 'smooth' })
                 <line x1="12" y1="8" x2="12" y2="12"></line>
                 <line x1="12" y1="16" x2="12.01" y2="16"></line>
               </svg>
-              检测到的问题
+              {{ t('problems_detected') }}
             </h3>
             <div class="space-y-4">
                 <div v-for="(prob, idx) in log.analysis.problems" :key="idx" class="text-sm p-3 bg-destructive/5 dark:bg-red-900/10 rounded border border-destructive/10 dark:border-red-800/20 transition-colors duration-300">
@@ -494,7 +534,7 @@ const scrollToTop = () => window.scrollTo({ top: 0, behavior: 'smooth' })
                   <path d="M12 18v-8"></path>
                   <path d="M8 8l4-4 4 4"></path>
                 </svg>
-                <span>大模型智能分析</span>
+                <span>{{ t('ai_analysis') }}</span>
                 <button
                   @click="toggleHistory"
                   class="ml-auto text-xs bg-secondary hover:bg-secondary/80 text-secondary-foreground px-2 py-1 rounded transition-colors duration-300"
@@ -536,13 +576,13 @@ const scrollToTop = () => window.scrollTo({ top: 0, behavior: 'smooth' })
 
             <div v-if="!aiResult && !analyzing" class="relative z-10">
                 <button @click="analyzeLog" class="w-full bg-[#3b82f6] text-white hover:bg-[#2563eb] px-4 py-3 rounded font-medium transition-colors duration-300">
-                    开始智能分析
+                    {{ t('start_analysis') }}
                 </button>
-                <p class="text-xs text-muted-foreground mt-3 text-center transition-colors duration-300">内容由AI生成，本站不对AI生成的内容负责</p>
+                <p class="text-xs text-muted-foreground mt-3 text-center transition-colors duration-300">{{ t('analysis_disclaimer') }}</p>
             </div>
             <div v-else-if="analyzing" class="text-center py-6 relative z-10">
                 <div class="animate-spin rounded-full h-8 w-8 border-b-2 border-[#3b82f6] mx-auto"></div>
-                <p class="text-sm text-muted-foreground mt-3 transition-colors duration-300">正在分析日志...</p>
+                <p class="text-sm text-muted-foreground mt-3 transition-colors duration-300">{{ t('analysis_loading') }}</p>
             </div>
             <div v-else class="text-sm bg-secondary/50 dark:bg-gray-800 p-4 rounded-lg border dark:border-gray-700 overflow-x-auto max-h-64 overflow-y-auto relative z-10 transition-colors duration-300">
                 <div class="prose prose-sm dark:prose-invert max-w-none break-words transition-colors duration-300" v-html="formattedAiResult"></div>
@@ -556,7 +596,7 @@ const scrollToTop = () => window.scrollTo({ top: 0, behavior: 'smooth' })
                 <path d="M8 21h8"></path>
                 <path d="M12 17v4"></path>
               </svg>
-              服务器信息
+              {{ t('server_info') }}
             </h3>
             <div class="space-y-3">
                 <div v-for="info in log.analysis.information" :key="info.label" class="flex justify-between text-sm py-2 border-b dark:border-gray-700/30 last:border-0 transition-colors duration-300">
@@ -586,7 +626,7 @@ const scrollToTop = () => window.scrollTo({ top: 0, behavior: 'smooth' })
                   type="text"
                   v-model="searchTerm"
                   @keyup="handleSearchInput"
-                  placeholder="搜索..."
+                  :placeholder="t('search') + '...'"
                   class="bg-gray-700 dark:bg-gray-600 text-white dark:text-white text-sm rounded px-3 py-1 w-24 sm:w-32 md:w-40 focus:outline-none focus:ring-1 focus:ring-primary transition-colors duration-300"
               >
               <button @click="performSearch" class="ml-1 text-gray-300 dark:text-gray-200 hover:text-white transition-colors duration-300">
@@ -597,14 +637,14 @@ const scrollToTop = () => window.scrollTo({ top: 0, behavior: 'smooth' })
               </button>
 
               <div v-if="searchResults.length > 0" class="ml-2 text-xs text-gray-400 dark:text-gray-300 transition-colors duration-300">
-                {{ searchIndex + 1 }}/{{ searchResults.length }}
+                {{ searchIndex + 1 }}/{{ searchResults.length }} {{ t('results') }}
               </div>
-              <button v-if="searchResults.length > 0" @click="goToPrevResult" class="ml-1 text-gray-300 dark:text-gray-200 hover:text-white transition-colors duration-300">
+              <button v-if="searchResults.length > 0" @click="goToPrevResult" class="ml-1 text-gray-300 dark:text-gray-200 hover:text-white transition-colors duration-300" :title="t('previous')">
                 <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                   <polyline points="15 18 9 12 15 6"></polyline>
                 </svg>
               </button>
-              <button v-if="searchResults.length > 0" @click="goToNextResult" class="ml-1 text-gray-300 dark:text-gray-200 hover:text-white transition-colors duration-300">
+              <button v-if="searchResults.length > 0" @click="goToNextResult" class="ml-1 text-gray-300 dark:text-gray-200 hover:text-white transition-colors duration-300" :title="t('next')">
                 <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                   <polyline points="9 18 15 12 9 6"></polyline>
                 </svg>
@@ -622,7 +662,7 @@ const scrollToTop = () => window.scrollTo({ top: 0, behavior: 'smooth' })
                 <path d="M3 3l6 6"></path>
                 <path d="M21 21l-6-6"></path>
               </svg>
-              退出全屏
+              {{ t('exit_fullscreen') }}
             </button>
           </div>
         </div>
@@ -706,6 +746,19 @@ const scrollToTop = () => window.scrollTo({ top: 0, behavior: 'smooth' })
 /* Search highlight in dark mode */
 .dark .search-highlight {
     background-color: rgba(255, 255, 0, 0.4) !important;
+}
+
+/* Highlighted search terms */
+mark {
+    padding: 0;
+    margin: 0;
+    background-color: #fef9c3; /* yellow-200 */
+    color: inherit;
+}
+
+.dark mark {
+    background-color: #ca8a04; /* yellow-600 */
+    color: #000;
 }
 
 /* Wrap/No-wrap styling */

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref } from 'vue'
+import { t } from '@/lib/i18n'
 
 const activeTab = ref('js')
 
@@ -10,16 +11,16 @@ const setTab = (tab: string) => {
 
 <template>
     <div class="container mx-auto px-4 py-12 max-w-4xl">
-        <h1 class="text-3xl font-bold mb-6">API 文档</h1>
+        <h1 class="text-3xl font-bold mb-6">{{ t('api_docs') }}</h1>
         <p class="mb-8 text-muted-foreground">
-            将 <strong>NingZeLogs</strong> 直接集成到您的服务器面板、托管软件或任何其他平台中。此平台专为高性能自动化而构建，可通过我们的 HTTP API 轻松集成到任何现有软件中。
+            {{ t('home_subtitle') }} <strong>NingZeLogs</strong> {{ t('integration_text') }}
         </p>
 
         <div class="space-y-16">
             <!-- Paste Log -->
             <section class="space-y-6">
                 <div class="flex items-center gap-4">
-                    <h2 class="text-2xl font-semibold">粘贴日志文件</h2>
+                    <h2 class="text-2xl font-semibold">{{ t('paste_log') }}</h2>
                     <span class="bg-blue-600 text-white px-2 py-1 rounded text-xs font-bold">POST</span>
                 </div>
                 
@@ -124,33 +125,33 @@ curl -X POST --data-urlencode 'content@path/to/latest.log' 'https://api.mclogs.l
             <!-- Analyse -->
             <section class="space-y-6">
                 <div class="flex items-center gap-4">
-                    <h2 class="text-2xl font-semibold">即时分析日志</h2>
+                    <h2 class="text-2xl font-semibold">{{ t('instant_analysis') }}</h2>
                     <span class="bg-blue-600 text-white px-2 py-1 rounded text-xs font-bold">POST</span>
                 </div>
                 <div class="font-mono bg-muted p-3 rounded-md overflow-x-auto text-sm border border-border">
                     https://api.mclogs.lemwood.icu/1/analyse
                 </div>
-                <p class="text-sm text-muted-foreground">上传并分析日志内容，但不会将其永久保存到我们的数据库中。适用于只需要分析结果而不需要分享链接的场景。</p>
+                <p class="text-sm text-muted-foreground">{{ t('instant_analysis_desc') }}</p>
                 <div class="space-y-2">
-                    <h3 class="font-semibold text-sm">请求参数</h3>
-                    <p class="text-xs text-muted-foreground">参数与 <code class="bg-muted px-1 rounded">/1/log</code> 相同 (必需字段: <code class="bg-muted px-1 rounded font-mono text-primary">content</code>)。</p>
+                    <h3 class="font-semibold text-sm">{{ t('request_params') }}</h3>
+                    <p class="text-xs text-muted-foreground">{{ t('params_same_as_log') }} <code class="bg-muted px-1 rounded">/1/log</code> {{ t('params_required_field') }} <code class="bg-muted px-1 rounded font-mono text-primary">content</code>)。</p>
                 </div>
             </section>
 
             <!-- Insights -->
             <section class="space-y-6">
                 <div class="flex items-center gap-4">
-                    <h2 class="text-2xl font-semibold">获取日志洞察</h2>
+                    <h2 class="text-2xl font-semibold">{{ t('get_insights') }}</h2>
                     <span class="bg-green-600 text-white px-2 py-1 rounded text-xs font-bold">GET</span>
                 </div>
                 <div class="font-mono bg-muted p-3 rounded-md overflow-x-auto text-sm border border-border">
                     https://api.mclogs.lemwood.icu/1/insights/[id]
                 </div>
-                <p class="text-sm text-muted-foreground">获取日志的分析结果，包括服务器版本、安装的插件/模组以及检测到的问题。</p>
+                <p class="text-sm text-muted-foreground">{{ t('get_insights_desc') }}</p>
 
                 <div class="space-y-4">
                     <div class="flex items-center justify-between">
-                        <h3 class="text-lg font-medium">调用示例</h3>
+                        <h3 class="text-lg font-medium">{{ t('call_examples') }}</h3>
                         <div class="flex bg-muted rounded-md p-1 border border-border">
                             <button @click="setTab('js')" :class="['px-3 py-1 text-xs rounded-sm transition-all', activeTab === 'js' ? 'bg-background shadow-sm text-foreground' : 'text-muted-foreground hover:text-foreground']">JavaScript</button>
                             <button @click="setTab('php')" :class="['px-3 py-1 text-xs rounded-sm transition-all', activeTab === 'php' ? 'bg-background shadow-sm text-foreground' : 'text-muted-foreground hover:text-foreground']">PHP</button>
@@ -176,7 +177,7 @@ curl https://api.mclogs.lemwood.icu/1/insights/8FlTowW</pre>
                 </div>
 
                 <div class="space-y-2">
-                    <h3 class="font-semibold text-sm">响应示例</h3>
+                    <h3 class="font-semibold text-sm">{{ t('response_example') }}</h3>
                     <pre class="bg-muted p-3 rounded-md text-xs overflow-x-auto whitespace-pre max-h-64 border border-border">{
     "analysis": {
         "software": "Spigot",
@@ -197,17 +198,17 @@ curl https://api.mclogs.lemwood.icu/1/insights/8FlTowW</pre>
             <!-- Raw Log -->
             <section class="space-y-6">
                 <div class="flex items-center gap-4">
-                    <h2 class="text-2xl font-semibold">获取原始日志</h2>
+                    <h2 class="text-2xl font-semibold">{{ t('get_raw_log') }}</h2>
                     <span class="bg-green-600 text-white px-2 py-1 rounded text-xs font-bold">GET</span>
                 </div>
                 <div class="font-mono bg-muted p-3 rounded-md overflow-x-auto text-sm border border-border">
                     https://api.mclogs.lemwood.icu/1/raw/[id]
                 </div>
-                <p class="text-sm text-muted-foreground">获取日志文件的原始内容 (text/plain)。</p>
+                <p class="text-sm text-muted-foreground">{{ t('get_raw_log_desc') }}</p>
 
                 <div class="space-y-4">
                     <div class="flex items-center justify-between">
-                        <h3 class="text-lg font-medium">调用示例</h3>
+                        <h3 class="text-lg font-medium">{{ t('call_examples') }}</h3>
                         <div class="flex bg-muted rounded-md p-1 border border-border">
                             <button @click="setTab('js')" :class="['px-3 py-1 text-xs rounded-sm transition-all', activeTab === 'js' ? 'bg-background shadow-sm text-foreground' : 'text-muted-foreground hover:text-foreground']">JavaScript</button>
                             <button @click="setTab('php')" :class="['px-3 py-1 text-xs rounded-sm transition-all', activeTab === 'php' ? 'bg-background shadow-sm text-foreground' : 'text-muted-foreground hover:text-foreground']">PHP</button>
@@ -234,17 +235,17 @@ curl https://api.mclogs.lemwood.icu/1/raw/8FlTowW</pre>
             <!-- AI Analysis -->
             <section class="space-y-6">
                 <div class="flex items-center gap-4">
-                    <h2 class="text-2xl font-semibold">AI 智能分析</h2>
+                    <h2 class="text-2xl font-semibold">{{ t('ai_analysis') }}</h2>
                     <span class="bg-green-600 text-white px-2 py-1 rounded text-xs font-bold">GET</span>
                 </div>
                 <div class="font-mono bg-muted p-3 rounded-md overflow-x-auto text-sm border border-border">
                     https://api.mclogs.lemwood.icu/1/ai-analysis/[id]
                 </div>
-                <p class="text-sm text-muted-foreground">使用大语言模型（Gemini）对日志进行深度分析，识别根本原因并提供建议。此接口会处理日志中的错误片段并返回 Markdown 格式的分析报告。</p>
+                <p class="text-sm text-muted-foreground">{{ t('ai_analysis_desc') }}</p>
 
                 <div class="space-y-4">
                     <div class="flex items-center justify-between">
-                        <h3 class="text-lg font-medium">调用示例</h3>
+                        <h3 class="text-lg font-medium">{{ t('call_examples') }}</h3>
                         <div class="flex bg-muted rounded-md p-1 border border-border">
                             <button @click="setTab('js')" :class="['px-3 py-1 text-xs rounded-sm transition-all', activeTab === 'js' ? 'bg-background shadow-sm text-foreground' : 'text-muted-foreground hover:text-foreground']">JavaScript</button>
                             <button @click="setTab('php')" :class="['px-3 py-1 text-xs rounded-sm transition-all', activeTab === 'php' ? 'bg-background shadow-sm text-foreground' : 'text-muted-foreground hover:text-foreground']">PHP</button>
@@ -270,7 +271,7 @@ curl https://api.mclogs.lemwood.icu/1/ai-analysis/8FlTowW</pre>
                 </div>
 
                 <div class="space-y-2">
-                    <h3 class="font-semibold text-sm">响应示例</h3>
+                    <h3 class="font-semibold text-sm">{{ t('response_example') }}</h3>
                     <pre class="bg-muted p-3 rounded-md text-xs overflow-x-auto whitespace-pre max-h-64 border border-border">{
     "success": true,
     "analysis": "### 分析结果\n\n检测到内存溢出错误 (java.lang.OutOfMemoryError)...\n\n### 解决方案\n\n1. 增加 JVM 分配的内存..."
@@ -281,17 +282,17 @@ curl https://api.mclogs.lemwood.icu/1/ai-analysis/8FlTowW</pre>
             <!-- Limits -->
             <section class="space-y-6">
                 <div class="flex items-center gap-4">
-                    <h2 class="text-2xl font-semibold">获取存储限制</h2>
+                    <h2 class="text-2xl font-semibold">{{ t('get_limits') }}</h2>
                     <span class="bg-green-600 text-white px-2 py-1 rounded text-xs font-bold">GET</span>
                 </div>
                 <div class="font-mono bg-muted p-3 rounded-md overflow-x-auto text-sm border border-border">
                     https://api.mclogs.lemwood.icu/1/limits
                 </div>
-                <p class="text-sm text-muted-foreground">获取当前服务器配置的日志存储限制参数。</p>
+                <p class="text-sm text-muted-foreground">{{ t('get_limits_desc') }}</p>
 
                 <div class="space-y-4">
                     <div class="flex items-center justify-between">
-                        <h3 class="text-lg font-medium">调用示例</h3>
+                        <h3 class="text-lg font-medium">{{ t('call_examples') }}</h3>
                         <div class="flex bg-muted rounded-md p-1 border border-border">
                             <button @click="setTab('js')" :class="['px-3 py-1 text-xs rounded-sm transition-all', activeTab === 'js' ? 'bg-background shadow-sm text-foreground' : 'text-muted-foreground hover:text-foreground']">JavaScript</button>
                             <button @click="setTab('php')" :class="['px-3 py-1 text-xs rounded-sm transition-all', activeTab === 'php' ? 'bg-background shadow-sm text-foreground' : 'text-muted-foreground hover:text-foreground']">PHP</button>
@@ -317,7 +318,7 @@ curl https://api.mclogs.lemwood.icu/1/limits</pre>
                 </div>
 
                 <div class="space-y-2">
-                    <h3 class="font-semibold text-sm">响应示例</h3>
+                    <h3 class="font-semibold text-sm">{{ t('response_example') }}</h3>
                     <pre class="bg-muted p-3 rounded-md text-xs overflow-x-auto whitespace-pre border border-border">{
     "storageTime": 86400,
     "maxLength": 10485760,

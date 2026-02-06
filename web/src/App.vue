@@ -2,6 +2,7 @@
 import { ref, onMounted } from 'vue'
 import { RouterView, RouterLink, useRoute } from 'vue-router'
 import { Sun, Moon, X } from 'lucide-vue-next'
+import LanguageSwitcher from '@/components/LanguageSwitcher.vue'
 import { setPageTitle, getCurrentPageTemplate } from '@/lib/pageTitle'
 
 const isDark = ref(false)
@@ -80,6 +81,7 @@ onMounted(() => {
         </RouterLink>
         <nav class="flex items-center gap-4">
           <RouterLink to="/api-docs" class="text-sm font-bold bg-primary text-primary-foreground px-4 py-2 rounded-md hover:bg-primary/90 transition-colors">API 文档</RouterLink>
+          <LanguageSwitcher />
           <button @click="toggleTheme" class="p-2 rounded-md hover:bg-accent hover:text-accent-foreground transition-colors" aria-label="Toggle theme">
             <Sun v-if="!isDark" class="h-5 w-5" />
             <Moon v-else class="h-5 w-5" />
