@@ -92,7 +92,7 @@ curl_setopt($ch, CURLOPT_HTTPHEADER, ['Content-Type: application/json']);
 $response = curl_exec($ch);
 $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
 $curlError = curl_error($ch);
-curl_close($ch);
+// curl_close($ch);
 
 if ($httpCode === 200) {
     $json = json_decode($response, true);
