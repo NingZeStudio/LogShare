@@ -24,7 +24,7 @@ class MongoDBClient
     {
         if (self::$connection === null) {
             $config = \Config::Get("mongo");
-            self::$connection = new Client($config['url'] ?? 'mongodb://172.0.0.1/');
+            self::$connection = new Client($config['url'] ?? 'mongodb://mclogs-mongo/');
         }
     }
 
