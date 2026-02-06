@@ -1,6 +1,7 @@
-// 国际化语言包
+/**
+ * 簡體中文語言包
+ */
 export const zhCN = {
-  // 通用
   'log': '日志',
   'logs': '日志',
   'error': '错误',
@@ -20,8 +21,7 @@ export const zhCN = {
   'total': '总数',
   'results': '结果',
   'no_results': '未找到结果',
-  
-  // 首页
+
   'home_title': 'NingZeLogs',
   'home_subtitle': '轻松粘贴或上传您的 Minecraft/Hytale 日志以进行分享和分析。',
   'paste_here': '在此粘贴日志内容...',
@@ -32,8 +32,7 @@ export const zhCN = {
   'file_read_error': '读取文件失败',
   'unknown_error': '未知错误',
   'save_failed': '保存失败',
-  
-  // 日志视图
+
   'view_log': '查看日志',
   'problems_detected': '检测到的问题',
   'server_info': '服务器信息',
@@ -45,6 +44,7 @@ export const zhCN = {
   'show_all': '显示全部',
   'scroll_top': '顶部',
   'scroll_bottom': '底部',
+  'scroll_footer': '页脚',
   'delete_log_confirm': '确定要删除这个日志吗？此操作不可撤销。',
   'delete_log_success': '日志已成功删除',
   'delete_log_failed': '删除失败',
@@ -83,13 +83,11 @@ export const zhCN = {
   'get_raw_log_desc': '获取日志文件的原始内容 (text/plain)。',
   'ai_analysis_desc': '使用大语言模型（Gemini）对日志进行深度分析，识别根本原因并提供建议。此接口会处理日志中的错误片段并返回 Markdown 格式的分析报告。',
   'get_limits_desc': '获取当前服务器配置的日志存储限制参数。',
-  
-  // 错误消息
+
   'log_not_found': '日志未找到或网络错误',
   'analysis_failed': '分析失败',
   'network_error': '网络错误',
-  
-  // 其他
+
   'loading': '正在加载...',
   'back_home': '返回首页',
   'api_docs': 'API文档',
@@ -97,8 +95,10 @@ export const zhCN = {
   'privacy_policy': '隐私政策'
 };
 
+/**
+ * 繁體中文語言包
+ */
 export const zhTW = {
-  // 通用
   'log': '記錄',
   'logs': '記錄',
   'error': '錯誤',
@@ -118,8 +118,7 @@ export const zhTW = {
   'total': '總數',
   'results': '結果',
   'no_results': '未找到結果',
-  
-  // 首頁
+
   'home_title': 'NingZeLogs',
   'home_subtitle': '輕鬆貼上或上傳您的 Minecraft/Hytale 記錄以進行分享和分析。',
   'paste_here': '在此貼上記錄內容...',
@@ -130,8 +129,7 @@ export const zhTW = {
   'file_read_error': '讀取檔案失敗',
   'unknown_error': '未知錯誤',
   'save_failed': '儲存失敗',
-  
-  // 日志視圖
+
   'view_log': '檢視記錄',
   'problems_detected': '偵測到的問題',
   'server_info': '伺服器資訊',
@@ -143,6 +141,7 @@ export const zhTW = {
   'show_all': '顯示全部',
   'scroll_top': '頂部',
   'scroll_bottom': '底部',
+  'scroll_footer': '頁腳',
   'delete_log_confirm': '確定要刪除此記錄嗎？此操作無法復原。',
   'delete_log_success': '記錄已成功刪除',
   'delete_log_failed': '刪除失敗',
@@ -181,13 +180,11 @@ export const zhTW = {
   'get_raw_log_desc': '取得記錄檔案的原始內容 (text/plain)。',
   'ai_analysis_desc': '使用大型語言模型（Gemini）對記錄進行深度分析，識別根本原因並提供建議。此介面會處理記錄中的錯誤片段並回傳 Markdown 格式的分析報告。',
   'get_limits_desc': '取得目前伺服器設定的記錄儲存限制參數。',
-  
-  // 錯誤消息
+
   'log_not_found': '記錄未找到或網路錯誤',
   'analysis_failed': '分析失敗',
   'network_error': '網路錯誤',
-  
-  // 其他
+
   'loading': '正在載入...',
   'back_home': '返回首頁',
   'api_docs': 'API文件',
@@ -195,27 +192,43 @@ export const zhTW = {
   'privacy_policy': '隱私權政策'
 };
 
-// 檢測系統語言並返回對應的語言代碼
+/**
+ * 檢測系統語言並返回對應的語言代碼
+ * @returns 語言代碼 ('zh-CN' 或 'zh-TW')
+ */
 export const detectSystemLanguage = (): 'zh-CN' | 'zh-TW' => {
-  const userLang = navigator.language || (navigator as any).userLanguage;
-  
-  // 如果用戶語言包含台灣地區標識，則使用繁體中文
-  if (userLang.toLowerCase().includes('zh-tw') || userLang.toLowerCase().includes('zh-hk') || userLang.toLowerCase().includes('zh-mo')) {
-    return 'zh-TW';
+  const preferredLang = localStorage.getItem('preferred_language');
+  if (preferredLang === 'zh-CN' || preferredLang === 'zh-TW') {
+    return preferredLang as 'zh-CN' | 'zh-TW';
   }
-  
-  // 默認為簡體中文
-  return 'zh-CN';
+
+  return 'zh-TW';
 };
 
-// 獲取當前語言包
+/**
+ * 獲取當前語言包
+ * @returns 當前使用的語言包
+ */
 export const getCurrentLanguagePack = () => {
   const lang = detectSystemLanguage();
   return lang === 'zh-TW' ? zhTW : zhCN;
 };
 
-// 翻譯函數
+// 當前語言包
+let currentLangPack = getCurrentLanguagePack();
+
+/**
+ * 更新當前語言包的函數
+ */
+export const updateCurrentLanguagePack = () => {
+  currentLangPack = getCurrentLanguagePack();
+};
+
+/**
+ * 翻譯函數
+ * @param key - 要翻譯的鍵值
+ * @returns 翻譯後的字符串
+ */
 export const t = (key: string): string => {
-  const langPack = getCurrentLanguagePack();
-  return langPack[key as keyof typeof langPack] || key;
+  return currentLangPack[key as keyof typeof currentLangPack] || key;
 };

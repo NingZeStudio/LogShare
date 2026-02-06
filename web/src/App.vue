@@ -27,8 +27,11 @@ const toggleTheme = () => {
   }
 }
 
+/**
+ * 更新主題顏色
+ * 處理深色/淺色模式切換及過渡動畫
+ */
 const updateTheme = () => {
-  // 添加过渡类以实现平滑切换
   document.documentElement.classList.add('transition-colors', 'duration-500')
 
   if (isDark.value) {
@@ -39,7 +42,6 @@ const updateTheme = () => {
     localStorage.setItem('theme', 'light')
   }
 
-  // 移除过渡类以避免不必要的过渡
   setTimeout(() => {
     document.documentElement.classList.remove('transition-colors', 'duration-500')
   }, 500)
@@ -65,11 +67,11 @@ onMounted(() => {
     showCookieConsent.value = true
   }
 
-  // 初始化页面标题
   const route = useRoute();
   const template = getCurrentPageTemplate(route.name?.toString());
   setPageTitle(template);
 })
+
 </script>
 
 <template>

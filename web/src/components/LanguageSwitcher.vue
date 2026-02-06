@@ -35,22 +35,29 @@ const showMenu = ref(false);
 const currentLang = ref(detectSystemLanguage());
 const menuRef = ref<HTMLDivElement | null>(null);
 
-// 切換語言菜單顯示狀態
+/**
+ * 切換語言選單的顯示狀態
+ */
 const toggleLanguageMenu = () => {
   showMenu.value = !showMenu.value;
 };
 
-// 切換語言
+/**
+ * 切換語言
+ * @param lang - 要切換的語言代碼 ('zh-CN' 或 'zh-TW')
+ */
 const switchLanguage = (lang: 'zh-CN' | 'zh-TW') => {
   currentLang.value = lang;
   localStorage.setItem('preferred_language', lang);
   showMenu.value = false;
-  
-  // 觸發頁面刷新以應用新語言
+
   window.location.reload();
 };
 
-// 點擊外部關閉菜單
+/**
+ * 點擊外部區域時關閉選單
+ * @param event - 點擊事件
+ */
 const handleClickOutside = (event: MouseEvent) => {
   if (menuRef.value && !menuRef.value.contains(event.target as Node)) {
     showMenu.value = false;

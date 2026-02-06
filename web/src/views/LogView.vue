@@ -11,6 +11,7 @@ import {
 } from '@/lib/localStorage'
 import { setPageTitle } from '@/lib/pageTitle'
 import { t } from '@/lib/i18n'
+import { WrapText, ArrowDownToLine, Brain, History, Sparkles, X } from 'lucide-vue-next'
 
 const md = new MarkdownIt({
     html: false,
@@ -34,7 +35,7 @@ const logContent = ref('')
 const loading = ref(true)
 const error = ref('')
 const showErrorsOnly = ref(false)
-const wrapLines = ref(false) // 默认关闭自动换行
+const wrapLines = ref(false)
 const analyzing = ref(false)
 const aiResult = ref('')
 const searchTerm = ref('')
@@ -42,24 +43,25 @@ const searchIndex = ref(0)
 const searchResults = ref<number[]>([])
 const isFullscreen = ref(false)
 const isCopySuccess = ref(false)
-// 缓存所有AI分析记录，避免重复解析localStorage
 let cachedAllRecords: any[] | null = null;
 
 const showHistory = ref(false)
 const aiAnalysisHistory = ref<any[]>([])
 
+/**
+ * 格式化AI分析結果
+ * 處理錯誤情況和內容長度限制
+ */
 const formattedAiResult = computed(() => {
     if (!aiResult.value) return ''
     if (aiResult.value.startsWith('Error') || aiResult.value.startsWith('Analysis failed')) {
-        // Render errors as plain text (or wrap in a warning block if preferred)
         return `<div class="text-destructive">${aiResult.value}</div>`
     }
-    
-    // 添加安全检查，防止过长内容导致崩溃
-    if (aiResult.value.length > 50000) { // 限制内容长度为50k字符
+
+    if (aiResult.value.length > 50000) {
         return `<div class="text-destructive">分析结果过长，已截断。请直接查看原始日志。</div>`
     }
-    
+
     try {
         return md.render(aiResult.value)
     } catch (error) {
@@ -68,6 +70,10 @@ const formattedAiResult = computed(() => {
     }
 })
 
+/**
+ * 分析日誌
+ * 向服務器發送請求以獲取AI分析結果
+ */
 const analyzeLog = async () => {
     analyzing.value = true
     aiResult.value = ''
@@ -75,10 +81,7 @@ const analyzeLog = async () => {
         const { data } = await apiClient.get(`/1/ai-analysis/${id}`)
         if (data.success) {
             aiResult.value = data.analysis
-            // 保存到本地存储
             saveAIAnalysisRecord(id, data.analysis)
-            
-            // 更新缓存
             cachedAllRecords = null;
         } else {
             aiResult.value = t('analysis_failed') + ": " + (data.analysis || t('unknown_error'))
@@ -92,10 +95,12 @@ const analyzeLog = async () => {
     }
 }
 
-// 加载AI分析历史记录（优化版本）
+/**
+ * 加載AI分析歷史記錄
+ * 從localStorage獲取並過濾當前日誌ID的記錄
+ */
 const loadAIAnalysisHistory = () => {
     if (cachedAllRecords === null) {
-        // 首次加载或缓存失效时，从localStorage获取所有记录
         try {
             cachedAllRecords = JSON.parse(localStorage.getItem('ai_analysis_history') || '[]');
         } catch (error) {
@@ -103,12 +108,13 @@ const loadAIAnalysisHistory = () => {
             cachedAllRecords = [];
         }
     }
-    
-    // 过滤出当前日志ID的记录
+
     aiAnalysisHistory.value = cachedAllRecords ? cachedAllRecords.filter((record: any) => record.logId === id) : [];
 }
 
-// 切换历史记录显示
+/**
+ * 切換歷史記錄顯示
+ */
 const toggleHistory = () => {
     showHistory.value = !showHistory.value
     if (showHistory.value) {
@@ -116,7 +122,10 @@ const toggleHistory = () => {
     }
 }
 
-// 使用历史记录中的分析结果
+/**
+ * 使用歷史記錄中的分析結果
+ * @param analysis - 要使用的分析結果
+ */
 const useHistoricalAnalysis = (analysis: string) => {
     aiResult.value = analysis
     showHistory.value = false
@@ -161,6 +170,10 @@ const toggleErrors = () => {
   showErrorsOnly.value = !showErrorsOnly.value
 }
 
+/**
+ * 刪除日誌
+ * 向服務器發送請求以刪除當前日誌
+ */
 const deleteLog = async () => {
   if (!confirm(t('delete_log_confirm'))) {
     return
@@ -178,7 +191,6 @@ const deleteLog = async () => {
 
     if (data.success) {
       alert(t('delete_log_success'))
-      // Redirect to home page after deletion
       window.location.href = '/'
     } else {
       alert(t('delete_log_failed') + ': ' + (data.error || t('unknown_error')))
@@ -189,9 +201,12 @@ const deleteLog = async () => {
   }
 }
 
+/**
+ * 複製分享訊息
+ * 構造並複製分享當前日誌的訊息
+ */
 const copyShareMessage = async () => {
   if (!log.value || !log.value.analysis) {
-    // If analysis isn't loaded yet, get it first
     try {
       const insightsRes = await apiClient.get(`/1/insights/${id}`);
       log.value = insightsRes.data;
@@ -200,11 +215,9 @@ const copyShareMessage = async () => {
     }
   }
 
-  // Construct the share message
   let shareMessage = '我遇到了一个问题，';
 
   if (log.value && log.value.analysis && log.value.analysis.information) {
-    // Find server software and version information
     const softwareInfo = log.value.analysis.information.find((info: any) =>
       info.label.toLowerCase().includes('software') ||
       info.label.toLowerCase().includes('version') ||
@@ -227,7 +240,6 @@ const copyShareMessage = async () => {
     }, 2000);
   } catch (err) {
     console.error('Failed to copy text: ', err);
-    // Fallback: create a temporary textarea to copy
     const textArea = document.createElement('textarea');
     textArea.value = shareMessage;
     document.body.appendChild(textArea);
@@ -241,11 +253,14 @@ const copyShareMessage = async () => {
   }
 }
 
-// Download log functionality
+/**
+ * 下載日誌
+ * 下載當前日誌文件
+ */
 const downloadLog = async () => {
   try {
     const response = await apiClient.get(`/1/raw/${id}`, {
-      responseType: 'blob' // Important: specify blob response type
+      responseType: 'blob'
     });
 
     // Create a blob from the response data
@@ -270,7 +285,10 @@ const downloadLog = async () => {
   }
 }
 
-// Toggle fullscreen mode for log viewer
+/**
+ * 切換全屏模式
+ * 為日誌查看器切換全屏模式
+ */
 const toggleFullscreen = () => {
   isFullscreen.value = !isFullscreen.value;
 
@@ -281,52 +299,49 @@ const toggleFullscreen = () => {
   }
 }
 
-// Store the original log text for reference
 const originalLogText = ref('');
 
-// Search functions
+
+/**
+ * 執行搜尋
+ * 在日誌內容中搜尋指定的關鍵字
+ */
 const performSearch = () => {
   if (!searchTerm.value.trim()) {
-    // Clear search and restore original content
     logContent.value = parseLog(originalLogText.value);
     searchResults.value = [];
     searchIndex.value = 0;
     return;
   }
 
-  // Split the original log text into lines
   const lines = originalLogText.value.split('\n');
   const results: number[] = [];
   const matchingLines: string[] = [];
 
-  // Process each line to check for matches and highlight terms
   lines.forEach((line, index) => {
     const lowerLine = line.toLowerCase();
     const searchTerms = searchTerm.value.toLowerCase().split(/\s+/).filter(term => term.length > 0);
-    
+
     if (searchTerms.length > 0 && searchTerms.every(term => lowerLine.includes(term))) {
       results.push(index);
-      
-      // Highlight search terms in the matching line
+
       let highlightedLine = line;
       const sortedTerms = [...searchTerms].sort((a, b) => b.length - a.length);
-      
+
       sortedTerms.forEach(term => {
         const escapedTerm = term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
         const regex = new RegExp(`(${escapedTerm})`, 'gi');
         highlightedLine = highlightedLine.replace(regex, '<mark>$1</mark>');
       });
-      
+
       matchingLines.push(highlightedLine);
     }
   });
 
   if (matchingLines.length > 0) {
-    // Update the displayed log content with highlighted terms
     const highlightedContent = matchingLines.join('\n');
     logContent.value = parseLog(highlightedContent);
   } else {
-    // Show message if no matches found
     logContent.value = `<div class="text-center p-8 text-gray-500 dark:text-gray-400">${t('no_results')}</div>`;
   }
 
@@ -338,10 +353,11 @@ const performSearch = () => {
   }
 }
 
-// Scroll to a specific search result
+/**
+ * 滾動到特定搜尋結果
+ * @param _index - 搜尋結果索引（當前未使用）
+ */
 const scrollToSearchResult = (_index: number) => {
-  // For now, scroll to top of content since we're filtering the content itself
-  // In a filtered view, we just scroll to the content area
   const element = document.querySelector('.log-content');
   if (element) {
     element.scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -375,8 +391,20 @@ const handleSearchInput = (event: KeyboardEvent) => {
   }
 }
 
-const scrollToBottom = () => window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' })
 const scrollToTop = () => window.scrollTo({ top: 0, behavior: 'smooth' })
+
+/**
+ * 滾動到頁腳
+ * 優先滾動到頁腳元素，若找不到則滾動到頁面底部
+ */
+const scrollToFooter = () => {
+  const footer = document.querySelector('footer');
+  if (footer) {
+    footer.scrollIntoView({ behavior: 'smooth' });
+  } else {
+    window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });
+  }
+}
 </script>
 
 <template>
@@ -421,20 +449,6 @@ const scrollToTop = () => window.scrollTo({ top: 0, behavior: 'smooth' })
                  {{ showErrorsOnly ? t('show_all') : t('show_errors_only') }}
              </button>
 
-             <button @click="scrollToTop" class="text-sm bg-secondary hover:bg-secondary/80 text-secondary-foreground px-3 py-2 rounded flex items-center justify-center gap-1 transition-colors duration-300">
-                 <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                   <line x1="12" y1="19" x2="12" y2="5"></line>
-                   <polyline points="5 12 12 5 19 12"></polyline>
-                 </svg>
-                 {{ t('scroll_top') }}
-             </button>
-             <button @click="scrollToBottom" class="text-sm bg-secondary hover:bg-secondary/80 text-secondary-foreground px-3 py-2 rounded flex items-center justify-center gap-1 transition-colors duration-300">
-                 <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                   <line x1="12" y1="5" x2="12" y2="19"></line>
-                   <polyline points="19 12 12 19 5 12"></polyline>
-                 </svg>
-                 {{ t('scroll_bottom') }}
-             </button>
            </div>
 
            <!-- More action buttons -->
@@ -474,18 +488,28 @@ const scrollToTop = () => window.scrollTo({ top: 0, behavior: 'smooth' })
            </div>
 
            <!-- Options -->
-           <div class="mt-4 flex items-center gap-2 pt-3 border-t dark:border-gray-700 transition-colors duration-300">
-               <label class="text-sm text-muted-foreground dark:text-gray-400 select-none cursor-pointer transition-colors duration-300">{{ t('auto_wrap') }}</label>
-               <button
-                 @click="wrapLines = !wrapLines"
-                 :class="wrapLines ? 'bg-primary' : 'bg-gray-600'"
-                 class="relative inline-flex h-5 w-9 items-center rounded-full transition-colors focus:outline-none"
-               >
-                 <span
-                   :class="wrapLines ? 'translate-x-5' : 'translate-x-1'"
-                   class="inline-block h-3 w-3 transform rounded-full bg-white transition-transform"
-                 />
-               </button>
+           <div class="mt-4 flex items-center justify-between pt-3 border-t dark:border-gray-700 transition-colors duration-300">
+               <div class="flex items-center gap-3">
+                 <WrapText class="h-5 w-5 text-muted-foreground dark:text-gray-300" />
+                 <label class="text-base font-medium text-muted-foreground dark:text-gray-300 select-none cursor-pointer transition-colors duration-300">{{ t('auto_wrap') }}</label>
+                 <button
+                   @click="wrapLines = !wrapLines"
+                   :class="wrapLines ? 'bg-primary' : 'bg-gray-600'"
+                   class="relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none"
+                 >
+                   <span
+                     :class="wrapLines ? 'translate-x-6' : 'translate-x-1'"
+                     class="inline-block h-4 w-4 transform rounded-full bg-white transition-transform"
+                   />
+                 </button>
+               </div>
+               <div class="flex items-center gap-2">
+                 <div class="h-5 w-px bg-gray-300 dark:bg-gray-600"></div>
+                 <button @click="scrollToFooter" class="text-sm bg-secondary hover:bg-secondary/80 text-secondary-foreground px-3 py-1.5 rounded flex items-center justify-center gap-1 transition-colors duration-300">
+                   <ArrowDownToLine class="h-4 w-4" />
+                   <span class="ml-1">{{ t('scroll_footer') }}</span>
+                 </button>
+               </div>
            </div>
 
         </div>
@@ -523,27 +547,20 @@ const scrollToTop = () => window.scrollTo({ top: 0, behavior: 'smooth' })
         </div>
 
         <!-- AI Analysis -->
-        <div class="relative bg-gradient-to-br from-gray-50 to-gray-100 dark:from-gray-800 dark:to-gray-900 border dark:border-gray-700 rounded-lg p-5 shadow-sm text-card-foreground overflow-hidden transition-colors duration-300">
+        <div class="relative bg-gradient-to-br from-indigo-50 to-purple-50 dark:from-indigo-900/20 dark:to-purple-900/20 border border-primary/30 rounded-xl p-6 shadow-lg text-card-foreground overflow-hidden transition-colors duration-300">
             <!-- Background icon in top-right corner -->
-            <div class="absolute top-4 right-4 opacity-10 transition-opacity duration-300">
-                <svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1" stroke-linecap="round" stroke-linejoin="round">
-                  <path d="M3.81 6.46a10 10 0 1 0 17.08 5.07"></path>
-                  <path d="M12 18v-8"></path>
-                  <path d="M8 8l4-4 4 4"></path>
-                </svg>
+            <div class="absolute top-6 right-6 opacity-20 dark:opacity-10 text-primary transition-opacity duration-300">
+                <Sparkles class="w-24 h-24" />
             </div>
             <h3 class="font-bold mb-3 flex items-center gap-2 relative z-10 transition-colors duration-300">
-                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                  <path d="M3.81 6.46a10 10 0 1 0 17.08 5.07"></path>
-                  <path d="M12 18v-8"></path>
-                  <path d="M8 8l4-4 4 4"></path>
-                </svg>
+                <Brain class="h-5 w-5" />
                 <span>{{ t('ai_analysis') }}</span>
                 <button
                   @click="toggleHistory"
-                  class="ml-auto text-xs bg-secondary hover:bg-secondary/80 text-secondary-foreground px-2 py-1 rounded transition-colors duration-300"
+                  class="ml-auto text-xs bg-secondary hover:bg-secondary/80 text-secondary-foreground px-2 py-1 rounded transition-colors duration-300 flex items-center gap-1"
                   title="查看历史分析记录"
                 >
+                  <History class="h-3 w-3" />
                   历史
                 </button>
             </h3>
@@ -579,7 +596,8 @@ const scrollToTop = () => window.scrollTo({ top: 0, behavior: 'smooth' })
             </div>
 
             <div v-if="!aiResult && !analyzing" class="relative z-10">
-                <button @click="analyzeLog" class="w-full bg-[#3b82f6] text-white hover:bg-[#2563eb] px-4 py-3 rounded font-medium transition-colors duration-300">
+                <button @click="analyzeLog" class="w-full bg-black text-white hover:bg-gray-800 px-4 py-3 rounded-lg font-semibold shadow-lg hover:shadow-xl transition-all duration-300 transform hover:-translate-y-0.5 flex items-center justify-center gap-2">
+                    <Sparkles class="h-5 w-5" />
                     {{ t('start_analysis') }}
                 </button>
                 <p class="text-xs text-muted-foreground mt-3 text-center transition-colors duration-300">{{ t('analysis_disclaimer') }}</p>
@@ -658,14 +676,9 @@ const scrollToTop = () => window.scrollTo({ top: 0, behavior: 'smooth' })
             <button
               v-if="isFullscreen"
               @click="toggleFullscreen"
-              class="text-gray-300 dark:text-gray-200 hover:text-white text-sm flex items-center gap-1 transition-colors duration-300"
+              class="bg-black/70 text-white hover:bg-black/90 text-sm flex items-center gap-1 transition-colors duration-300 px-3 py-1.5 rounded-lg shadow-md hover:shadow-lg"
             >
-              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M18 8h-6V2"></path>
-                <path d="M6 16h6v6"></path>
-                <path d="M3 3l6 6"></path>
-                <path d="M21 21l-6-6"></path>
-              </svg>
+              <X class="h-4 w-4" />
               {{ t('exit_fullscreen') }}
             </button>
           </div>
@@ -675,6 +688,17 @@ const scrollToTop = () => window.scrollTo({ top: 0, behavior: 'smooth' })
         <div class="bg-[#1a1a1a] dark:bg-gray-900 border border-gray-700 dark:border-gray-600 rounded-b-lg shadow-lg overflow-hidden text-white transition-colors duration-300" :class="{ 'h-full flex flex-col': isFullscreen, 'log-no-wrap': !wrapLines }">
           <div :class="isFullscreen ? 'flex-1 overflow-auto' : 'overflow-x-auto'">
             <div class="log-content font-mono text-xs p-4" :class="{ 'show-errors-only': showErrorsOnly, 'log-wrap': wrapLines }" v-html="logContent"></div>
+          </div>
+          
+          <!-- Scroll to Top Button at Bottom -->
+          <div class="flex justify-end p-3 border-t border-gray-700 dark:border-gray-600">
+            <button @click="scrollToTop" class="text-sm bg-secondary hover:bg-secondary/80 text-secondary-foreground px-3 py-2 rounded flex items-center justify-center gap-1 transition-colors duration-300">
+              <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <line x1="12" y1="19" x2="12" y2="5"></line>
+                <polyline points="5 12 12 5 19 12"></polyline>
+              </svg>
+              {{ t('scroll_top') }}
+            </button>
           </div>
         </div>
       </div>
