@@ -7,8 +7,7 @@ import MarkdownIt from 'markdown-it'
 import hljs from 'highlight.js'
 import 'highlight.js/styles/github-dark.css'
 import {
-  saveAIAnalysisRecord,
-  getAIAnalysisRecords
+  saveAIAnalysisRecord
 } from '@/lib/localStorage'
 import { setPageTitle } from '@/lib/pageTitle'
 import { t } from '@/lib/i18n'
@@ -106,7 +105,7 @@ const loadAIAnalysisHistory = () => {
     }
     
     // 过滤出当前日志ID的记录
-    aiAnalysisHistory.value = cachedAllRecords.filter((record: any) => record.logId === id);
+    aiAnalysisHistory.value = cachedAllRecords ? cachedAllRecords.filter((record: any) => record.logId === id) : [];
 }
 
 // 切换历史记录显示
@@ -340,8 +339,9 @@ const performSearch = () => {
 }
 
 // Scroll to a specific search result
-const scrollToSearchResult = (index: number) => {
+const scrollToSearchResult = (_index: number) => {
   // For now, scroll to top of content since we're filtering the content itself
+  // In a filtered view, we just scroll to the content area
   const element = document.querySelector('.log-content');
   if (element) {
     element.scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -352,8 +352,10 @@ const goToNextResult = () => {
   if (searchResults.value.length === 0) return;
 
   searchIndex.value = (searchIndex.value + 1) % searchResults.value.length;
-  // Since we're filtering content, we just re-run the search with same term
-  performSearch();
+  const index = searchResults.value[searchIndex.value];
+  if (index !== undefined) {
+    scrollToSearchResult(index);
+  }
 }
 
 const goToPrevResult = () => {
@@ -361,8 +363,10 @@ const goToPrevResult = () => {
 
   const len = searchResults.value.length;
   searchIndex.value = (searchIndex.value - 1 + len) % searchResults.value.length;
-  // Since we're filtering content, we just re-run the search with same term
-  performSearch();
+  const index = searchResults.value[searchIndex.value];
+  if (index !== undefined) {
+    scrollToSearchResult(index);
+  }
 }
 
 const handleSearchInput = (event: KeyboardEvent) => {

@@ -1,6 +1,4 @@
 <script setup lang="ts">
-import { ref } from 'vue';
-
 // 固定使用繁體中文（台灣）
 const imprintContent = {
   title: "法律聲明 (Imprint)",

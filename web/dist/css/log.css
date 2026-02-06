@@ -2,7 +2,8 @@
 .level {
     white-space: pre-wrap;
     tab-size: 4;
-    word-break: normal;
+    word-break: break-word;
+    box-sizing: border-box;
 }
 
 .level-prefix {
@@ -11,6 +12,11 @@
 
 .level-info {
     color: #f0f0f0;
+    padding: 2px 4px;
+    border-radius: 3px;
+    display: inline-block;
+    max-width: 100%;
+    word-break: break-word;
 }
 
 .level-title {
@@ -19,6 +25,9 @@
     background-color: #2d87d3;
     padding: 0 8px;
     border-radius: 2px;
+    display: inline-block;
+    max-width: 100%;
+    word-break: break-word;
 }
 
 .level-info .level-prefix,
@@ -27,8 +36,32 @@
     color: #2d87d3;
 }
 
+.level-notice {
+    background-color: rgba(163, 216, 245, 0.1); /* Light blue with 10% opacity */
+    padding: 2px 4px;
+    border-radius: 3px;
+    display: inline-block;
+    max-width: 100%;
+    word-break: break-word;
+}
+
+.level-debug {
+    background-color: rgba(163, 216, 245, 0.05); /* Light blue with 5% opacity */
+    padding: 2px 4px;
+    border-radius: 3px;
+    display: inline-block;
+    max-width: 100%;
+    word-break: break-word;
+}
+
 .level-warning {
     color: #FF6625;
+    background-color: rgba(255, 102, 37, 0.1); /* #FF6625 with 10% opacity */
+    padding: 2px 4px;
+    border-radius: 3px;
+    display: inline-block;
+    max-width: 100%;
+    word-break: break-word;
 }
 
 .level-error,
@@ -36,6 +69,112 @@
 .level-emergency,
 .level-stacktrace {
     color: #F62451;
+    background-color: rgba(246, 36, 81, 0.1); /* #F62451 with 10% opacity */
+    padding: 2px 4px;
+    border-radius: 3px;
+    display: inline-block;
+    max-width: 100%;
+    word-break: break-word;
+}
+
+/* Fallback styles for any unrecognized level types */
+.level-unknown {
+    color: #f0f0f0;
+    background-color: rgba(128, 128, 128, 0.05);
+    padding: 2px 4px;
+    border-radius: 3px;
+    display: inline-block;
+    max-width: 100%;
+    word-break: break-word;
+}
+
+/* Robust container styles */
+.log-container {
+    width: 100%;
+    max-width: 100%;
+    overflow-x: auto;
+    font-family: 'Courier New', Consolas, Monaco, 'Andale Mono', 'Ubuntu Mono', monospace;
+    font-size: 14px;
+    line-height: 1.4;
+    background-color: #1a1a1a;
+    color: #f0f0f0;
+    padding: 10px;
+    border-radius: 4px;
+    box-sizing: border-box;
+    min-height: 200px;
+    max-height: 80vh;
+    overflow-y: auto;
+}
+
+/* Better accessibility and contrast */
+.level-error,
+.level-critical,
+.level-emergency {
+    font-weight: bold;
+    border-left: 2px solid #F62451;
+    padding-left: 6px;
+}
+
+/* Responsive adjustments */
+@media screen and (max-width: 768px) {
+    .level {
+        font-size: 12px;
+        padding: 1px 2px;
+    }
+    
+    .level-title {
+        padding: 0 4px;
+        font-size: 12px;
+    }
+    
+    .log-container {
+        font-size: 12px;
+        padding: 5px;
+    }
+}
+
+/* High contrast mode support */
+@media (prefers-contrast: high) {
+    .level-warning {
+        background-color: rgba(255, 102, 37, 0.3) !important;
+        color: #000 !important;
+    }
+    
+    .level-error,
+    .level-critical,
+    .level-emergency,
+    .level-stacktrace {
+        background-color: rgba(246, 36, 81, 0.3) !important;
+        color: #000 !important;
+    }
+}
+
+/* Reduced motion support */
+@media (prefers-reduced-motion: reduce) {
+    * {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
+    }
+}
+
+/* Print styles */
+@media print {
+    .level {
+        background: transparent !important;
+        color: black !important;
+    }
+    
+    .level-warning {
+        background: rgba(255, 102, 37, 0.2) !important;
+    }
+    
+    .level-error,
+    .level-critical,
+    .level-emergency,
+    .level-stacktrace {
+        background: rgba(246, 36, 81, 0.2) !important;
+    }
 }
 
 .level-comment {
