@@ -3,45 +3,19 @@ import { useRoute } from 'vue-router'
 import { apiClient, getApiUrl } from '@/lib/api'
 import { parseLog } from '@/lib/logParser'
 import MarkdownIt from 'markdown-it'
-// Import only the languages we need to reduce bundle size
 import {
   saveAIAnalysisRecord
 } from '@/lib/localStorage'
 import { setPageTitle } from '@/lib/pageTitle'
 import { t } from '@/lib/i18n'
 
-// Initialize markdown parser with syntax highlighting
+// Initialize markdown parser without syntax highlighting
 let md: any = null;
 
 const initializeMarkdownParser = async () => {
-  // Dynamically import highlight.js and needed languages only when required
-  const hljs = await import('highlight.js');
-  // Import only the specific languages we need: PHP, TypeScript, and Shell
-  await Promise.all([
-    import('highlight.js/lib/languages/php'),
-    import('highlight.js/lib/languages/typescript'),
-    import('highlight.js/lib/languages/shell'),
-  ]).then(langModules => {
-    langModules.forEach(langModule => {
-      if (langModule.default && langModule.default.name) {
-        hljs.default.registerLanguage(langModule.default.name, langModule.default);
-      }
-    });
-  });
-
   md = new MarkdownIt({
     html: false,
-    linkify: true,
-    highlight: function (str: string, lang: string): string {
-      if (lang && hljs.default.getLanguage(lang)) {
-        try {
-          return '<pre class="hljs"><code>' +
-            hljs.default.highlight(str, { language: lang, ignoreIllegals: true }).value +
-            '</code></pre>';
-        } catch (__) { }
-      }
-      return ''; // use external default escaping
-    }
+    linkify: true
   });
 };
 

@@ -1,11 +1,9 @@
 <script setup lang="ts">
 import { onMounted, ref, computed } from 'vue'
 import { useRoute } from 'vue-router'
-import { apiClient, getApiUrl } from '@/lib/api'
+import { apiClient } from '@/lib/api'
 import { parseLog } from '@/lib/logParser'
 import MarkdownIt from 'markdown-it'
-import hljs from 'highlight.js'
-import 'highlight.js/styles/github-dark.css'
 import {
   saveAIAnalysisRecord
 } from '@/lib/localStorage'
@@ -15,17 +13,7 @@ import { WrapText, ArrowDownToLine, Brain, History, Sparkles, X } from 'lucide-v
 
 const md = new MarkdownIt({
     html: false,
-    linkify: true,
-    highlight: function (str: string, lang: string): string {
-        if (lang && hljs.getLanguage(lang)) {
-            try {
-                return '<pre class="hljs"><code>' +
-                    hljs.highlight(str, { language: lang, ignoreIllegals: true }).value +
-                    '</code></pre>';
-            } catch (__) { }
-        }
-        return ''; // use external default escaping
-    }
+    linkify: true
 })
 
 const route = useRoute()
@@ -180,24 +168,18 @@ const deleteLog = async () => {
   }
 
   try {
-    const response = await fetch(`${getApiUrl('1/delete/')}${id}`, {
-      method: 'DELETE',
-      headers: {
-        'Content-Type': 'application/json'
-      }
-    })
+    const response = await apiClient.delete(`/1/delete/${id}`)
 
-    const data = await response.json()
-
-    if (data.success) {
+    if (response.data.success) {
       alert(t('delete_log_success'))
       window.location.href = '/'
     } else {
-      alert(t('delete_log_failed') + ': ' + (data.error || t('unknown_error')))
+      alert(t('delete_log_failed') + ': ' + (response.data.error || t('unknown_error')))
     }
   } catch (e: any) {
     console.error('Failed to delete log:', e)
-    alert(t('delete_log_failed') + ': ' + (e.message || t('network_error')))
+    const errorMsg = e.response?.data?.error || e.response?.data?.message || e.message || t('network_error')
+    alert(t('delete_log_failed') + ': ' + errorMsg)
   }
 }
 

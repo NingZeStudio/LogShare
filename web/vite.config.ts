@@ -30,10 +30,6 @@ export default defineConfig({
         manualChunks: (id) => {
           // 分离大型库以确保每个chunk不超过200KB
           if (id.includes('node_modules')) {
-            // 将highlight.js单独分离出来，尽管它可能超过200KB
-            if (id.includes('highlight.js')) {
-              return 'highlight';
-            }
             if (id.includes('markdown-it')) {
               return 'markdown';
             }
@@ -52,7 +48,7 @@ export default defineConfig({
             // 其他node_modules统一打包到vendor
             return 'vendor';
           }
-          
+
           // 页面级别的代码分割
           if (id.includes('src/views/HomeView')) {
             return 'home';
@@ -72,7 +68,7 @@ export default defineConfig({
         },
       }
     },
-    // 控制chunk大小警告阈值（单位KB），为highlight.js留出空间
-    chunkSizeWarningLimit: 1000,
+    // 控制chunk大小警告阈值（单位KB）
+    chunkSizeWarningLimit: 500,
   }
 })
