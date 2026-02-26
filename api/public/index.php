@@ -20,33 +20,33 @@ switch ($_SERVER['REQUEST_URI']) {
                 "POST /1/analyse" => "Analyze log data",
                 "GET /1/errors/rate" => "Get error rate statistics",
                 "GET /1/limits" => "Get API rate limits",
-                "GET /1/raw/{id}" => "Retrieve raw log by ID",
+                "GET /1/raw/{id}" => "Retrieve raw log by ID (supports multiple IDs: /1/raw/id1,id2,id3)",
                 "GET /1/ai-analysis/{id}" => "Get AI analysis for log ID",
                 "GET /1/insights/{id}" => "Get insights for log ID",
-                "DELETE /1/delete/{id}" => "Delete log by ID"
+                "DELETE /1/delete/{id}" => "Delete log by ID (supports multiple IDs: /1/delete/id1,id2,id3)"
             ],
             "documentation" => "Please refer to the API documentation for detailed usage."
         ]);
         break;
-        
+
     case "/1/log":
     case "/1/log/":
         require_once("../endpoints/log.php");
         break;
-        
+
     case "/1/analyse":
     case "/1/analyse/":
         require_once("../endpoints/analyse.php");
         break;
-        
+
     case "/1/errors/rate":
         require_once("../endpoints/rate-error.php");
         break;
-        
+
     case "/1/limits":
         require_once("../endpoints/limits.php");
         break;
-        
+
     default:
         if (preg_match('#^/1/raw/#', $_SERVER['REQUEST_URI'])) {
             require_once("../endpoints/raw.php");

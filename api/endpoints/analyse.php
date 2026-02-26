@@ -1,5 +1,11 @@
 <?php
 
+try {
+    RequestValidator::validateMethod('POST');
+} catch (ApiError $e) {
+    $e->output();
+}
+
 $content = (new ContentParser())->getContent();
 
 if ($content instanceof ApiError) {
@@ -13,5 +19,4 @@ $log->analyse();
 $codexLog = $log->get();
 $codexLog->setIncludeEntries(false);
 
-header('Content-Type: application/json');
-echo json_encode($codexLog);
+ApiResponse::json($codexLog);

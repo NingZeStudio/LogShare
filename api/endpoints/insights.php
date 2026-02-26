@@ -1,7 +1,13 @@
 <?php
 
-$urlId = substr($_SERVER['REQUEST_URI'], strlen("/1/insights/"));
-$id = new Id($urlId);
+try {
+    RequestValidator::validateMethod('GET');
+    $logId = RequestValidator::extractId('/1/insights/');
+} catch (ApiError $e) {
+    $e->output();
+}
+
+$id = new Id($logId);
 $log = new Log($id);
 
 if (!$log->exists()) {
@@ -14,5 +20,4 @@ $log->renew();
 $codexLog = $log->get();
 $codexLog->setIncludeEntries(false);
 
-header('Content-Type: application/json');
-echo json_encode($codexLog);
+ApiResponse::json($codexLog);

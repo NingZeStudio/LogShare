@@ -1,10 +1,14 @@
 <?php
 
-header('Content-Type: application/json');
+try {
+    RequestValidator::validateMethod('GET');
+} catch (ApiError $e) {
+    $e->output();
+}
 
-$config = \Config::Get('storage');
+$config = Config::Get('storage');
 
-echo json_encode([
+ApiResponse::json([
     'storageTime' => $config['storageTime'],
     'maxLength' => $config['maxLength'],
     'maxLines' => $config['maxLines']

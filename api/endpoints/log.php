@@ -1,5 +1,11 @@
 <?php
 
+try {
+    RequestValidator::validateMethod('POST');
+} catch (ApiError $e) {
+    $e->output();
+}
+
 $content = (new ContentParser())->getContent();
 
 if ($content instanceof ApiError) {
@@ -11,11 +17,8 @@ $id = $log->put($content);
 
 $urls = Config::Get('urls');
 
-$out = new stdClass();
-$out->success = true;
-$out->id = $id->get();
-$out->url = $urls['baseUrl'] . "/" . $out->id;
-$out->raw = $urls['apiBaseUrl'] . "/1/raw/" . $out->id;
-
-header('Content-Type: application/json');
-echo json_encode($out);
+ApiResponse::success([
+    'id' => $id->get(),
+    'url' => $urls['baseUrl'] . "/" . $id->get(),
+    'raw' => $urls['apiBaseUrl'] . "/1/raw/" . $id->get()
+], 'Log submitted successfully');
