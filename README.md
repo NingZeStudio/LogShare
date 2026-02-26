@@ -40,8 +40,8 @@ McLogs Next API 是一个现代化的无头应用程序，专为 Minecraft 服�
 ### PHP 依赖
 - `mongodb/mongodb`: 2.1.2
 - `aternos/codex-minecraft`: ^5.0.1 (日志分析)
-- `aternos/sherlock`: ^1.0.2 (日志分析)
-- `aternos/codex-hytale`: ^1.0 (Hytale 日志分析)
+- `aternos/sherlock`: ^1.0.3 (日志分析)
+- `aternos/codex-hytale`: ^2.0 (Hytale 日志分析)
 - 必需扩展: json, zlib, mbstring, mongodb, redis
 
 ## 🚀 快速部署
