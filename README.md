@@ -1,5 +1,7 @@
 # McLogs Next API
 
+## 我们正在打算使用 Swoole & Hyperf 并基于 PHP8.5 重构此诗项目。
+
 **现代化 Minecraft 服务器日志分析 API 平台**
 
 [![License](https://img.shields.io/badge/license-MIT-blue.svg?style=flat-square)](LICENSE)
