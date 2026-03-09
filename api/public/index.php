@@ -21,7 +21,6 @@ switch ($_SERVER['REQUEST_URI']) {
                 "GET /1/errors/rate" => "Get error rate statistics",
                 "GET /1/limits" => "Get API rate limits",
                 "GET /1/raw/{id}" => "Retrieve raw log by ID (supports multiple IDs: /1/raw/id1,id2,id3)",
-                "GET /1/ai-analysis/{id}" => "Get AI analysis for log ID",
                 "GET /1/insights/{id}" => "Get insights for log ID",
                 "DELETE /1/delete/{id}" => "Delete log by ID (supports multiple IDs: /1/delete/id1,id2,id3)"
             ],
@@ -50,10 +49,6 @@ switch ($_SERVER['REQUEST_URI']) {
     default:
         if (preg_match('#^/1/raw/#', $_SERVER['REQUEST_URI'])) {
             require_once("../endpoints/raw.php");
-            break;
-        }
-        if (preg_match('#^/1/ai-analysis/#', $_SERVER['REQUEST_URI'])) {
-            require_once("../endpoints/ai-analysis.php");
             break;
         }
         if (preg_match('#^/1/insights/#', $_SERVER['REQUEST_URI'])) {

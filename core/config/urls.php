@@ -7,13 +7,13 @@ $config = [
      *
      * Should not end with a slash
      */
-    'baseUrl' => 'https://mclogs.lemwood.icu',
+    'baseUrl' => 'https://logshare.cn',
 
     /**
      * The base URL for the API
      *
      * Should not end with a slash
      */
-    'apiBaseUrl' => 'https://api.mclogs.lemwood.icu',
+    'apiBaseUrl' => 'https://api.logshare.cn',
 
 ];
