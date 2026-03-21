@@ -1,0 +1,9 @@
+main:
+  push:
+    - imports: https://cnb.cool/MornZe-Dev/secrets/-/blob/main/github.yml
+      docker:
+        image: alpine/git
+      stages:
+        - script: |
+            git remote add github https://${GITHUB_USER}:${GITHUB_TOKEN}@github.com/NingZeStudio/McLogs-Next-API
+            git push github HEAD:${CNB_BRANCH} --force
