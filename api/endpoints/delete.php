@@ -17,34 +17,8 @@ function isValidIdFormat(string $id): bool
 }
 
 /**
- * 删除单个日志
- *
- * @param string $logId
- * @return array ['success' => bool, 'message' => string, 'code' => int]
+ * 从 URL 路径提取日志 ID(s)
  */
-function deleteSingleLog(string $logId): array
-{
-    if (!isValidIdFormat($logId)) {
-        return ['success' => false, 'message' => "Invalid log ID format: {$logId}", 'code' => 400];
-    }
-
-    $id = new Id($logId);
-    $log = new Log($id);
-
-    if (!$log->exists()) {
-        return ['success' => false, 'message' => "Log not found: {$logId}", 'code' => 404];
-    }
-
-    $deleted = $log->delete();
-
-    if ($deleted) {
-        return ['success' => true, 'message' => "Log deleted successfully", 'code' => 200];
-    }
-
-    return ['success' => false, 'message' => "Failed to delete log: {$logId}", 'code' => 500];
-}
-
-// 从 URL 路径提取日志 ID(s)
 $path = parse_url($_SERVER['REQUEST_URI'], PHP_URL_PATH);
 $segments = explode('/', trim($path, '/'));
 $idSegment = $segments[count($segments) - 1] ?? null;
@@ -64,42 +38,64 @@ if (empty($logIds)) {
     $error->output();
 }
 
-// 单个 ID 删除 - 保持向后兼容
-if (count($logIds) === 1) {
-    $result = deleteSingleLog($logIds[0]);
-
-    if ($result['success']) {
-        $response = new stdClass();
-        $response->success = true;
-        $response->message = $result['message'];
-        $response->deleted = [$logIds[0]];
-        $response->failed = [];
-
-        header('Content-Type: application/json');
-        echo json_encode($response);
-    } else {
-        $error = new ApiError($result['code'], $result['message']);
-        $error->output();
-    }
-    exit;
+// 获取 Authorization header 中的 token
+$authorizationHeader = $_SERVER['HTTP_AUTHORIZATION'] ?? null;
+$requestToken = null;
+if ($authorizationHeader) {
+    $parts = explode(" ", $authorizationHeader);
+    $requestToken = $parts[1] ?? null;
 }
 
-// 多个 ID 删除
+if (!$requestToken) {
+    $error = new ApiError(400, "Missing token in Authorization header.");
+    $error->output();
+}
+
+// 验证每个 ID 并检查 token
 $results = [
     'deleted' => [],
     'failed' => []
 ];
 
 foreach ($logIds as $logId) {
-    $result = deleteSingleLog($logId);
+    if (!isValidIdFormat($logId)) {
+        $results['failed'][] = [
+            'id' => $logId,
+            'message' => "Invalid log ID format: {$logId}",
+            'code' => 400
+        ];
+        continue;
+    }
 
-    if ($result['success']) {
+    $id = new Id($logId);
+    $log = new Log($id);
+
+    if (!$log->exists()) {
+        $results['failed'][] = [
+            'id' => $logId,
+            'message' => "Log not found: {$logId}",
+            'code' => 404
+        ];
+        continue;
+    }
+
+    if (!$log->verifyToken($requestToken)) {
+        $results['failed'][] = [
+            'id' => $logId,
+            'message' => "Invalid token for log: {$logId}",
+            'code' => 403
+        ];
+        continue;
+    }
+
+    $deleted = $log->delete();
+    if ($deleted) {
         $results['deleted'][] = $logId;
     } else {
         $results['failed'][] = [
             'id' => $logId,
-            'message' => $result['message'],
-            'code' => $result['code']
+            'message' => "Failed to delete log: {$logId}",
+            'code' => 500
         ];
     }
 }

@@ -2,6 +2,13 @@
 
 require_once("../../core/core.php");
 
+// Ensure MongoDB indexes exist
+try {
+    \Client\MongoDBClient::ensureIndexes();
+} catch (Exception $e) {
+    error_log("Failed to ensure MongoDB indexes: " . $e->getMessage());
+}
+
 header('Access-Control-Allow-Origin: *');
 header('Access-Control-Allow-Headers: *');
 header("Accept-Encoding: " . implode(",", ContentParser::getSupportedEncodings()));
@@ -20,9 +27,11 @@ switch ($_SERVER['REQUEST_URI']) {
                 "POST /1/analyse" => "Analyze log data",
                 "GET /1/errors/rate" => "Get error rate statistics",
                 "GET /1/limits" => "Get API rate limits",
+                "GET /1/filters" => "Get active filters information",
+                "POST /1/bulk/log/delete" => "Bulk delete logs by ID and token",
                 "GET /1/raw/{id}" => "Retrieve raw log by ID (supports multiple IDs: /1/raw/id1,id2,id3)",
                 "GET /1/insights/{id}" => "Get insights for log ID",
-                "DELETE /1/delete/{id}" => "Delete log by ID (supports multiple IDs: /1/delete/id1,id2,id3)"
+                "DELETE /1/delete/{id}" => "Delete log by ID with token auth (supports multiple IDs: /1/delete/id1,id2,id3)"
             ],
             "documentation" => "Please refer to the API documentation for detailed usage."
         ]);
@@ -44,6 +53,15 @@ switch ($_SERVER['REQUEST_URI']) {
 
     case "/1/limits":
         require_once("../endpoints/limits.php");
+        break;
+
+    case "/1/filters":
+        require_once("../endpoints/filters.php");
+        break;
+
+    case "/1/bulk/log/delete":
+    case "/1/bulk/log/delete/":
+        require_once("../endpoints/bulk-delete.php");
         break;
 
     default:

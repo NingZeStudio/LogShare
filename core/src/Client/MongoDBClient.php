@@ -35,6 +35,18 @@ class MongoDBClient
     protected static function getCollection(): Collection
     {
         static::Connect();
-        return self::$connection->mclogs->{static::COLLECTION_NAME};
+        $config = \Config::Get("mongo");
+        return self::$connection->{$config['database'] ?? 'mclogs'}->{static::COLLECTION_NAME};
+    }
+
+    /**
+     * Ensure indexes exist
+     *
+     * @return void
+     */
+    public static function ensureIndexes(): void
+    {
+        $collection = self::getCollection();
+        $collection->createIndex(['expires' => 1], ['expireAfterSeconds' => 0]);
     }
 }

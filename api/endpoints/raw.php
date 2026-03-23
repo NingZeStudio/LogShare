@@ -17,4 +17,4 @@ if (!$log->exists()) {
 
 $log->renew();
 
-ApiResponse::text($log->get()->getLogfile()->getContent(), 'text/plain');
+ApiResponse::text($log->getContent(), 'text/plain');

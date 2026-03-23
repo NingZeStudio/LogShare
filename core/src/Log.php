@@ -19,6 +19,9 @@ use Aternos\Sherlock\Maps\VanillaObfuscationMap;
 use Aternos\Sherlock\Maps\YarnMap;
 use Aternos\Sherlock\ObfuscatedString;
 use Cache\CacheEntry;
+use Data\MetadataEntry;
+use Data\Token;
+use Filter\Filter;
 use Printer\Printer;
 use Storage\StorageInterface;
 
@@ -27,6 +30,11 @@ class Log
     private bool $exists = false;
     private ?Id $id = null;
     private ?string $data = null;
+    private ?Token $token = null;
+    private array $metadata = [];
+    private ?string $source = null;
+    private ?int $created = null;
+    private ?int $expires = null;
     protected \Aternos\Codex\Log\Log $log;
     protected ?ObfuscatedString $obfuscatedContent = null;
 
@@ -75,15 +83,20 @@ class Log
          */
         $storage = $config['storages'][$this->id->getStorage()]['class'];
 
-        $data = $storage::Get($this->id);
+        $result = $storage::Get($this->id);
 
-        if ($data === null) {
+        if ($result === null) {
             $this->exists = false;
             return;
-        } else {
-            $this->data = $data;
-            $this->exists = true;
         }
+
+        $this->data = $result['data'];
+        $this->token = isset($result['token']) ? new Token($result['token']) : null;
+        $this->metadata = MetadataEntry::allFromArray($result['metadata'] ?? []);
+        $this->source = $result['source'] ?? null;
+        $this->created = $result['created']?->toDateTime()->getTimestamp() ?? null;
+        $this->expires = $result['expires']?->toDateTime()->getTimestamp() ?? null;
+        $this->exists = true;
 
         $this->analyse();
         $this->printer = (new Printer())->setLog($this->log)->setId($this->id);
@@ -271,6 +284,16 @@ class Log
     }
 
     /**
+     * Get the raw content of the log
+     *
+     * @return string
+     */
+    public function getContent(): string
+    {
+        return $this->data;
+    }
+
+    /**
      * Set the data of the log without saving it to storage
      *
      * @param string $data
@@ -287,12 +310,18 @@ class Log
      * Put data into the log
      *
      * @param string $data
+     * @param Token|null $token
+     * @param MetadataEntry[] $metadata
+     * @param string|null $source
      * @return ?Id
      */
-    public function put(string $data): ?Id
+    public function put(string $data, ?Token $token = null, array $metadata = [], ?string $source = null): ?Id
     {
         $this->data = $data;
         $this->preFilter();
+        $this->token = $token ?? new Token();
+        $this->metadata = $metadata;
+        $this->source = $source;
 
         $config = Config::Get('storage');
 
@@ -301,7 +330,7 @@ class Log
          */
         $storage = $config['storages'][$config['storageId']]['class'];
 
-        $this->id = $storage::Put($this->data);
+        $this->id = $storage::Put($this->data, $this->token, $this->metadata, $this->source);
         $this->exists = true;
 
         return $this->id;
@@ -320,6 +349,9 @@ class Log
         $storage = $config['storages'][$this->id->getStorage()]['class'];
 
         $storage::Renew($this->id);
+        
+        // Update local expires value
+        $this->expires = time() + $config['storageTime'];
     }
 
     /**
@@ -329,11 +361,7 @@ class Log
     {
         $config = Config::Get('filter');
         foreach ($config['pre'] as $preFilterClass) {
-            /**
-             * @var \Filter\Pre\PreFilterInterface $preFilterClass
-             */
-
-            $this->data = $preFilterClass::Filter($this->data);
+            $this->data = $preFilterClass::filter($this->data);
         }
     }
 
@@ -371,5 +399,79 @@ class Log
         }
 
         return $result;
+    }
+
+    /**
+     * Get the token
+     *
+     * @return Token|null
+     */
+    public function getToken(): ?Token
+    {
+        return $this->token;
+    }
+
+    /**
+     * Get the metadata
+     *
+     * @return MetadataEntry[]
+     */
+    public function getMetadata(): array
+    {
+        return $this->metadata;
+    }
+
+    /**
+     * Get the source
+     *
+     * @return string|null
+     */
+    public function getSource(): ?string
+    {
+        return $this->source;
+    }
+
+    /**
+     * Get the created timestamp
+     *
+     * @return int|null
+     */
+    public function getCreated(): ?int
+    {
+        return $this->created;
+    }
+
+    /**
+     * Get the expires timestamp
+     *
+     * @return int|null
+     */
+    public function getExpires(): ?int
+    {
+        return $this->expires;
+    }
+
+    /**
+     * Get the size of the log content
+     *
+     * @return int
+     */
+    public function getSize(): int
+    {
+        return strlen($this->data);
+    }
+
+    /**
+     * Verify if the provided token matches
+     *
+     * @param string $token
+     * @return bool
+     */
+    public function verifyToken(string $token): bool
+    {
+        if (!$this->token) {
+            return false;
+        }
+        return $this->token->matches($token);
     }
 }

@@ -1,156 +1,117 @@
-# LogShare_V1
-## 我们正在打算使用 RoadRunner & Hyperf 并基于 PHP8.5 重构此项目。
+# LogShare-v1
 
-**现代化 Minecraft 服务器日志分析 API 平台**
+## 项目简介
 
-[![License](https://img.shields.io/badge/license-MIT-blue.svg?style=flat-square)](LICENSE)
-[![PHP](https://img.shields.io/badge/PHP-8.4+-777BB4.svg?style=flat-square&logo=php&logoColor=white)](https://www.php.net/)
-[![Docker](https://img.shields.io/badge/Docker-Ready-2496ED.svg?style=flat-square&logo=docker&logoColor=white)](https://www.docker.com/)
+LogShare-v1 是一款专为 Minecraft 和 Hytale 玩家、服务器管理员及开发者打造的日志分析与快速诊断工具。无论你是正在排查服务器崩溃原因的服主，还是想要了解游戏客户端报错原因的普通玩家，LogShare-v1 都能帮助你快速定位问题、获得解决方案，并以简洁易用的方式分享日志给他人。
 
-## 🚀 项目简介
+本项目基于全球知名的 Aternos 日志分析工具链（`aternos/codex-minecraft`、`aternos/sherlock`、`aternos/codex-hytale`）构建，旨在为中文用户提供一个**本土化、高可用性、稳定可靠**的 mclo.gs 替代方案。我们深知，对于国内用户而言，访问国际服务时常面临网络延迟、语言障碍、使用门槛高等问题。LogShare-v1 正是为了解决这些痛点而生——我们提供全中文界面与文档、更贴近国内使用习惯的交互设计、以及更稳定快速的本地化服务体验。
 
-LogShare_V1 是一个现代化的无头应用程序，专为 Minecraft 服务器管理员设计，用于分享、分析和诊断服务器日志。该项目提供了一个完整的 REST API，允许用户提交、分析和检索 Minecraft 服务器日志。
+LogShare-v1 采用纯 API 后端架构（无头应用），专注于提供强大、灵活、易集成的日志分析服务。这意味着你可以自由选择任何前端框架来构建用户界面，或者直接将 API 集成到你现有的工具链、Discord 机器人、QQ 机器人、自动化运维系统中。无论是个人使用、服务器社区部署，还是商业项目集成，LogShare-v1 都能提供坚实的技术支撑。
 
-主要特点：
-- **简化日志分享**：通过唯一 URL 轻松分享大型日志文件
-- **智能错误分析**：利用先进的分析库自动检测问题并提供解决方案
-- **隐私保护**：内置过滤机制，自动隐藏敏感信息
-- **纯 API 接口**：无头架构，专注于提供强大而可靠的 API 服务
+## 技术栈
 
-## ✨ 核心功能
-
-- **日志分享**：通过唯一 URL 分享大型日志文件，无需复杂上传流程
-- **智能分析**：集成 aternos/codex 库，自动识别服务器软件类型，精准检测错误并提供解决方案
-- **隐私保护**：智能过滤算法，自动隐藏日志中的敏感信息（如 IP 地址）
-- **API 优先**：纯 API 接口，支持多种客户端集成
-- **多后端存储**：灵活的存储策略，支持 MongoDB（默认）、Redis 和本地文件系统
-- **错误率统计**：提供服务器错误率统计信息
-
-## 🛠️ 技术栈
-
-| 层级 | 技术 | 描述 |
-|------|------|------|
-| **后端** | PHP 8.4+ | 提供稳健的 REST API 服务 |
-| **数据库** | MongoDB | 高性能日志存储（默认） |
+| 层级 | 技术选型 | 说明 |
+|------|----------|------|
+| **后端语言** | PHP 8.4+ | 高性能、类型安全的现代 PHP |
+| **日志分析** | Aternos Codex | 全球领先的 Minecraft 日志分析引擎 |
+| **数据库** | MongoDB | 高性能文档数据库，适合日志存储 |
 | **缓存** | Redis | 可选的高速缓存层 |
-| **基础设施** | Docker, Docker Compose, Nginx | 容器化部署与统一服务管理 |
-| **日志分析** | Aternos Codex | Minecraft 日志智能分析引擎 |
+| **基础设施** | Docker & Docker Compose | 容器化部署，统一环境管理 |
+| **Web 服务器** | Nginx | 高性能反向代理与静态资源服务 |
 
-## 📦 依赖组件
+## 依赖组件
 
-### PHP 依赖
-- `mongodb/mongodb`: 2.1.2
-- `aternos/codex-minecraft`: ^5.0.1 (日志分析)
-- `aternos/sherlock`: ^1.0.3 (日志分析)
-- `aternos/codex-hytale`: ^2.0 (Hytale 日志分析)
-- 必需扩展: json, zlib, mbstring, mongodb, redis
+| 类型 | 名称/包名 | 版本/说明 |
+|------|-----------|-----------|
+| **PHP 扩展** | `mongodb` | MongoDB 数据库驱动 |
+| | `redis` | Redis 缓存支持（可选） |
+| | `json` | JSON 数据处理 |
+| | `zlib` | 压缩/解压支持 |
+| | `mbstring` | 多字节字符串处理 |
+| **Composer 依赖** | `mongodb/mongodb` | 2.1.2 |
+| | `aternos/codex-minecraft` | ^5.0.1 |
+| | `aternos/sherlock` | ^1.0.3 |
+| | `aternos/codex-hytale` | ^2.0.0 |
 
-## 🚀 快速部署
+
+## 快速开始
 
 ### 环境要求
-- Docker (20.10+)
-- Docker Compose (2.0+)
+- Docker 20.10+
+- Docker Compose 2.0+
+- 至少 512MB 可用内存
+- 至少 1GB 可用磁盘空间
 
 ### 部署步骤
 
-1. **克隆项目**
-   ```bash
-   git clone https://cnb.cool/MornZe-Dev/LogShare-v1.git
-   cd LogShare-v1
-   ```
-
-2. **安装 PHP 依赖**
-   ```bash
-   composer install
-   ```
-
-3. **启动服务**
-   ```bash
-   cd docker
-   docker compose up -d
-   ```
-
-4. **验证部署**
-   访问 `http://localhost:9300` (或配置的域名) 来确认 API 正常运行
-
-## 🔧 API 使用指南
-
-### 基础端点
-
-- `GET /` - 获取 API 欢迎信息和可用端点列表
-- `POST /1/log` - 提交新的日志数据
-- `POST /1/analyse` - 分析日志数据
-- `GET /1/errors/rate` - 获取错误率统计信息
-- `GET /1/limits` - 获取 API 速率限制
-- `GET /1/raw/{id}` - 按 ID 检索原始日志
-- `GET /1/ai-analysis/{id}` - 获取特定日志的 AI 分析
-- `GET /1/insights/{id}` - 获取特定日志的洞察
-- `DELETE /1/delete/{id}` - 按 ID 删除日志
-
-### 示例请求
-
-提交日志:
 ```bash
-curl -X POST http://localhost:9300/1/log \
-  -H "Content-Type: application/json" \
-  -d '{"content": "你的日志内容"}'
+# 克隆项目
+git clone https://cnb.cool/MornZe-Dev/LogShare-v1.git
+cd LogShare-v1
+
+# 启动 Docker 服务
+cd docker
+docker compose up -d
 ```
 
-获取原始日志:
+#### 验证部署
+访问 `http://localhost:9300` 查看 API 欢迎页面
+
+#### （可选）配置前端界面
+如需图形化界面，请参考 [LogShareUI-v1](https://cnb.cool/MornZe-Dev/LogShareUI-v1) 项目
+
+### 批量测试
+
+我们提供了完整的 API 测试脚本，包含 19 项测试用例：
+
 ```bash
-curl http://localhost:9300/1/raw/LOG_ID
+# 运行测试（需要 jq）
+./test-api.sh http://localhost:9300
 ```
 
-### 配置文件
+测试覆盖：
+- 基础功能测试（首页、限制、过滤器）
+- 日志提交测试（简单日志、元数据）
+- 隐私过滤测试（IPv4、IPv6、用户名、Token）
+- 日志分析测试
+- 日志读取测试
+- 错误处理测试
+- 特殊字符测试（中文、长日志）
 
-配置通过 `core/config/` 目录中的 PHP 文件管理：
-- `storage.php` - 存储后端配置（MongoDB、Redis、文件系统）
-- `ai.php` - AI 分析设置
-- `cache.php` - 缓存配置
-- `filter.php` - 日志过滤设置
-- `id.php` - ID 生成设置
-- `legal.php` - 法律合规设置
 
-## 💡 UI 开发选项
+## 配置说明
 
-此仓库仅包含 API 后端服务。您可以选择以下方式来使用 API：
+配置文件位于 `core/config/` 目录：
 
-1. **自主开发前端界面**：使用我们提供的 API 创建您自己的用户界面
-2. **使用官方 WebUI**：我们提供了开源的前端界面，可在 [LogShareUI-v1](https://cnb.cool/MornZe-Dev/LogShareUI-v1) 获取
+| 文件 | 用途 |
+|------|------|
+| `storage.php` | 存储后端配置（MongoDB/Redis/Filesystem） |
+| `cache.php` | 缓存配置 |
+| `filter.php` | 日志过滤规则 |
+| `id.php` | ID 生成策略 |
+| `ai.php` | AI 分析配置（如启用） |
+| `legal.php` | 法律合规设置 |
 
-## ⚡ 性能说明
 
-当前 API 版本在性能方面仍有优化空间。我们计划在未来版本中持续改进 API 响应速度和整体性能表现。如果您在使用过程中发现性能问题，请随时在 Issues 中报告。
+## 前端集成
 
-## 🤝 贡献指南
+LogShare-v1 是纯 API 后端服务，你可以：
 
-我们欢迎社区贡献！以下是参与项目的方式：
+1. **使用官方前端**：[LogShareUI-v1](https://cnb.cool/MornZe-Dev/LogShareUI-v1)
+2. **自建前端**：基于 API 开发自定义界面
+3. **集成到现有系统**：Discord 机器人、QQ 机器人、自动化运维平台
 
-1. Fork 项目
-2. 创建功能分支 (`git checkout -b feature/AmazingFeature`)
-3. 提交更改 (`git commit -m 'Add some AmazingFeature'`)
-4. 推送到分支 (`git push origin feature/AmazingFeature`)
-5. 创建 Pull Request
+## 未来计划
 
-### 开发约定
+- [ ] RoadRunner & Hyperf 重构（基于 PHP 8.5）
+- [ ] 性能优化与缓存策略改进
+- [ ] 更多日志格式支持
+- [ ] AI 辅助分析集成
+- [ ] 统计面板与可视化
 
-- PHP 8.4+ 是必需的
-- 使用 PSR-4 自动加载，通过 `core.php` 中的自定义加载器实现
-- 遵循 RESTful API 设计原则
-- 采用 Docker 优先的部署方式
 
-## 📄 许可证
+## 许可证
 
-本项目基于 [MIT License](LICENSE) 开源。
+本项目采用 [MIT License](LICENSE) 开源。
 
-## 📞 支持
-
-如果您遇到任何问题或有改进建议，请：
-- 查看 [Issues](https://cnb.cool/MornZe-Dev/LogShare-v1/issues) 页面
-- 提交新的 Issue
-- 查阅文档
-
-## 🙏 致谢
-
-- 感谢 [aternos/codex-minecraft](https://github.com/aternosorg/codex) 提供的日志分析能力
-- 感谢 Docker、PHP、MongoDB 等优秀开源项目的贡献
+**LogShare-v1 —— 让日志分析更简单，让问题诊断更高效。**

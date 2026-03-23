@@ -2,8 +2,6 @@
 
 namespace Cache;
 
-use Config;
-
 class CacheEntry
 {
     protected ?CacheInterface $cache = null;
@@ -15,7 +13,7 @@ class CacheEntry
     public function __construct(string $key)
     {
         $this->key = $key;
-        $config = Config::Get('cache');
+        $config = \Config::Get('cache');
         if (isset($config['cacheId'])) {
             $this->cache = new $config['cacheId']();
         }

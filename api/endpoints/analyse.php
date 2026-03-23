@@ -6,11 +6,14 @@ try {
     $e->output();
 }
 
-$content = (new ContentParser())->getContent();
+$contentResult = (new ContentParser())->getContent();
 
-if ($content instanceof ApiError) {
-    $content->output();
+if ($contentResult instanceof ApiError) {
+    $contentResult->output();
 }
+
+// ContentParser 返回的是数组，需要提取 content 字段
+$content = is_array($contentResult) ? $contentResult['content'] : $contentResult;
 
 $log = new Log();
 $log->setData($content);

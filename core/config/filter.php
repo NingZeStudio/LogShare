@@ -5,14 +5,15 @@ $config = [
     /**
      * Filters applied before saving the log
      *
-     * The classes should implement \Filter\Pre\PreFilterInterface
+     * The classes should use static filter() method
      */
     'pre' => [
-        '\\Filter\\Pre\\Trim',
-        '\\Filter\\Pre\\Length',
-        '\\Filter\\Pre\\Lines',
-        '\\Filter\\Pre\\Ip',
-        '\\Filter\\Pre\\Username',
-        '\\Filter\\Pre\\AccessToken'
+        '\\Filter\\TrimFilter',
+        '\\Filter\\LimitBytesFilter',
+        '\\Filter\\LimitLinesFilter',
+        '\\Filter\\IPv4Filter',
+        '\\Filter\\IPv6Filter',
+        '\\Filter\\UsernameFilter',
+        '\\Filter\\AccessTokenFilter'
     ],
 ];

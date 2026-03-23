@@ -2,23 +2,30 @@
 
 namespace Storage;
 
+use Data\MetadataEntry;
+use Data\Token;
+
 interface StorageInterface
 {
     /**
      * Put some data in the storage, returns the (new) id for the data
      *
      * @param string $data
+     * @param Token|null $token
+     * @param MetadataEntry[] $metadata
+     * @param string|null $source
      * @return ?\Id ID or null
      */
-    public static function Put(string $data): ?\Id;
+    public static function Put(string $data, ?Token $token = null, array $metadata = [], ?string $source = null): ?\Id;
 
     /**
      * Get some data from the storage by id
      *
      * @param \Id $id
-     * @return ?string Data or null, e.g. if it doesn't exist
+     * @param bool $includeContent
+     * @return array|null Data array or null
      */
-    public static function Get(\Id $id): ?string;
+    public static function Get(\Id $id, bool $includeContent = true): ?array;
 
     /**
      * Renew the data to reset the time to live
