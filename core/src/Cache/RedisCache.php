@@ -38,4 +38,13 @@ class RedisCache extends RedisClient implements CacheInterface
         self::Connect();
         return (bool)self::$connection->exists($key);
     }
+
+    /**
+     * @inheritDoc
+     */
+    public static function Delete(string $key): bool
+    {
+        self::Connect();
+        return (bool)self::$connection->del($key);
+    }
 }

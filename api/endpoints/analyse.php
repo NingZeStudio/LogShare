@@ -16,7 +16,14 @@ if ($contentResult instanceof ApiError) {
 $content = is_array($contentResult) ? $contentResult['content'] : $contentResult;
 
 $log = new Log();
-$log->setData($content);
+
+try {
+    $log->setData($content);
+} catch (\Exception $e) {
+    $error = new ApiError(400, $e->getMessage());
+    $error->output();
+}
+
 $log->analyse();
 
 $codexLog = $log->get();

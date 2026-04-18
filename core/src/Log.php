@@ -39,6 +39,12 @@ class Log
     protected ?ObfuscatedString $obfuscatedContent = null;
 
     /**
+     * 缓存统计
+     */
+    private static int $cacheHits = 0;
+    private static int $cacheMisses = 0;
+
+    /**
      * @var Analysis
      */
     protected Analysis $analysis;
@@ -62,7 +68,7 @@ class Log
     }
 
     /**
-     * Load the log from storage
+     * Load the log from storage (Redis cache with MongoDB fallback)
      */
     private function load()
     {
@@ -78,12 +84,38 @@ class Log
             return;
         }
 
-        /**
-         * @var StorageInterface $storage
-         */
-        $storage = $config['storages'][$this->id->getStorage()]['class'];
+        $result = null;
 
-        $result = $storage::Get($this->id);
+        try {
+            $result = $this->loadFromRedis();
+            if ($result !== null) {
+                self::$cacheHits++;
+                error_log("[Redis] 缓存命中: " . $this->id->getRaw());
+            }
+        } catch (\Exception $e) {
+            error_log("[Redis] 缓存读取失败: " . $e->getMessage());
+        }
+
+        if ($result === null) {
+            self::$cacheMisses++;
+            error_log("[Redis] 缓存未命中，回退到 MongoDB: " . $this->id->getRaw());
+
+            /**
+             * @var StorageInterface $storage
+             */
+            $storage = $config['storages'][$this->id->getStorage()]['class'];
+            $result = $storage::Get($this->id);
+
+            if ($result !== null) {
+                if ($this->shouldCacheToRedis($result['data'])) {
+                    try {
+                        $this->saveToRedisCache($result);
+                    } catch (\Exception $e) {
+                        error_log("[Redis] 缓存写入失败: " . $e->getMessage());
+                    }
+                }
+            }
+        }
 
         if ($result === null) {
             $this->exists = false;
@@ -95,7 +127,7 @@ class Log
         $this->metadata = MetadataEntry::allFromArray($result['metadata'] ?? []);
         $this->source = $result['source'] ?? null;
         $this->created = $result['created']?->toDateTime()->getTimestamp() ?? null;
-        $this->expires = $result['expires']?->toDateTime()->getTimestamp() ?? null;
+        $this->expires = $this->created !== null ? $this->created + $config['storageTime'] : null;
         $this->exists = true;
 
         $this->analyse();
@@ -149,7 +181,7 @@ class Log
                     $map = new URLVanillaObfuscationMap($mapURL);
                     $mapCache->set($map->getContent());
                 }
-            } catch (Exception) {
+            } catch (\Exception) {
             }
             return $map ?? null;
         }
@@ -176,7 +208,7 @@ class Log
                     $map = new GZURLYarnMap($mapURL);
                     $mapCache->set($map->getContent());
                 }
-            } catch (Exception) {
+            } catch (\Exception) {
             }
             return $map ?? null;
         }
@@ -307,7 +339,7 @@ class Log
     }
 
     /**
-     * Put data into the log
+     * Put data into the log (with Redis cache)
      *
      * @param string $data
      * @param Token|null $token
@@ -333,6 +365,23 @@ class Log
         $this->id = $storage::Put($this->data, $this->token, $this->metadata, $this->source);
         $this->exists = true;
 
+        if ($this->id !== null) {
+            if ($this->shouldCacheToRedis($this->data)) {
+                try {
+                    $this->saveToRedisCache([
+                        'data' => $this->data,
+                        'token' => $this->token->get(),
+                        'metadata' => array_map(fn($entry) => $entry->jsonSerialize(), $this->metadata),
+                        'source' => $this->source,
+                        'created' => time()
+                    ]);
+                    error_log("[Redis] 缓存写入成功: " . $this->id->getRaw());
+                } catch (\Exception $e) {
+                    error_log("[Redis] 缓存写入失败: " . $e->getMessage() . "，已降级到 MongoDB");
+                }
+            }
+        }
+
         return $this->id;
     }
 
@@ -349,8 +398,14 @@ class Log
         $storage = $config['storages'][$this->id->getStorage()]['class'];
 
         $storage::Renew($this->id);
-        
-        // Update local expires value
+
+        try {
+            $this->renewRedisCache();
+            error_log("[Redis] 缓存 TTL 续期成功: " . $this->id->getRaw());
+        } catch (\Exception $e) {
+            error_log("[Redis] 缓存 TTL 续期失败: " . $e->getMessage());
+        }
+
         $this->expires = time() + $config['storageTime'];
     }
 
@@ -366,7 +421,7 @@ class Log
     }
 
     /**
-     * Delete the log from storage
+     * Delete the log from storage (both Redis cache and MongoDB)
      *
      * @return bool Success
      */
@@ -396,6 +451,13 @@ class Log
         if ($result) {
             $this->exists = false;
             $this->data = null;
+        }
+
+        try {
+            $this->deleteFromRedisCache();
+            error_log("[Redis] 缓存删除成功: " . $this->id->getRaw());
+        } catch (\Exception $e) {
+            error_log("[Redis] 缓存删除失败: " . $e->getMessage());
         }
 
         return $result;
@@ -473,5 +535,127 @@ class Log
             return false;
         }
         return $this->token->matches($token);
+    }
+
+    private function getRedisCacheKey(): string
+    {
+        return "log:" . $this->id->getRaw();
+    }
+
+    private function loadFromRedis(): ?array
+    {
+        $cacheKey = $this->getRedisCacheKey();
+
+        try {
+            $cachedData = \Cache\RedisCache::Get($cacheKey);
+        } catch (\Exception $e) {
+            throw new \Exception("Redis Get 操作失败: " . $e->getMessage(), 0, $e);
+        }
+
+        if ($cachedData === null) {
+            return null;
+        }
+
+        $decoded = json_decode($cachedData, true);
+        if ($decoded === null || !is_array($decoded)) {
+            error_log("[Redis] 缓存数据 JSON 解析失败: " . $cacheKey);
+            return null;
+        }
+
+        return [
+            'data' => $decoded['data'] ?? null,
+            'token' => $decoded['token'] ?? null,
+            'metadata' => $decoded['metadata'] ?? [],
+            'source' => $decoded['source'] ?? null,
+            'created' => isset($decoded['created']) ? new \MongoDB\BSON\UTCDateTime($decoded['created'] * 1000) : null,
+        ];
+    }
+
+    private function saveToRedisCache(array $data): void
+    {
+        $cacheKey = $this->getRedisCacheKey();
+        $config = Config::Get('storage');
+
+        $cacheDataArray = $data;
+
+        if (isset($cacheDataArray['created'])) {
+            if ($cacheDataArray['created'] instanceof \MongoDB\BSON\UTCDateTime) {
+                $cacheDataArray['created'] = $cacheDataArray['created']->toDateTime()->getTimestamp();
+            }
+        }
+
+        $cacheData = json_encode($cacheDataArray, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+
+        if ($cacheData === false) {
+            throw new \Exception("Redis 缓存数据 JSON 编码失败: " . json_last_error_msg());
+        }
+
+        try {
+            \Cache\RedisCache::Set($cacheKey, $cacheData, $config['redisCacheTTL'] ?? 1800);
+        } catch (\Exception $e) {
+            throw new \Exception("Redis Set 操作失败: " . $e->getMessage(), 0, $e);
+        }
+    }
+
+    private function renewRedisCache(): void
+    {
+        $cacheKey = $this->getRedisCacheKey();
+        $config = Config::Get('storage');
+
+        try {
+            $cacheData = \Cache\RedisCache::Get($cacheKey);
+        } catch (\Exception $e) {
+            throw new \Exception("Redis Get 操作失败: " . $e->getMessage(), 0, $e);
+        }
+
+        if ($cacheData !== null) {
+            try {
+                \Cache\RedisCache::Set($cacheKey, $cacheData, $config['redisCacheTTL'] ?? 1800);
+            } catch (\Exception $e) {
+                throw new \Exception("Redis Set 操作失败: " . $e->getMessage(), 0, $e);
+            }
+        }
+    }
+
+    private function deleteFromRedisCache(): void
+    {
+        $cacheKey = $this->getRedisCacheKey();
+
+        try {
+            \Cache\RedisCache::Delete($cacheKey);
+        } catch (\Exception $e) {
+            throw new \Exception("Redis Delete 操作失败: " . $e->getMessage(), 0, $e);
+        }
+    }
+
+    /**
+     * 判断日志是否应该缓存到 Redis
+     *
+     * @param string $data 日志数据
+     * @return bool
+     */
+    private function shouldCacheToRedis(string $data): bool
+    {
+        $config = Config::Get('storage');
+        $maxCacheSize = $config['redisCacheMaxSize'] ?? (600 * 1024);
+        return strlen($data) <= $maxCacheSize;
+    }
+
+    /**
+     * 获取缓存统计信息
+     *
+     * @return array
+     */
+    public static function getCacheStats(): array
+    {
+        $total = self::$cacheHits + self::$cacheMisses;
+        $hitRate = $total > 0 ? round((self::$cacheHits / $total) * 100, 2) : 0;
+
+        return [
+            'hits' => self::$cacheHits,
+            'misses' => self::$cacheMisses,
+            'total' => $total,
+            'hit_rate' => $hitRate . '%'
+        ];
     }
 }

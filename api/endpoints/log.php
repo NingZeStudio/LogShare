@@ -25,7 +25,13 @@ if (is_array($content)) {
 
 $log = new Log();
 $token = new Token();
-$id = $log->put($content, $token, $metadata, $source);
+
+try {
+    $id = $log->put($content, $token, $metadata, $source);
+} catch (\Exception $e) {
+    $error = new ApiError(400, $e->getMessage());
+    $error->output();
+}
 
 $urls = Config::Get('urls');
 

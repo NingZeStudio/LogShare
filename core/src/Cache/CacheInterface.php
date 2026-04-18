@@ -25,4 +25,11 @@ interface CacheInterface
      * @return bool
      */
     public static function Exists(string $key): bool;
+
+    /**
+     * Delete the cached data
+     * @param string $key
+     * @return bool
+     */
+    public static function Delete(string $key): bool;
 }

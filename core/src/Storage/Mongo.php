@@ -21,7 +21,6 @@ class Mongo extends \Client\MongoDBClient implements StorageInterface
      */
     public static function Put(string $data, ?Token $token = null, array $metadata = [], ?string $source = null): ?\Id
     {
-        $config = \Config::Get("storage");
         $id = new \Id();
         $id->setStorage("m");
 
@@ -29,14 +28,10 @@ class Mongo extends \Client\MongoDBClient implements StorageInterface
             $id->regenerate();
         } while (self::Get($id) !== null);
 
-        $now = new UTCDateTime();
-        $expires = new UTCDateTime((time() + $config['storageTime']) * 1000);
-
         $document = [
             "_id" => $id->getRaw(),
             "data" => $data,
-            "expires" => $expires,
-            "created" => $now
+            "created" => new UTCDateTime()
         ];
 
         if ($token !== null) {
@@ -87,7 +82,6 @@ class Mongo extends \Client\MongoDBClient implements StorageInterface
             'metadata' => $result->metadata ?? [],
             'source' => $result->source ?? null,
             'created' => $result->created ?? null,
-            'expires' => $result->expires ?? null,
         ];
     }
 
@@ -99,14 +93,17 @@ class Mongo extends \Client\MongoDBClient implements StorageInterface
      */
     public static function Renew(\Id $id): bool
     {
-        $config = \Config::Get("storage");
-        $date = new UTCDateTime((time() + $config['storageTime']) * 1000);
+        $result = self::getCollection()->updateOne(
+            ["_id" => $id->getRaw()], 
+            ['$set' => ['created' => new UTCDateTime()]]
+        );
 
-        $result = self::getCollection()->updateOne(["_id" => $id->getRaw()], ['$set' => ['expires' => $date]]);
-        
         if ($result->getModifiedCount() === 0) {
             // Try legacy ID
-            self::getCollection()->updateOne(["_id" => substr($id->getRaw(), 1)], ['$set' => ['expires' => $date]]);
+            self::getCollection()->updateOne(
+                ["_id" => substr($id->getRaw(), 1)], 
+                ['$set' => ['created' => new UTCDateTime()]]
+            );
         }
 
         return true;
@@ -121,13 +118,13 @@ class Mongo extends \Client\MongoDBClient implements StorageInterface
     public static function Delete(\Id $id): bool
     {
         $result = self::getCollection()->deleteOne(["_id" => $id->getRaw()]);
-        
+
         if ($result->getDeletedCount() === 0) {
             // Check for legacy ID without the first character
             $result = self::getCollection()->deleteOne(["_id" => substr($id->getRaw(), 1)]);
             return $result->getDeletedCount() > 0;
         }
-        
+
         return true;
     }
 
@@ -165,7 +162,7 @@ class Mongo extends \Client\MongoDBClient implements StorageInterface
     public static function VerifyToken(\Id $id, string $token): bool
     {
         $result = self::getCollection()->findOne(["_id" => $id->getRaw()], ['projection' => ['token' => 1]]);
-        
+
         if ($result === null) {
             // Check legacy ID
             $result = self::getCollection()->findOne(["_id" => substr($id->getRaw(), 1)], ['projection' => ['token' => 1]]);

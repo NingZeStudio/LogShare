@@ -22,6 +22,7 @@ services:
         COPY mclogs.ini /usr/local/etc/php/conf.d/mclogs.ini
     volumes:
       - ../:/web/mclogs
+      - ./php-fpm-overrides.conf:/usr/local/etc/php-fpm.d/overrides.conf:ro
     depends_on:
       - mongo
       - redis
@@ -32,7 +33,7 @@ services:
     image: mongo:latest
     container_name: mclogs-mongo
     volumes:
-      - mongo:/data/db
+      - ./mongo-data:/data/db
     networks:
       - mclogs-network
 
@@ -43,9 +44,9 @@ services:
       - redis:/data
     networks:
       - mclogs-network
+    restart: unless-stopped
 
 volumes:
-  mongo:
   redis:
 
 networks:
