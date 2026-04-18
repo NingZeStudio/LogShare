@@ -78,9 +78,8 @@ foreach ($content as $logEntry) {
 
 // 执行批量删除
 foreach ($deleteIds as $id) {
-    $config = Config::Get('storage');
-    $storage = $config['storages'][$id->getStorage()]['class'];
-    $storage::Delete($id);
+    $log = new Log($id);
+    $log->delete();
 }
 
 // 构建响应

@@ -5,7 +5,7 @@ require_once("../../core/core.php");
 // Ensure MongoDB indexes exist
 try {
     \Client\MongoDBClient::ensureIndexes();
-} catch (Exception $e) {
+} catch (\Exception $e) {
     error_log("Failed to ensure MongoDB indexes: " . $e->getMessage());
 }
 

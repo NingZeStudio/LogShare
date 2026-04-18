@@ -35,20 +35,33 @@ $config = [
     /**
      * Time in seconds to store data after put or last renew
      */
-    "storageTime" => 90 * 24 * 60 * 60,
+    "storageTime" => 7 * 24 * 60 * 60,
+
+    /**
+     * Redis cache TTL in seconds (30 minutes)
+     * New logs will be cached in Redis for this duration
+     */
+    "redisCacheTTL" => 30 * 60,
+
+    /**
+     * Maximum log size (in bytes) to be cached in Redis
+     * Logs larger than this will only be stored in MongoDB
+     * Default: 600KB (600 * 1024 bytes)
+     */
+    "redisCacheMaxSize" => 600 * 1024,
 
     /**
      * Maximum string length to store
      *
-     * Will be cut by \Filter\Pre\Length
+     * If exceeded, will return error instead of truncating
      */
     "maxLength" => 10 * 1024 * 1024,
 
     /**
      * Maximum number of lines to store
      *
-     * Will be cut by \Filter\Pre\Lines
+     * If exceeded, will return error instead of truncating
      */
-    "maxLines" => 25_000
+    "maxLines" => 50_000
 
 ];

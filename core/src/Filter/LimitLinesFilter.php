@@ -7,6 +7,13 @@ class LimitLinesFilter extends Filter
     public static function filter(string $data): string
     {
         $config = \Config::Get('storage');
-        return implode("\n", array_slice(explode("\n", $data), 0, $config['maxLines']));
+        $maxLines = $config['maxLines'];
+        $lines = explode("\n", $data);
+
+        if (count($lines) > $maxLines) {
+            throw new \Exception('日志行数超过限制（最大 ' . number_format($maxLines) . ' 行），请手动裁剪后再上传');
+        }
+
+        return $data;
     }
 }
