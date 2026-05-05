@@ -1,8 +1,8 @@
-# LogShare-v1
+# LogShare
 
 ## 项目简介
 
-LogShare-v1 是一款 Minecraft 和 Hytale 日志分析与快速诊断工具，基于 Aternos Codex 构建。
+LogShare 是一款 Minecraft 和 Hytale 日志分析与快速诊断工具，基于 Aternos Codex 构建。
 
 LogShare v1.5.1 正式发布，LogShare.CN同步上线；本次更新带来了两大重要功能和支持性更新：
 新增基于ID的大模型智能日志分析接口。
