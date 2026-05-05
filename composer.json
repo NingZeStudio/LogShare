@@ -11,7 +11,7 @@
         "php": ">=8.4",
         "mongodb/mongodb": "2.1.2",
         "ext-json": "*",
-        "aternos/codex-minecraft": "^5.0.1",
+        "aternos/codex-minecraft": "^5.1.0",
         "aternos/sherlock": "^1.0.3",
         "ext-zlib": "*",
         "ext-mbstring": "*",

@@ -28,9 +28,10 @@ switch ($_SERVER['REQUEST_URI']) {
                 "GET /1/errors/rate" => "Get error rate statistics",
                 "GET /1/limits" => "Get API rate limits",
                 "GET /1/filters" => "Get active filters information",
-                "POST /1/bulk/log/delete" => "Bulk delete logs by ID and token",
                 "GET /1/raw/{id}" => "Retrieve raw log by ID (supports multiple IDs: /1/raw/id1,id2,id3)",
                 "GET /1/insights/{id}" => "Get insights for log ID",
+                "GET /1/ai/{id}" => "Analyze log by ID with AI",
+                "POST /1/ai/analyse" => "Analyze log content with AI (no storage)",
                 "DELETE /1/delete/{id}" => "Delete log by ID with token auth (supports multiple IDs: /1/delete/id1,id2,id3)"
             ],
             "documentation" => "Please refer to the API documentation for detailed usage."
@@ -59,9 +60,9 @@ switch ($_SERVER['REQUEST_URI']) {
         require_once("../endpoints/filters.php");
         break;
 
-    case "/1/bulk/log/delete":
-    case "/1/bulk/log/delete/":
-        require_once("../endpoints/bulk-delete.php");
+    case "/1/ai/analyse":
+    case "/1/ai/analyse/":
+        require_once("../endpoints/ai-analyse.php");
         break;
 
     default:
@@ -71,6 +72,10 @@ switch ($_SERVER['REQUEST_URI']) {
         }
         if (preg_match('#^/1/insights/#', $_SERVER['REQUEST_URI'])) {
             require_once("../endpoints/insights.php");
+            break;
+        }
+        if (preg_match('#^/1/ai/#', $_SERVER['REQUEST_URI'])) {
+            require_once("../endpoints/ai.php");
             break;
         }
         if (preg_match('#^/1/delete/#', $_SERVER['REQUEST_URI'])) {
