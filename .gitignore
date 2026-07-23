@@ -1,6 +1,5 @@
 *.log
 .idea
 /vendor/
-core/config/mongo.php
-core/config/ai.php
 /backup/
+/Config.inc.php
