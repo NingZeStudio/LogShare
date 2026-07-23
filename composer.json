@@ -1,10 +1,10 @@
 {
-    "name": "janephpdev/mclogs_next",
+    "name": "yansui/logshare",
     "description": "Modern Minecraft server log analysis and sharing platform",
     "authors": [
         {
-            "name": "JanePHPDev",
-            "email": "mengze2@foxmail.com"
+            "name": "YanSui",
+            "email": "lyl518@outlook.com"
         }
     ],
     "require": {
