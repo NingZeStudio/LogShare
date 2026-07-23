@@ -1,4 +1,4 @@
-# LogShare
+# LogShare v1.5.3
 
 Minecraft / Hytale 日志分析与分享平台。基于 Aternos Codex 和 Sherlock 构建，提供日志上传、自动诊断、敏感信息脱敏和大模型 AI 辅助分析能力。
 
@@ -130,27 +130,34 @@ GET  /1/limits              获取速率限制信息
 GET  /1/filters             获取当前启用的过滤器列表
 ```
 
+完整 API 文档见 [`API.md`](API.md)。
+
 ## 架构
 
 ### 目录结构
 
 ```
-index.php                入口文件，CORS + Router::dispatch()
-src/                      核心类库，PSR-4 自动加载
-├── Cache/                Redis/Mongo 缓存实现
-├── Client/               MongoDB、Redis、AI 客户端
-├── Data/                 数据模型（Token、MetadataEntry）
-├── Filter/               预处理过滤链
-├── Printer/              日志打印格式化
-├── Storage/              存储后端（MongoDB、Redis、Filesystem）
-├── Config.php            配置加载
-├── Router.php            路由匹配 + 限速
-├── Log.php               日志核心模型
-├── Id.php                ID 生成与编解码
+index.php                入口文件
+core.php                 引导文件 + PSR-4 自动加载
+src/                     核心类库
+├── Cache/               Redis/Mongo 缓存实现
+├── Client/              MongoDB、Redis、AI 客户端
+├── Data/                数据模型
+├── Filter/              预处理过滤链
+├── Handler/             端点处理类（每个路由对应一个 Handler）
+├── Printer/             日志打印格式化
+├── Storage/             存储后端（MongoStorage、RedisStorage、FilesystemStorage）
+├── Config.php           配置加载器
+├── Handler.php          端点处理基类
+├── Router.php           路由匹配 + 限速 + 分发
+├── Log.php              日志核心模型
+├── Id.php               ID 生成与编解码
 └── ...
-Config.inc.php            全部配置（gitignored）
-Config.inc.example.php    配置模板
-core.php                  引导文件，定义 CORE_PATH + 自动加载器
+Config.inc.php           全部配置（gitignored）
+Config.inc.example.php   配置模板
+AGENTS.md                项目上下文文档
+API.md                   完整 API 文档
+CHANGELOG.md             更新日志
 ```
 
 ### 核心流程
@@ -168,20 +175,22 @@ ID 为 7 位字符，首字符编码存储后端类型。例如 `mAbCdE`：
 
 ### 限速
 
-路由支持按 IP 的 Redis 限速，在 `api/routes.php` 中为每条路由配置 `[请求数, 时间窗口秒]`。限速命中返回 HTTP 429。
+路由支持按 IP 的 Redis 限速，在 `src/Router.php::getRoutes()` 中为每条路由配置 `[请求数, 时间窗口秒]`。限速命中返回 HTTP 429。
 
 ## 开发说明
 
 本项目无测试框架、无 CI、无 lint/typecheck 配置。如需添加测试或格式化工具，自行配置。
 
-路由注册在 `Router::getRoutes()`（`src/Router.php`），每行一条：
+路由注册在 `src/Router.php::getRoutes()`，每行一条：
 
 ```php
 ['METHOD', '/path', HandlerClass::class, [rate_limit, window]],
 ['GET', '/1/raw/{id}', \Handler\RawHandler::class, [36000, 60]],
 ```
 
-添加新端点只需加一行路由定义 + 创建对应的 `src/Handler/` 类。
+添加新端点只需在路由表中加一行定义 + 创建对应的 `src/Handler/` 类。
+
+更新日志见 [`CHANGELOG.md`](CHANGELOG.md)。
 
 ## 许可证
 
