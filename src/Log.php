@@ -68,7 +68,7 @@ class Log
     }
 
     /**
-     * Load the log from storage (Redis cache with MongoDB fallback)
+     * Load the log from storage (primary storage with optional Redis cache)
      */
     private function load()
     {
@@ -86,14 +86,16 @@ class Log
 
         $result = null;
 
-        try {
-            $result = $this->loadFromRedis();
-            if ($result !== null) {
-                self::$cacheHits++;
-                error_log("[Redis] 缓存命中: " . $this->id->getRaw());
+        if ($this->isCacheEnabled()) {
+            try {
+                $result = $this->loadFromRedis();
+                if ($result !== null) {
+                    self::$cacheHits++;
+                    error_log("[Redis] 缓存命中: " . $this->id->getRaw());
+                }
+            } catch (\Exception $e) {
+                error_log("[Redis] 缓存读取失败: " . $e->getMessage());
             }
-        } catch (\Exception $e) {
-            error_log("[Redis] 缓存读取失败: " . $e->getMessage());
         }
 
         if ($result === null) {
@@ -106,7 +108,7 @@ class Log
             $storage = $config['storages'][$this->id->getStorage()]['class'];
             $result = $storage::Get($this->id);
 
-            if ($result !== null) {
+            if ($result !== null && $this->isCacheEnabled()) {
                 if ($this->shouldCacheToRedis($result['data'])) {
                     try {
                         $this->saveToRedisCache($result);
@@ -365,7 +367,7 @@ class Log
         $this->id = $storage::Put($this->data, $this->token, $this->metadata, $this->source);
         $this->exists = true;
 
-        if ($this->id !== null) {
+        if ($this->id !== null && $this->isCacheEnabled()) {
             if ($this->shouldCacheToRedis($this->data)) {
                 try {
                     $this->saveToRedisCache([
@@ -399,11 +401,13 @@ class Log
 
         $storage::Renew($this->id);
 
-        try {
-            $this->renewRedisCache();
-            error_log("[Redis] 缓存 TTL 续期成功: " . $this->id->getRaw());
-        } catch (\Exception $e) {
-            error_log("[Redis] 缓存 TTL 续期失败: " . $e->getMessage());
+        if ($this->isCacheEnabled()) {
+            try {
+                $this->renewRedisCache();
+                error_log("[Redis] 缓存 TTL 续期成功: " . $this->id->getRaw());
+            } catch (\Exception $e) {
+                error_log("[Redis] 缓存 TTL 续期失败: " . $e->getMessage());
+            }
         }
 
         $this->expires = time() + $config['storageTime'];
@@ -453,11 +457,13 @@ class Log
             $this->data = null;
         }
 
-        try {
-            $this->deleteFromRedisCache();
-            error_log("[Redis] 缓存删除成功: " . $this->id->getRaw());
-        } catch (\Exception $e) {
-            error_log("[Redis] 缓存删除失败: " . $e->getMessage());
+        if ($this->isCacheEnabled()) {
+            try {
+                $this->deleteFromRedisCache();
+                error_log("[Redis] 缓存删除成功: " . $this->id->getRaw());
+            } catch (\Exception $e) {
+                error_log("[Redis] 缓存删除失败: " . $e->getMessage());
+            }
         }
 
         return $result;
@@ -571,10 +577,41 @@ class Log
         ];
     }
 
+    /**
+     * 判断日志是否应该缓存到 Redis
+     *
+     * @param string $data 日志数据
+     * @return bool
+     */
+    private function shouldCacheToRedis(string $data): bool
+    {
+        $config = Config::Get('cache');
+        $maxCacheSize = $config['maxSize'] ?? (600 * 1024);
+        return strlen($data) <= $maxCacheSize;
+    }
+
+    /**
+     * 检查 Redis 缓存是否启用
+     *
+     * @return bool
+     */
+    private function isCacheEnabled(): bool
+    {
+        $config = Config::Get('cache');
+        return $config['enabled'] ?? true;
+    }
+
+    /**
+     * 保存日志到 Redis 缓存
+     *
+     * @param array $data
+     * @return void
+     * @throws \Exception
+     */
     private function saveToRedisCache(array $data): void
     {
         $cacheKey = $this->getRedisCacheKey();
-        $config = Config::Get('storage');
+        $config = Config::Get('cache');
 
         $cacheDataArray = $data;
 
@@ -591,16 +628,22 @@ class Log
         }
 
         try {
-            \Cache\RedisCache::Set($cacheKey, $cacheData, $config['redisCacheTTL'] ?? 1800);
+            \Cache\RedisCache::Set($cacheKey, $cacheData, $config['ttl'] ?? 1800);
         } catch (\Exception $e) {
             throw new \Exception("Redis Set 操作失败: " . $e->getMessage(), 0, $e);
         }
     }
 
+    /**
+     * 续期 Redis 缓存 TTL
+     *
+     * @return void
+     * @throws \Exception
+     */
     private function renewRedisCache(): void
     {
         $cacheKey = $this->getRedisCacheKey();
-        $config = Config::Get('storage');
+        $config = Config::Get('cache');
 
         try {
             $cacheData = \Cache\RedisCache::Get($cacheKey);
@@ -610,13 +653,19 @@ class Log
 
         if ($cacheData !== null) {
             try {
-                \Cache\RedisCache::Set($cacheKey, $cacheData, $config['redisCacheTTL'] ?? 1800);
+                \Cache\RedisCache::Set($cacheKey, $cacheData, $config['ttl'] ?? 1800);
             } catch (\Exception $e) {
                 throw new \Exception("Redis Set 操作失败: " . $e->getMessage(), 0, $e);
             }
         }
     }
 
+    /**
+     * 从 Redis 缓存删除日志
+     *
+     * @return void
+     * @throws \Exception
+     */
     private function deleteFromRedisCache(): void
     {
         $cacheKey = $this->getRedisCacheKey();
@@ -626,19 +675,6 @@ class Log
         } catch (\Exception $e) {
             throw new \Exception("Redis Delete 操作失败: " . $e->getMessage(), 0, $e);
         }
-    }
-
-    /**
-     * 判断日志是否应该缓存到 Redis
-     *
-     * @param string $data 日志数据
-     * @return bool
-     */
-    private function shouldCacheToRedis(string $data): bool
-    {
-        $config = Config::Get('storage');
-        $maxCacheSize = $config['redisCacheMaxSize'] ?? (600 * 1024);
-        return strlen($data) <= $maxCacheSize;
     }
 
     /**

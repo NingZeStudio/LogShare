@@ -14,20 +14,20 @@ return [
         'storages' => [
             'm' => ['name' => 'MongoDB',     'class' => '\\Storage\\MongoStorage',       'enabled' => true],
             'f' => ['name' => 'Filesystem',  'class' => '\\Storage\\FilesystemStorage',  'enabled' => false],
-            'r' => ['name' => 'Redis',        'class' => '\\Storage\\RedisStorage',       'enabled' => false],
         ],
         'storageId' => 'm',
         'storageTime' => 7 * 24 * 60 * 60,
-        'redisCacheTTL' => 30 * 60,
-        'redisCacheMaxSize' => 600 * 1024,
         'maxLength' => 10 * 1024 * 1024,
         'maxLines' => 50_000,
     ],
 
-    /* ─── Cache ────────────────────────────────────────────── */
+    /* ─── Cache (Redis) ──────────────────────────────────── */
     'cache' => [
         'cacheId' => '\\Cache\\RedisCache',
+        'enabled' => true,
         'redis' => ['host' => 'mclogs-redis', 'port' => 6379],
+        'ttl' => 30 * 60,
+        'maxSize' => 600 * 1024,
     ],
 
     /* ─── ID ───────────────────────────────────────────────── */

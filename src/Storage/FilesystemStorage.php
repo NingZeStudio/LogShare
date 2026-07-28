@@ -2,18 +2,12 @@
 
 namespace Storage;
 
+use Data\MetadataEntry;
+use Data\Token;
 
 class FilesystemStorage implements StorageInterface
 {
-
-    /**
-     * Put some data in the storage, returns the (new) id for the data
-     *
-     * @param string $data
-     * @return ?\Id ID or false
-     * @throws \Exception
-     */
-    public static function Put(string $data): ?\Id
+    public static function Put(string $data, ?Token $token = null, array $metadata = [], ?string $source = null): ?\Id
     {
         $config = \Config::Get("filesystem");
         $basePath = CORE_PATH . $config['path'];
@@ -29,61 +23,78 @@ class FilesystemStorage implements StorageInterface
             $id->regenerate();
         } while (file_exists($basePath . $id->getRaw()));
 
-        file_put_contents($basePath . $id->getRaw(), $data);
+        $document = [
+            'data' => $data,
+            'created' => time(),
+        ];
+
+        if ($token !== null) {
+            $document['token'] = $token->get();
+        }
+
+        if (!empty($metadata)) {
+            $document['metadata'] = array_map(fn($entry) => $entry->jsonSerialize(), $metadata);
+        }
+
+        if ($source !== null) {
+            $document['source'] = substr($source, 0, 64);
+        }
+
+        file_put_contents($basePath . $id->getRaw(), json_encode($document, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
         return $id;
     }
 
-    /**
-     * Get some data from the storage by id
-     *
-     * @param \Id $id
-     * @return ?string Data or null, e.g. if it doesn't exist
-     */
-    public static function Get(\Id $id): ?string
+    public static function Get(\Id $id, bool $includeContent = true): ?array
     {
         $config = \Config::Get("filesystem");
         $basePath = CORE_PATH . $config['path'];
 
         if (!file_exists($basePath . $id->getRaw())) {
-            return false;
+            return null;
         }
 
-        return file_get_contents($basePath . $id->getRaw()) ?: null;
+        $content = file_get_contents($basePath . $id->getRaw());
+        if ($content === false) {
+            return null;
+        }
+
+        $document = json_decode($content, true);
+        if ($document === null || !is_array($document)) {
+            return null;
+        }
+
+        return [
+            'data' => $document['data'] ?? null,
+            'token' => $document['token'] ?? null,
+            'metadata' => $document['metadata'] ?? [],
+            'source' => $document['source'] ?? null,
+            'created' => $document['created'] ?? null,
+        ];
     }
 
-    /**
-     * Renew the data to reset the time to live
-     *
-     * @param \Id $id
-     * @return bool Success
-     */
     public static function Renew(\Id $id): bool
     {
         $config = \Config::Get("filesystem");
         $basePath = CORE_PATH . $config['path'];
+        $path = $basePath . $id->getRaw();
 
-        if (!file_exists($basePath . $id->getRaw())) {
+        if (!file_exists($path)) {
             return false;
         }
 
-        return touch($basePath . $id->getRaw());
+        return touch($path);
     }
 
-    /**
-     * Delete data from the storage by id
-     *
-     * @param \Id $id
-     * @return bool Success
-     */
     public static function Delete(\Id $id): bool
     {
         $config = \Config::Get("filesystem");
         $basePath = CORE_PATH . $config['path'];
+        $path = $basePath . $id->getRaw();
 
-        if (!file_exists($basePath . $id->getRaw())) {
+        if (!file_exists($path)) {
             return false;
         }
 
-        return unlink($basePath . $id->getRaw());
+        return unlink($path);
     }
 }
