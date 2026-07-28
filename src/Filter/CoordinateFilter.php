@@ -44,6 +44,14 @@ class CoordinateFilter extends Filter
                 'block\sat\s\([+-]?\d{1,5}\s*,\s*[+-]?\d{1,5}\s*,\s*[+-]?\d{1,5}\)',
                 'block at (*****, *****, *****)'
             ),
+            new PatternWithReplacement(
+                'from\s\([+-]?\d{1,5}(?:\.\d+)?\s*,\s*[+-]?\d{1,5}(?:\.\d+)?\s*,\s*[+-]?\d{1,5}(?:\.\d+)?\)',
+                'from (*****, *****, *****)'
+            ),
+            new PatternWithReplacement(
+                'to\s\([+-]?\d{1,5}(?:\.\d+)?\s*,\s*[+-]?\d{1,5}(?:\.\d+)?\s*,\s*[+-]?\d{1,5}(?:\.\d+)?\)',
+                'to (*****, *****, *****)'
+            ),
         ];
     }
 
