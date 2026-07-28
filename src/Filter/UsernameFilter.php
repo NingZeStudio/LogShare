@@ -24,7 +24,7 @@ class UsernameFilter extends Filter
     public static function filter(string $data): string
     {
         foreach (static::getPatterns() as $pattern) {
-            $data = preg_replace('/' . $pattern->getPattern() . '/', $pattern->getReplacement(), $data);
+            $data = static::safePregReplace('/' . $pattern->getPattern() . '/', $pattern->getReplacement(), $data);
         }
         return $data;
     }

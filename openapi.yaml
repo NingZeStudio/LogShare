@@ -1,0 +1,736 @@
+openapi: 3.1.0
+info:
+  title: LogShare API
+  version: 1.5.3
+  description: |
+    Minecraft / Hytale log analysis and sharing platform.
+    
+    ## Authentication
+    
+    Most endpoints are public. Log deletion requires a Bearer token returned on creation.
+    
+    ## Rate Limiting
+    
+    All endpoints are rate limited per IP (default: 36,000 requests/minute).
+    Exceeding returns `429 Too Many Requests` with `Retry-After` header.
+    
+    ## Content Filtering
+    
+    All submitted logs are pre-filtered for:
+    - IPv4/IPv6 addresses (full & compressed)
+    - UUIDs (standard, brace, URN formats)
+    - Xbox XUIDs (16-digit decimal)
+    - Session/auth tokens (JWT, Bearer, access_token)
+    - Client/device/instance IDs
+    - Minecraft coordinates (BlockPos, Vec3d, command formats)
+    - Usernames (Windows/Linux paths, USERNAME=)
+    - Access tokens (various JSON keys, headers)
+    
+    Filters run in the above order. Original content is not stored.
+servers:
+  - url: https://api.logshare.cn
+    description: Production API
+  - url: http://localhost:9300
+    description: Local Docker (nginx on 9300, PHP-FPM internal)
+tags:
+  - name: Logs
+    description: Log submission, retrieval, deletion
+  - name: Analysis
+    description: Log analysis and insights
+  - name: AI
+    description: AI-powered log analysis (requires NVIDIA API keys in config)
+  - name: Meta
+    description: Limits, filters, rate limit status
+paths:
+  /:
+    get:
+      tags: [Meta]
+      summary: API index
+      description: Returns list of all available endpoints
+      operationId: getIndex
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IndexResponse'
+              example:
+                success: true
+                message: "LogShare API"
+                endpoints:
+                  - "POST /1/log"
+                  - "DELETE /1/log/{id}"
+                  - "POST /1/analyse"
+                  - "GET /1/errors/rate"
+                  - "GET /1/limits"
+                  - "GET /1/filters"
+                  - "GET /1/raw/{id}"
+                  - "GET /1/insights/{id}"
+                  - "GET /1/ai/{id}"
+                  - "POST /1/ai/analyse"
+  /1/log:
+    post:
+      tags: [Logs]
+      summary: Submit a log
+      description: |
+        Accepts raw log content as `application/x-www-form-urlencoded` or `application/json`.
+        Supports `gzip`/`deflate` `Content-Encoding`.
+        
+        **Form fields (urlencoded or JSON):**
+        - `content` (string, required): Raw log text (max 10 MB, 50k lines)
+        - `metadata[]` (array, optional): Array of `{key, value}` objects
+        - `source` (string, optional): Free-form source identifier
+        
+        Returns a log ID and a deletion token. **Save the token** — it cannot be recovered.
+      operationId: createLog
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              required: [content]
+              properties:
+                content:
+                  type: string
+                  format: binary
+                  description: Raw log content
+                metadata:
+                  type: array
+                  items:
+                    $ref: '#/components/schemas/MetadataEntry'
+                source:
+                  type: string
+                  maxLength: 100
+          application/json:
+            schema:
+              type: object
+              required: [content]
+              properties:
+                content:
+                  type: string
+                  description: Raw log content
+                metadata:
+                  type: array
+                  items:
+                    $ref: '#/components/schemas/MetadataEntry'
+                source:
+                  type: string
+                  maxLength: 100
+      responses:
+        '200':
+          description: Log created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LogCreateResponse'
+              example:
+                success: true
+                message: "Log submitted successfully"
+                id: "aB3x9K"
+                url: "https://logshare.cn/aB3x9K"
+                raw: "https://api.logshare.cn/1/raw/aB3x9K"
+                token: "k7m2N9pQ4vL1xY6z"
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+    delete:
+      tags: [Logs]
+      summary: Delete one or more logs
+      description: |
+        Requires `Authorization: Bearer <token>` header with the token returned on creation.
+        Multiple IDs can be comma-separated in the path: `/1/log/id1,id2,id3`
+      operationId: deleteLogs
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: '^[a-zA-Z0-9]{7}(,[a-zA-Z0-9]{7})*$'
+          description: Comma-separated log IDs (7 chars each)
+          example: "aB3x9K,xY7z2M"
+      headers:
+        - name: Authorization
+          in: header
+          required: true
+          description: Bearer token from log creation
+          schema:
+            type: string
+            pattern: '^Bearer [a-zA-Z0-9]{16}$'
+          example: "Bearer k7m2N9pQ4vL1xY6z"
+      responses:
+        '200':
+          description: Deletion result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LogDeleteResponse'
+              example:
+                success: true
+                message: "Log deletion completed"
+                deleted:
+                  - "aB3x9K"
+                failed: []
+                total: 1
+                deletedCount: 1
+                failedCount: 0
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+  /1/log/{id}:
+    delete:
+      tags: [Logs]
+      summary: Delete a single log (alternative path)
+      description: |
+        Same as `DELETE /1/log` but with ID in path. Requires Bearer token.
+      operationId: deleteLogById
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: '^[a-zA-Z0-9]{7}$'
+          example: "aB3x9K"
+      headers:
+        - name: Authorization
+          in: header
+          required: true
+          schema:
+            type: string
+            pattern: '^Bearer [a-zA-Z0-9]{16}$'
+          example: "Bearer k7m2N9pQ4vL1xY6z"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LogDeleteResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+  /1/analyse:
+    post:
+      tags: [Analysis]
+      summary: Analyse log content without storing
+      description: |
+        Runs full Codex analysis (version detection, mod detection, crash parsing, etc.)
+        on the provided content without persisting it. Returns structured analysis result.
+      operationId: analyseLog
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              required: [content]
+              properties:
+                content:
+                  type: string
+                  format: binary
+          application/json:
+            schema:
+              type: object
+              required: [content]
+              properties:
+                content:
+                  type: string
+      responses:
+        '200':
+          description: Analysis result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AnalysisResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+  /1/raw/{id}:
+    get:
+      tags: [Logs]
+      summary: Get raw log content
+      description: Returns the original (filtered) log text as `text/plain`
+      operationId: getRawLog
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: '^[a-zA-Z0-9]{7}$'
+          example: "aB3x9K"
+      responses:
+        '200':
+          description: Raw log content
+          content:
+            text/plain:
+              schema:
+                type: string
+              example: |
+                [12:34:56] [Server thread/INFO]: Starting minecraft server version 1.20.1
+                [12:34:56] [Server thread/INFO]: Loading properties
+                ...
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+  /1/insights/{id}:
+    get:
+      tags: [Analysis]
+      summary: Get structured insights for a log
+      description: Returns parsed entries, error counts, mod list, version info, etc.
+      operationId: getInsights
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: '^[a-zA-Z0-9]{7}$'
+          example: "aB3x9K"
+      responses:
+        '200':
+          description: Insights data
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InsightsResponse'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+  /1/ai/{id}:
+    get:
+      tags: [AI]
+      summary: Stream AI analysis of a stored log
+      description: |
+        Streams AI-generated analysis (markdown) via SSE. Requires NVIDIA API keys in config.
+        Response is `text/event-stream` with `data: <chunk>` lines.
+      operationId: getAIAnalysis
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: '^[a-zA-Z0-9]{7}$'
+          example: "aB3x9K"
+      responses:
+        '200':
+          description: SSE stream
+          content:
+            text/event-stream:
+              schema:
+                type: string
+              example: "data: ## Analysis\n\ndata: Found 3 errors...\n\ndata: [DONE]\n\n"
+          headers:
+            Cache-Control:
+              schema:
+                type: string
+              example: "no-cache"
+            Connection:
+              schema:
+                type: string
+              example: "keep-alive"
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '503':
+          description: AI service unavailable (no API keys configured)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+  /1/ai/analyse:
+    post:
+      tags: [AI]
+      summary: Stream AI analysis of raw content
+      description: |
+        Same as `/1/ai/{id}` but analyses provided content directly without storage.
+      operationId: aiAnalyseRaw
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              required: [content]
+              properties:
+                content:
+                  type: string
+                  format: binary
+          application/json:
+            schema:
+              type: object
+              required: [content]
+              properties:
+                content:
+                  type: string
+      responses:
+        '200':
+          description: SSE stream
+          content:
+            text/event-stream:
+              schema:
+                type: string
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '503':
+          description: AI service unavailable
+        '429':
+          $ref: '#/components/responses/RateLimited'
+  /1/limits:
+    get:
+      tags: [Meta]
+      summary: Get upload limits
+      description: Returns configured max bytes, max lines, and storage TTL
+      operationId: getLimits
+      responses:
+        '200':
+          description: Limits
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LimitsResponse'
+              example:
+                success: true
+                message: "OK"
+                maxLength: 10485760
+                maxLines: 50000
+                storageTime: 604800
+        '429':
+          $ref: '#/components/responses/RateLimited'
+  /1/filters:
+    get:
+      tags: [Meta]
+      summary: List active pre-filters
+      description: Returns the ordered list of filter classes applied to incoming logs
+      operationId: getFilters
+      responses:
+        '200':
+          description: Filter list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FiltersResponse'
+              example:
+                success: true
+                message: "OK"
+                filters:
+                  - "\\Filter\\TrimFilter"
+                  - "\\Filter\\LimitBytesFilter"
+                  - "\\Filter\\LimitLinesFilter"
+                  - "\\Filter\\IPv4Filter"
+                  - "\\Filter\\IPv6Filter"
+                  - "\\Filter\\IPv6ShortFilter"
+                  - "\\Filter\\UuidFilter"
+                  - "\\Filter\\XuidFilter"
+                  - "\\Filter\\SessionTokenFilter"
+                  - "\\Filter\\ClientIdFilter"
+                  - "\\Filter\\CoordinateFilter"
+                  - "\\Filter\\UsernameFilter"
+                  - "\\Filter\\AccessTokenFilter"
+        '429':
+          $ref: '#/components/responses/RateLimited'
+  /1/errors/rate:
+    get:
+      tags: [Meta]
+      summary: Rate limit status
+      description: Returns current rate limit counters for the requesting IP
+      operationId: getRateLimitStatus
+      responses:
+        '200':
+          description: Rate limit info
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RateLimitResponse'
+              example:
+                success: true
+                message: "OK"
+                limits:
+                  "POST /1/log":
+                    limit: 36000
+                    window: 60
+                    remaining: 35998
+                    reset: 1700000000
+        '429':
+          $ref: '#/components/responses/RateLimited'
+components:
+  schemas:
+    IndexResponse:
+      type: object
+      required: [success, message, endpoints]
+      properties:
+        success:
+          type: boolean
+          example: true
+        message:
+          type: string
+          example: "LogShare API"
+        endpoints:
+          type: array
+          items:
+            type: string
+    LogCreateResponse:
+      type: object
+      required: [success, message, id, url, raw, token]
+      properties:
+        success:
+          type: boolean
+          example: true
+        message:
+          type: string
+          example: "Log submitted successfully"
+        id:
+          type: string
+          pattern: '^[a-zA-Z0-9]{7}$'
+          example: "aB3x9K"
+        url:
+          type: string
+          format: uri
+          example: "https://logshare.cn/aB3x9K"
+        raw:
+          type: string
+          format: uri
+          example: "https://api.logshare.cn/1/raw/aB3x9K"
+        token:
+          type: string
+          pattern: '^[a-zA-Z0-9]{16}$'
+          example: "k7m2N9pQ4vL1xY6z"
+    LogDeleteResponse:
+      type: object
+      required: [success, message, deleted, failed, total, deletedCount, failedCount]
+      properties:
+        success:
+          type: boolean
+        message:
+          type: string
+        deleted:
+          type: array
+          items:
+            type: string
+        failed:
+          type: array
+          items:
+            type: object
+            required: [id, message, code]
+            properties:
+              id:
+                type: string
+              message:
+                type: string
+              code:
+                type: integer
+        total:
+          type: integer
+        deletedCount:
+          type: integer
+        failedCount:
+          type: integer
+    AnalysisResponse:
+      type: object
+      description: Full Codex analysis result (varies by log type)
+      properties:
+        success:
+          type: boolean
+        message:
+          type: string
+        analysis:
+          type: object
+          additionalProperties: true
+    InsightsResponse:
+      type: object
+      required: [success, message, data]
+      properties:
+        success:
+          type: boolean
+        message:
+          type: string
+        data:
+          type: object
+          properties:
+            lineCount:
+              type: integer
+            errorCount:
+              type: integer
+            version:
+              type: string
+            modLoader:
+              type: string
+            mods:
+              type: array
+              items:
+                type: object
+            entries:
+              type: array
+              items:
+                type: object
+    LimitsResponse:
+      type: object
+      required: [success, message, maxLength, maxLines, storageTime]
+      properties:
+        success:
+          type: boolean
+        message:
+          type: string
+        maxLength:
+          type: integer
+          description: Max upload bytes
+          example: 10485760
+        maxLines:
+          type: integer
+          example: 50000
+        storageTime:
+          type: integer
+          description: TTL in seconds
+          example: 604800
+    FiltersResponse:
+      type: object
+      required: [success, message, filters]
+      properties:
+        success:
+          type: boolean
+        message:
+          type: string
+        filters:
+          type: array
+          items:
+            type: string
+    RateLimitResponse:
+      type: object
+      required: [success, message, limits]
+      properties:
+        success:
+          type: boolean
+        message:
+          type: string
+        limits:
+          type: object
+          additionalProperties:
+            type: object
+            required: [limit, window, remaining, reset]
+            properties:
+              limit:
+                type: integer
+              window:
+                type: integer
+                description: Window in seconds
+              remaining:
+                type: integer
+              reset:
+                type: integer
+                description: Unix timestamp
+    MetadataEntry:
+      type: object
+      required: [key, value]
+      properties:
+        key:
+          type: string
+          maxLength: 100
+        value:
+          type: string
+          maxLength: 500
+    ErrorResponse:
+      type: object
+      required: [success, error, code]
+      properties:
+        success:
+          type: boolean
+          example: false
+        error:
+          type: string
+        code:
+          type: integer
+        errors:
+          type: array
+          items:
+            type: object
+  responses:
+    BadRequest:
+      description: Invalid request
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            success: false
+            error: "Missing required field: content"
+            code: 400
+    Unauthorized:
+      description: Missing or invalid Authorization header
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            success: false
+            error: "Missing token in Authorization header. Use: Bearer <token>"
+            code: 401
+    Forbidden:
+      description: Token mismatch
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            success: false
+            error: "Invalid token for log: aB3x9K"
+            code: 403
+    NotFound:
+      description: Log not found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            success: false
+            error: "Log not found: aB3x9K"
+            code: 404
+    RateLimited:
+      description: Rate limit exceeded
+      headers:
+        Retry-After:
+          schema:
+            type: integer
+          description: Seconds until reset
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            success: false
+            error: "Rate limit exceeded. Please try again later."
+            code: 429
+    PayloadTooLarge:
+      description: Request body exceeds limit
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            success: false
+            error: "Request body exceeds 10 MB limit"
+            code: 413

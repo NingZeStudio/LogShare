@@ -17,5 +17,38 @@
         "ext-mbstring": "*",
         "aternos/codex-hytale": "^2.0.0",
         "chillerlan/php-qrcode": "^5.0"
+    },
+    "require-dev": {
+        "pestphp/pest": "^3.0",
+        "pestphp/pest-plugin-arch": "^3.0",
+        "mockery/mockery": "^1.6",
+        "phpstan/phpstan": "^2.0",
+        "phpstan/phpstan-phpunit": "^2.0",
+        "malith124/stubs-mongodb-11": "^1.0"
+    },
+    "config": {
+        "allow-plugins": {
+            "pestphp/pest-plugin": true
+        }
+    },
+    "autoload": {
+        "psr-4": {
+            "": "src/"
+        },
+        "files": [
+            "core.php"
+        ]
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "Tests\\": "tests/"
+        }
+    },
+    "scripts": {
+        "test": "pest",
+        "test:coverage": "pest --coverage",
+        "test:architecture": "pest --plugin=pestphp/pest-plugin-arch",
+        "stan": "phpstan analyse src --level=5",
+        "cs-fix": "php-cs-fixer fix"
     }
 }

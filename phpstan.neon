@@ -1,0 +1,18 @@
+includes:
+  - vendor/phpstan/phpstan-phpunit/extension.neon
+
+parameters:
+  level: 5
+  paths:
+    - src
+  excludePaths:
+    - src/Printer/*
+    - src/Data/*
+    - src/Cache/*
+    - src/Client/*
+    - src/Storage/*
+  ignoreErrors:
+    - '#Access to an undefined property#'
+    - '#Property .* does not exist#'
+  checkMissingIterableValueType: false
+  checkGenericClassInNonGenericObjectType: false
