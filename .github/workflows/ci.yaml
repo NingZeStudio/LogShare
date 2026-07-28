@@ -87,6 +87,9 @@ jobs:
       - name: Install Dependencies
         run: composer install --prefer-dist --no-progress --no-interaction
 
+      - name: Copy Config
+        run: cp Config.inc.example.php Config.inc.php
+
       - name: Run PHPStan
         run: composer stan
 
@@ -112,6 +115,9 @@ jobs:
 
       - name: Install Dependencies
         run: composer install --prefer-dist --no-progress --no-interaction
+
+      - name: Copy Config
+        run: cp Config.inc.example.php Config.inc.php
 
       - name: Run Architecture Tests
         run: composer test:architecture
