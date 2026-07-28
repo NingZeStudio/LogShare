@@ -42,11 +42,20 @@ class MongoDBClient
     /**
      * Ensure indexes exist
      *
+     * Creates a TTL index on `created` so documents auto-expire
+     * after the configured storage time. The `Renew()` operation
+     * updates `created` to now, resetting the TTL.
+     *
      * @return void
      */
     public static function ensureIndexes(): void
     {
         $collection = self::getCollection();
-        $collection->createIndex(['expires' => 1], ['expireAfterSeconds' => 0]);
+        $config = \Config::Get('storage');
+        $expireAfterSeconds = $config['storageTime'] ?? (7 * 24 * 60 * 60);
+        $collection->createIndex(
+            ['created' => 1],
+            ['expireAfterSeconds' => $expireAfterSeconds]
+        );
     }
 }
