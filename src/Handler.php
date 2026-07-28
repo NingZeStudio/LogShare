@@ -9,12 +9,12 @@ abstract class Handler
         RequestValidator::validateMethod($methods);
     }
 
-    protected function extractId(string $prefix): string
+    protected function extractId(string|array $prefix): string
     {
         return RequestValidator::extractId($prefix);
     }
 
-    protected function extractIds(string $prefix): array
+    protected function extractIds(string|array $prefix): array
     {
         return RequestValidator::extractIds($prefix);
     }

@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: LogShare API
-  version: 1.5.3
+  version: 1.5.4
   description: |
     Minecraft / Hytale log analysis and sharing platform.
     
@@ -83,7 +83,10 @@ paths:
         - `source` (string, optional): Free-form source identifier
         
         Returns a log ID and a deletion token. **Save the token** — it cannot be recovered.
+        
+        (Deprecated; use /v1/log instead)
       operationId: createLog
+      deprecated: true
       requestBody:
         required: true
         content:
@@ -144,7 +147,130 @@ paths:
       description: |
         Requires `Authorization: Bearer <token>` header with the token returned on creation.
         Multiple IDs can be comma-separated in the path: `/1/log/id1,id2,id3`
+        
+        (Deprecated; use /v1/log instead)
       operationId: deleteLogs
+      deprecated: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: '^[a-zA-Z0-9]{7}(,[a-zA-Z0-9]{7})*$'
+          description: Comma-separated log IDs (7 chars each)
+          example: "aB3x9K,xY7z2M"
+      headers:
+        - name: Authorization
+          in: header
+          required: true
+          description: Bearer token from log creation
+          schema:
+            type: string
+            pattern: '^Bearer [a-zA-Z0-9]{16}$'
+          example: "Bearer k7m2N9pQ4vL1xY6z"
+      responses:
+        '200':
+          description: Deletion result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LogDeleteResponse'
+              example:
+                success: true
+                message: "Log deletion completed"
+                deleted:
+                  - "aB3x9K"
+                failed: []
+                total: 1
+                deletedCount: 1
+                failedCount: 0
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+  /v1/log:
+    post:
+      tags: [Logs]
+      summary: Submit a log
+      description: |
+        Accepts raw log content as `application/x-www-form-urlencoded` or `application/json`.
+        Supports `gzip`/`deflate` `Content-Encoding`.
+        
+        **Form fields (urlencoded or JSON):**
+        - `content` (string, required): Raw log text (max 10 MB, 50k lines)
+        - `metadata[]` (array, optional): Array of `{key, value}` objects
+        - `source` (string, optional): Free-form source identifier
+        
+        Returns a log ID and a deletion token. **Save the token** — it cannot be recovered.
+      operationId: createLogV1
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              required: [content]
+              properties:
+                content:
+                  type: string
+                  format: binary
+                  description: Raw log content
+                metadata:
+                  type: array
+                  items:
+                    $ref: '#/components/schemas/MetadataEntry'
+                source:
+                  type: string
+                  maxLength: 100
+          application/json:
+            schema:
+              type: object
+              required: [content]
+              properties:
+                content:
+                  type: string
+                  description: Raw log content
+                metadata:
+                  type: array
+                  items:
+                    $ref: '#/components/schemas/MetadataEntry'
+                source:
+                  type: string
+                  maxLength: 100
+      responses:
+        '200':
+          description: Log created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LogCreateResponse'
+              example:
+                success: true
+                message: "Log submitted successfully"
+                id: "aB3x9K"
+                url: "https://logshare.cn/aB3x9K"
+                raw: "https://api.logshare.cn/v1/raw/aB3x9K"
+                token: "k7m2N9pQ4vL1xY6z"
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+    delete:
+      tags: [Logs]
+      summary: Delete one or more logs
+      description: |
+        Requires `Authorization: Bearer <token>` header with the token returned on creation.
+        Multiple IDs can be comma-separated in the path: `/v1/log/id1,id2,id3`
+      operationId: deleteLogsV1
       parameters:
         - name: id
           in: path
@@ -195,7 +321,48 @@ paths:
       summary: Delete a single log (alternative path)
       description: |
         Same as `DELETE /1/log` but with ID in path. Requires Bearer token.
+        
+        (Deprecated; use /v1/log/{id} instead)
       operationId: deleteLogById
+      deprecated: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: '^[a-zA-Z0-9]{7}$'
+          example: "aB3x9K"
+      headers:
+        - name: Authorization
+          in: header
+          required: true
+          schema:
+            type: string
+            pattern: '^Bearer [a-zA-Z0-9]{16}$'
+          example: "Bearer k7m2N9pQ4vL1xY6z"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LogDeleteResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+  /v1/log/{id}:
+    delete:
+      tags: [Logs]
+      summary: Delete a single log (alternative path)
+      description: |
+        Same as `DELETE /v1/log` but with ID in path. Requires Bearer token.
+      operationId: deleteLogByIdV1
       parameters:
         - name: id
           in: path
@@ -234,7 +401,49 @@ paths:
       description: |
         Runs full Codex analysis (version detection, mod detection, crash parsing, etc.)
         on the provided content without persisting it. Returns structured analysis result.
+        
+        (Deprecated; use /v1/analyse instead)
       operationId: analyseLog
+      deprecated: true
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              required: [content]
+              properties:
+                content:
+                  type: string
+                  format: binary
+          application/json:
+            schema:
+              type: object
+              required: [content]
+              properties:
+                content:
+                  type: string
+      responses:
+        '200':
+          description: Analysis result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AnalysisResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+  /v1/analyse:
+    post:
+      tags: [Analysis]
+      summary: Analyse log content without storing
+      description: |
+        Runs full Codex analysis (version detection, mod detection, crash parsing, etc.)
+        on the provided content without persisting it. Returns structured analysis result.
+      operationId: analyseLogV1
       requestBody:
         required: true
         content:
@@ -270,8 +479,42 @@ paths:
     get:
       tags: [Logs]
       summary: Get raw log content
-      description: Returns the original (filtered) log text as `text/plain`
+      description: |
+        Returns the original (filtered) log text as `text/plain`
+        
+        (Deprecated; use /v1/raw/{id} instead)
       operationId: getRawLog
+      deprecated: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: '^[a-zA-Z0-9]{7}$'
+          example: "aB3x9K"
+      responses:
+        '200':
+          description: Raw log content
+          content:
+            text/plain:
+              schema:
+                type: string
+              example: |
+                [12:34:56] [Server thread/INFO]: Starting minecraft server version 1.20.1
+                [12:34:56] [Server thread/INFO]: Loading properties
+                ...
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+  /v1/raw/{id}:
+    get:
+      tags: [Logs]
+      summary: Get raw log content
+      description: |
+        Returns the original (filtered) log text as `text/plain`
+      operationId: getRawLogV1
       parameters:
         - name: id
           in: path
@@ -299,8 +542,38 @@ paths:
     get:
       tags: [Analysis]
       summary: Get structured insights for a log
-      description: Returns parsed entries, error counts, mod list, version info, etc.
+      description: |
+        Returns parsed entries, error counts, mod list, version info, etc.
+        
+        (Deprecated; use /v1/insights/{id} instead)
       operationId: getInsights
+      deprecated: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: '^[a-zA-Z0-9]{7}$'
+          example: "aB3x9K"
+      responses:
+        '200':
+          description: Insights data
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InsightsResponse'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+  /v1/insights/{id}:
+    get:
+      tags: [Analysis]
+      summary: Get structured insights for a log
+      description: |
+        Returns parsed entries, error counts, mod list, version info, etc.
+      operationId: getInsightsV1
       parameters:
         - name: id
           in: path
@@ -327,7 +600,53 @@ paths:
       description: |
         Streams AI-generated analysis (markdown) via SSE. Requires NVIDIA API keys in config.
         Response is `text/event-stream` with `data: <chunk>` lines.
+        
+        (Deprecated; use /v1/ai/{id} instead)
       operationId: getAIAnalysis
+      deprecated: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: '^[a-zA-Z0-9]{7}$'
+          example: "aB3x9K"
+      responses:
+        '200':
+          description: SSE stream
+          content:
+            text/event-stream:
+              schema:
+                type: string
+              example: "data: ## Analysis\n\ndata: Found 3 errors...\n\ndata: [DONE]\n\n"
+          headers:
+            Cache-Control:
+              schema:
+                type: string
+              example: "no-cache"
+            Connection:
+              schema:
+                type: string
+              example: "keep-alive"
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '503':
+          description: AI service unavailable (no API keys configured)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+  /v1/ai/{id}:
+    get:
+      tags: [AI]
+      summary: Stream AI analysis of a stored log
+      description: |
+        Streams AI-generated analysis (markdown) via SSE. Requires NVIDIA API keys in config.
+        Response is `text/event-stream` with `data: <chunk>` lines.
+      operationId: getAIAnalysisV1
       parameters:
         - name: id
           in: path
@@ -369,7 +688,48 @@ paths:
       summary: Stream AI analysis of raw content
       description: |
         Same as `/1/ai/{id}` but analyses provided content directly without storage.
+        
+        (Deprecated; use /v1/ai/analyse instead)
       operationId: aiAnalyseRaw
+      deprecated: true
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              required: [content]
+              properties:
+                content:
+                  type: string
+                  format: binary
+          application/json:
+            schema:
+              type: object
+              required: [content]
+              properties:
+                content:
+                  type: string
+      responses:
+        '200':
+          description: SSE stream
+          content:
+            text/event-stream:
+              schema:
+                type: string
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '503':
+          description: AI service unavailable
+        '429':
+          $ref: '#/components/responses/RateLimited'
+  /v1/ai/analyse:
+    post:
+      tags: [AI]
+      summary: Stream AI analysis of raw content
+      description: |
+        Same as `/v1/ai/{id}` but analyses provided content directly without storage.
+      operationId: aiAnalyseRawV1
       requestBody:
         required: true
         content:
@@ -405,8 +765,34 @@ paths:
     get:
       tags: [Meta]
       summary: Get upload limits
-      description: Returns configured max bytes, max lines, and storage TTL
+      description: |
+        Returns configured max bytes, max lines, and storage TTL
+        
+        (Deprecated; use /v1/limits instead)
       operationId: getLimits
+      deprecated: true
+      responses:
+        '200':
+          description: Limits
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LimitsResponse'
+              example:
+                success: true
+                message: "OK"
+                maxLength: 10485760
+                maxLines: 50000
+                storageTime: 604800
+        '429':
+          $ref: '#/components/responses/RateLimited'
+  /v1/limits:
+    get:
+      tags: [Meta]
+      summary: Get upload limits
+      description: |
+        Returns configured max bytes, max lines, and storage TTL
+      operationId: getLimitsV1
       responses:
         '200':
           description: Limits
@@ -426,8 +812,45 @@ paths:
     get:
       tags: [Meta]
       summary: List active pre-filters
-      description: Returns the ordered list of filter classes applied to incoming logs
+      description: |
+        Returns the ordered list of filter classes applied to incoming logs
+        
+        (Deprecated; use /v1/filters instead)
       operationId: getFilters
+      deprecated: true
+      responses:
+        '200':
+          description: Filter list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FiltersResponse'
+              example:
+                success: true
+                message: "OK"
+                filters:
+                  - "\\Filter\\TrimFilter"
+                  - "\\Filter\\LimitBytesFilter"
+                  - "\\Filter\\LimitLinesFilter"
+                  - "\\Filter\\IPv4Filter"
+                  - "\\Filter\\IPv6Filter"
+                  - "\\Filter\\IPv6ShortFilter"
+                  - "\\Filter\\UuidFilter"
+                  - "\\Filter\\XuidFilter"
+                  - "\\Filter\\SessionTokenFilter"
+                  - "\\Filter\\ClientIdFilter"
+                  - "\\Filter\\CoordinateFilter"
+                  - "\\Filter\\UsernameFilter"
+                  - "\\Filter\\AccessTokenFilter"
+        '429':
+          $ref: '#/components/responses/RateLimited'
+  /v1/filters:
+    get:
+      tags: [Meta]
+      summary: List active pre-filters
+      description: |
+        Returns the ordered list of filter classes applied to incoming logs
+      operationId: getFiltersV1
       responses:
         '200':
           description: Filter list
@@ -458,8 +881,12 @@ paths:
     get:
       tags: [Meta]
       summary: Rate limit status
-      description: Returns current rate limit counters for the requesting IP
+      description: |
+        Returns current rate limit counters for the requesting IP
+        
+        (Deprecated; use /v1/errors/rate instead)
       operationId: getRateLimitStatus
+      deprecated: true
       responses:
         '200':
           description: Rate limit info
@@ -472,6 +899,31 @@ paths:
                 message: "OK"
                 limits:
                   "POST /1/log":
+                    limit: 36000
+                    window: 60
+                    remaining: 35998
+                    reset: 1700000000
+        '429':
+          $ref: '#/components/responses/RateLimited'
+  /v1/errors/rate:
+    get:
+      tags: [Meta]
+      summary: Rate limit status
+      description: |
+        Returns current rate limit counters for the requesting IP
+      operationId: getRateLimitStatusV1
+      responses:
+        '200':
+          description: Rate limit info
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RateLimitResponse'
+              example:
+                success: true
+                message: "OK"
+                limits:
+                  "POST /v1/log":
                     limit: 36000
                     window: 60
                     remaining: 35998

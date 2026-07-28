@@ -119,6 +119,17 @@ class Router
                 ['GET',     '/1/insights/{id}',    \Handler\InsightsHandler::class,  [36000, 60]          ],
                 ['GET',     '/1/ai/{id}',          \Handler\AIHandler::class,        [36000, 60]          ],
                 ['POST',    '/1/ai/analyse',       \Handler\AIAnalyseHandler::class, [36000, 60]          ],
+
+                ['POST',    '/v1/log',             \Handler\LogHandler::class,       [36000, 60]          ],
+                ['DELETE',  '/v1/log/{id}',        \Handler\LogHandler::class,       [36000, 60]          ],
+                ['POST',    '/v1/analyse',         \Handler\AnalyseHandler::class,   [36000, 60]          ],
+                ['GET',     '/v1/errors/rate',     \Handler\RateErrorHandler::class, [36000, 60]          ],
+                ['GET',     '/v1/limits',          \Handler\LimitsHandler::class,    [36000, 60]          ],
+                ['GET',     '/v1/filters',         \Handler\FiltersHandler::class,   [36000, 60]          ],
+                ['GET',     '/v1/raw/{id}',        \Handler\RawHandler::class,       [36000, 60]          ],
+                ['GET',     '/v1/insights/{id}',   \Handler\InsightsHandler::class,  [36000, 60]          ],
+                ['GET',     '/v1/ai/{id}',         \Handler\AIHandler::class,        [36000, 60]          ],
+                ['POST',    '/v1/ai/analyse',      \Handler\AIAnalyseHandler::class, [36000, 60]          ],
             ],
 
             'disabled' => [

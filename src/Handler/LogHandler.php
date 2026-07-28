@@ -46,17 +46,19 @@ class LogHandler extends \Handler
 
         $urls = \Config::Get('urls');
 
+        $apiPrefix = str_starts_with($_SERVER['REQUEST_URI'], '/v1/') ? 'v1' : '1';
+
         $this->respondSuccess([
             'id' => $id->get(),
             'url' => $urls['baseUrl'] . "/" . $id->get(),
-            'raw' => $urls['apiBaseUrl'] . "/1/raw/" . $id->get(),
+            'raw' => $urls['apiBaseUrl'] . "/{$apiPrefix}/raw/" . $id->get(),
             'token' => $token->get()
         ], 'Log submitted successfully');
     }
 
     private function handleDelete(): void
     {
-        $logIds = $this->extractIds('/1/log/');
+        $logIds = $this->extractIds(['/1/log/', '/v1/log/']);
 
         $authorizationHeader = $_SERVER['HTTP_AUTHORIZATION'] ?? null;
         $requestToken = null;

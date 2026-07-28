@@ -8,7 +8,7 @@ class AIHandler extends \Handler
     {
         try {
             $this->validateMethod('GET');
-            $logId = $this->extractId('/1/ai/');
+            $logId = $this->extractId(['/1/ai/', '/v1/ai/']);
         } catch (\ApiError $e) {
             $e->output();
         }

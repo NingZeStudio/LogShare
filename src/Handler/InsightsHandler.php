@@ -8,7 +8,7 @@ class InsightsHandler extends \Handler
     {
         try {
             $this->validateMethod('GET');
-            $logId = $this->extractId('/1/insights/');
+            $logId = $this->extractId(['/1/insights/', '/v1/insights/']);
         } catch (\ApiError $e) {
             $e->output();
         }
