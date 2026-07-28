@@ -2,7 +2,9 @@
 
 基础 URL：由配置 `urls.apiBaseUrl` 决定。
 
-所有端点统一返回 JSON，`/1/raw/{id}` 和 `/1/ai/*` 除外（分别返回纯文本和 SSE 流）。
+同时提供 `/1/`（已弃用）和 `/v1/` 端点。建议新集成使用 `/v1/`。旧版 `/1/` 在过渡期内保持兼容。
+
+完整 OpenAPI 3.1 规范见 [`openapi.yaml`](openapi.yaml)。
 
 ---
 
@@ -11,7 +13,8 @@
 ### 上传日志
 
 ```
-POST /1/log
+POST /1/log   （已弃用，保留兼容）
+POST /v1/log
 ```
 
 **Content-Type：** `application/x-www-form-urlencoded` 或 `application/json`。  
@@ -31,14 +34,14 @@ POST /1/log
 {
     "success": true,
     "message": "Log submitted successfully",
-    "data": {
-        "id": "mAbCdE",
-        "url": "https://logshare.cn/mAbCdE",
-        "raw": "https://api.logshare.cn/1/raw/mAbCdE",
-        "token": "f3a2b1c4d5e6..."
-    }
+    "id": "mAbCdE",
+    "url": "https://logshare.cn/mAbCdE",
+    "raw": "https://api.logshare.cn/1/raw/mAbCdE",
+    "token": "f3a2b1c4d5e6..."
 }
 ```
+
+> `/v1/log` 返回格式相同，`raw` URL 指向 `/v1/raw/`。
 
 `token` 是删除该日志的唯一凭证，请自行保存。
 
@@ -47,11 +50,12 @@ POST /1/log
 ### 删除日志
 
 ```
-DELETE /1/log/{id}
+DELETE /1/log/{id}   （已弃用，保留兼容）
+DELETE /v1/log/{id}
 ```
 
 **鉴权：** `Authorization: Bearer <token>`（token 来自上传响应）。  
-**多 ID：** 逗号分隔，如 `DELETE /1/log/id1,id2`。
+**多 ID：** 逗号分隔，如 `DELETE /v1/log/id1,id2`。
 
 **响应：**
 
@@ -59,17 +63,15 @@ DELETE /1/log/{id}
 {
     "success": true,
     "message": "Log deletion completed",
-    "data": {
-        "deleted": ["mAbCdE"],
-        "failed": [],
-        "total": 1,
-        "deletedCount": 1,
-        "failedCount": 0
-    }
+    "deleted": ["mAbCdE"],
+    "failed": [],
+    "total": 1,
+    "deletedCount": 1,
+    "failedCount": 0
 }
 ```
 
-失败时 `data.failed` 数组包含每个失败的 ID、原因和 HTTP 状态码。
+失败时 `failed` 数组包含每个失败的 ID、原因和 HTTP 状态码。
 
 ---
 
@@ -78,7 +80,8 @@ DELETE /1/log/{id}
 ### 获取原始日志
 
 ```
-GET /1/raw/{id}
+GET /1/raw/{id}   （已弃用，保留兼容）
+GET /v1/raw/{id}
 ```
 
 返回 `Content-Type: text/plain; charset=utf-8`，直接输出日志原文。
@@ -88,7 +91,8 @@ GET /1/raw/{id}
 ### 获取分析结果
 
 ```
-GET /1/insights/{id}
+GET /1/insights/{id}   （已弃用，保留兼容）
+GET /v1/insights/{id}
 ```
 
 返回 Codex 解析引擎的结构化分析结果，包含服务端类型、版本、错误信息、堆栈跟踪等。
@@ -100,10 +104,11 @@ GET /1/insights/{id}
 ### 直接分析日志内容
 
 ```
-POST /1/analyse
+POST /1/analyse   （已弃用，保留兼容）
+POST /v1/analyse
 ```
 
-与 `GET /1/insights/{id}` 类似，但直接从请求体取内容而非读取已存储日志。请求格式同 `POST /1/log`。返回 Codex 结构化分析结果。
+与 `GET /insights/{id}` 类似，但直接从请求体取内容而非读取已存储日志。请求格式同 `POST /log`。返回 Codex 结构化分析结果。
 
 ---
 
@@ -112,7 +117,8 @@ POST /1/analyse
 ### 基于已存储日志
 
 ```
-GET /1/ai/{id}
+GET /1/ai/{id}   （已弃用，保留兼容）
+GET /v1/ai/{id}
 ```
 
 SSE（Server-Sent Events）流式输出。连接建立后持续推送 `data:` 行，以 `event: done` 结束。
@@ -120,10 +126,11 @@ SSE（Server-Sent Events）流式输出。连接建立后持续推送 `data:` �
 ### 直接提交内容
 
 ```
-POST /1/ai/analyse
+POST /1/ai/analyse   （已弃用，保留兼容）
+POST /v1/ai/analyse
 ```
 
-不落盘，直接提交内容给 AI 分析。请求格式同 `POST /1/log`。SSE 流式输出，缓存基于内容哈希（30 分钟 TTL）。
+不落盘，直接提交内容给 AI 分析。请求格式同 `POST /log`。SSE 流式输出，缓存基于内容哈希（30 分钟 TTL）。
 
 ---
 
@@ -132,23 +139,8 @@ POST /1/ai/analyse
 ### 速率限制
 
 ```
-GET /1/limits
-```
-
-**响应：**
-
-```json
-{
-    "storageTime": 7776000,
-    "maxLength": 10000000,
-    "maxLines": 50000
-}
-```
-
-### 过滤器列表
-
-```
-GET /1/filters
+GET /1/limits   （已弃用，保留兼容）
+GET /v1/limits
 ```
 
 **响应：**
@@ -156,21 +148,40 @@ GET /1/filters
 ```json
 {
     "success": true,
+    "message": "OK",
+    "maxLength": 10485760,
+    "maxLines": 50000,
+    "storageTime": 604800
+}
+```
+
+### 过滤器列表
+
+```
+GET /1/filters   （已弃用，保留兼容）
+GET /v1/filters
+```
+
+**响应：**
+
+```json
+{
+    "success": true,
+    "message": "OK",
     "filters": [
-        { "type": "trim", "data": null },
-        { "type": "limit-bytes", "data": { "limit": 10000000 } },
-        { "type": "limit-lines", "data": { "limit": 50000 } },
-        {
-            "type": "regex",
-            "data": {
-                "patterns": [
-                    { "pattern": "IPv4", "replacement": "**.**.**.**" },
-                    { "pattern": "IPv6", "replacement": "****:****:****:****:****:****:****:****" },
-                    { "pattern": "Username", "replacement": "********" },
-                    { "pattern": "AccessToken", "replacement": "********" }
-                ]
-            }
-        }
+        "\\Filter\\TrimFilter",
+        "\\Filter\\LimitBytesFilter",
+        "\\Filter\\LimitLinesFilter",
+        "\\Filter\\IPv4Filter",
+        "\\Filter\\IPv6Filter",
+        "\\Filter\\IPv6ShortFilter",
+        "\\Filter\\UuidFilter",
+        "\\Filter\\XuidFilter",
+        "\\Filter\\SessionTokenFilter",
+        "\\Filter\\ClientIdFilter",
+        "\\Filter\\CoordinateFilter",
+        "\\Filter\\UsernameFilter",
+        "\\Filter\\AccessTokenFilter"
     ]
 }
 ```
@@ -178,7 +189,8 @@ GET /1/filters
 ### 速率错误测试
 
 ```
-GET /1/errors/rate
+GET /1/errors/rate   （已弃用，保留兼容）
+GET /v1/errors/rate
 ```
 
 始终返回 HTTP 429，用于测试限速错误处理。
@@ -193,7 +205,7 @@ GET /1/errors/rate
 {
     "success": true,
     "message": "OK",
-    "data": { ... }
+    ...
 }
 ```
 
@@ -202,7 +214,7 @@ GET /1/errors/rate
 ```json
 {
     "success": false,
-    "message": "错误描述",
+    "error": "错误描述",
     "code": 400
 }
 ```
