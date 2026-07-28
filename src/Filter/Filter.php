@@ -25,6 +25,12 @@ abstract class Filter
             new LimitLinesFilter(),
             new IPv4Filter(),
             new IPv6Filter(),
+            new IPv6ShortFilter(),
+            new UuidFilter(),
+            new XuidFilter(),
+            new SessionTokenFilter(),
+            new ClientIdFilter(),
+            new CoordinateFilter(),
             new UsernameFilter(),
             new AccessTokenFilter(),
         ];
@@ -42,6 +48,20 @@ abstract class Filter
             $data = $filter::filter($data);
         }
         return $data;
+    }
+
+    /**
+     * Safe preg_replace wrapper that returns original string on error
+     *
+     * @param string $pattern
+     * @param string $replacement
+     * @param string $subject
+     * @return string
+     */
+    protected static function safePregReplace(string $pattern, string $replacement, string $subject): string
+    {
+        $result = @preg_replace($pattern, $replacement, $subject);
+        return $result !== null ? $result : $subject;
     }
 
     /**
