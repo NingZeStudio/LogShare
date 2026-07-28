@@ -94,7 +94,7 @@ class RequestValidator
      * @return string ID
      * @throws ApiError
      */
-    public static function extractId(string $prefix): string
+    public static function extractId(string|array $prefix): string
     {
         $ids = self::extractIds($prefix);
         return $ids[0];
