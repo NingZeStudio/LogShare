@@ -1,4 +1,4 @@
-# LogShare v1.5.3
+# LogShare v1.5.4
 
 Minecraft / Hytale 日志分析与分享平台。基于 Aternos Codex 和 Sherlock 构建，提供日志上传、自动诊断、敏感信息脱敏和大模型 AI 辅助分析能力。
 
@@ -9,15 +9,15 @@ Minecraft / Hytale 日志分析与分享平台。基于 Aternos Codex 和 Sherlo
 - **敏感信息脱敏**：上传时自动过滤 IPv4/IPv6 地址、用户名、Access Token，支持可配置的过滤链
 - **结构化分析**：基于 Codex-Minecraft 和 Codex-Hytale 解析引擎，提取错误堆栈、崩溃原因、性能问题
 - **AI 辅助诊断**：接入大模型 API，提供两种模式——基于已存储日志的 ID 分析和直接提交内容的不落盘分析
-- **RESTful API**：支持单 ID 和多 ID（逗号分隔）操作，删除采用 Bearer Token 鉴权
-- **Redis 缓存**：读取缓存 30 分钟 TTL，超过 600KB 的日志自动跳过缓存直读 MongoDB
+- **RESTful API**：同时提供 `/1/`（已弃用）和 `/v1/` 路径，支持单 ID 和多 ID（逗号分隔）操作，删除采用 Bearer Token 鉴权
+- **Redis 缓存**：可配置开关、TTL 和大小限制，超过阈值自动跳过缓存直读 MongoDB
 
 ## 环境要求
 
 - PHP 8.4+
 - 扩展：ext-json、ext-zlib、ext-mbstring、mongodb、redis
-- MongoDB（主要存储）
-- Redis（缓存）
+- MongoDB 或文件系统（主要存储）
+- Redis（可选缓存层）
 
 ## 快速开始
 
@@ -34,8 +34,8 @@ cp Config.inc.example.php Config.inc.php
 
 | 配置段 | 说明 |
 |---|---|
-| `storage` | 存储后端配置，默认 MongoDB；Redis/Filesystem 可选但默认禁用 |
-| `cache` | Redis 连接信息，默认主机 mclogs-redis:6379 |
+| `storage` | 存储后端配置（MongoDB ↔ 文件系统二选一） |
+| `cache` | Redis 缓存配置（开关、TTL、大小限制）及连接信息 |
 | `mongo` | MongoDB 连接 URL 和数据库名 |
 | `ai` | AI API Key 列表、接口地址、模型名称 |
 | `filter` | 预处理过滤链，按顺序执行 |
@@ -74,14 +74,19 @@ location ~ \.php$ {
 
 ## API 文档
 
-所有端点前缀 `/1/`。响应格式统一为 JSON（`/1/raw` 返回纯文本）。
+同时提供 `/1/`（已弃用）和 `/v1/` 端点。建议新集成使用 `/v1/`。响应格式统一为 JSON（`/1/raw`/`/v1/raw` 返回纯文本）。
+
+完整 OpenAPI 3.1 规范见 [`openapi.yaml`](openapi.yaml)，Postman Collection 见 [`postman_collection.json`](postman_collection.json)。
 
 ### 日志管理
 
 ```
-POST   /1/log              上传日志
+POST   /1/log              上传日志（旧版，保持兼容）
+POST   /v1/log              上传日志（新版）
 DELETE /1/log/{id}          删除日志
+DELETE /v1/log/{id}          删除日志
 GET    /1/raw/{id}          获取原始日志
+GET    /v1/raw/{id}          获取原始日志
 ```
 
 **上传日志**：接受 `application/x-www-form-urlencoded` 和 `application/json`，支持 gzip/deflate 压缩。字段：
@@ -103,22 +108,28 @@ GET    /1/raw/{id}          获取原始日志
 }
 ```
 
+> `/v1/log` 返回格式相同，`raw` URL 指向 `/v1/raw/`。
+
 **删除日志**：通过 `Authorization: Bearer <token>` 鉴权，token 来自上传响应。支持多 ID：`DELETE /1/log/id1,id2`。
 
 ### 日志分析
 
 ```
 GET  /1/insights/{id}       获取分析结果
+GET  /v1/insights/{id}       获取分析结果
 POST /1/analyse             直接分析日志内容（不存储）
+POST /v1/analyse             直接分析日志内容（不存储）
 ```
 
-`/1/insights` 返回 Codex 解析引擎的结构化分析结果，包含服务端版本、错误信息、堆栈跟踪等。
+`/insights` 返回 Codex 解析引擎的结构化分析结果，包含服务端版本、错误信息、堆栈跟踪等。
 
 ### AI 分析
 
 ```
 GET  /1/ai/{id}             基于已存储日志的 AI 分析
+GET  /v1/ai/{id}             基于已存储日志的 AI 分析
 POST /1/ai/analyse          提交内容直接分析（不落盘）
+POST /v1/ai/analyse          提交内容直接分析（不落盘）
 ```
 
 AI 分析使用 SSE（Server-Sent Events）流式输出。配置 API Key 后，系统自动轮换 Key 处理限流。
@@ -127,10 +138,12 @@ AI 分析使用 SSE（Server-Sent Events）流式输出。配置 API Key 后，�
 
 ```
 GET  /1/limits              获取速率限制信息
+GET  /v1/limits              获取速率限制信息
 GET  /1/filters             获取当前启用的过滤器列表
+GET  /v1/filters             获取当前启用的过滤器列表
 ```
 
-完整 API 文档见 [`API.md`](API.md)。
+完整 API 规范见 [`openapi.yaml`](openapi.yaml)，Postman Collection 见 [`postman_collection.json`](postman_collection.json)。
 
 ## 架构
 
@@ -146,7 +159,7 @@ src/                     核心类库
 ├── Filter/              预处理过滤链
 ├── Handler/             端点处理类（每个路由对应一个 Handler）
 ├── Printer/             日志打印格式化
-├── Storage/             存储后端（MongoStorage、RedisStorage、FilesystemStorage）
+├── Storage/             存储后端（MongoStorage、FilesystemStorage）
 ├── Config.php           配置加载器
 ├── Handler.php          端点处理基类
 ├── Router.php           路由匹配 + 限速 + 分发
@@ -162,10 +175,10 @@ CHANGELOG.md             更新日志
 
 ### 核心流程
 
-1. **上传**：`POST /1/log` → ContentParser 解析请求体 → 过滤链脱敏 → Log::put() → MongoDB 写入 → Redis 缓存
-2. **读取**：`GET /1/raw/{id}` → Redis 缓存查询 → 未命中则 MongoDB 回源 → TTL 续期
-3. **分析**：`GET /1/insights/{id}` → 加载日志 → Detective 自动检测服务端类型 → Codex 解析 → Sherlock 混淆映射反解 → 格式化输出
-4. **删除**：`DELETE /1/log/{id}` → Token 鉴权 → MongoDB 删除 → Redis 缓存清理
+1. **上传**：`POST /1/log`（或 `/v1/log`） → ContentParser 解析请求体 → 过滤链脱敏 → Log::put() → MongoDB/文件系统写入 → Redis 缓存（可选）
+2. **读取**：`GET /1/raw/{id}`（或 `/v1/raw/{id}`） → Redis 缓存查询（如启用） → 未命中则 MongoDB/文件系统回源 → TTL 续期
+3. **分析**：`GET /1/insights/{id}`（或 `/v1/insights/{id}`） → 加载日志 → Detective 自动检测服务端类型 → Codex 解析 → Sherlock 混淆映射反解 → 格式化输出
+4. **删除**：`DELETE /1/log/{id}`（或 `/v1/log/{id}`） → Token 鉴权 → MongoDB/文件系统删除 → Redis 缓存清理（如启用）
 
 ### ID 编码
 
@@ -179,9 +192,18 @@ ID 为 7 位字符，首字符编码存储后端类型。例如 `mAbCdE`：
 
 ## 开发说明
 
-本项目无测试框架、无 CI、无 lint/typecheck 配置。如需添加测试或格式化工具，自行配置。
+### 测试
 
-路由注册在 `src/Router.php::getRoutes()`，每行一条：
+```bash
+composer test            # Pest 测试套件
+composer stan            # PHPStan 静态分析（level 5）
+```
+
+测试覆盖过滤器单元测试、Handler 测试和 API 集成测试（47 个测试通过）。
+
+### 路由注册
+
+在 `src/Router.php::getRoutes()` 中注册，每行一条：
 
 ```php
 ['METHOD', '/path', HandlerClass::class, [rate_limit, window]],
