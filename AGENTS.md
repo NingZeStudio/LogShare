@@ -2,7 +2,7 @@
 
 ## Overview
 
-Minecraft / Hytale log analysis and sharing platform (v1.5.4). Fork-like evolution of Aternos Codex / mclogs.  
+Minecraft / Hytale log analysis and sharing platform (v1.5.5). Fork-like evolution of Aternos Codex / mclogs.  
 Monolithic PHP 8.4+ app: `index.php` HTTP entrypoint, `src/` + `Config.inc.php` at root.
 
 ## Project structure
