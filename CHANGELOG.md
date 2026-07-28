@@ -1,5 +1,31 @@
 # Changelog
 
+## 1.5.5 — 2026-07-28
+
+### 🔧 改进
+
+- **存储层重构** — MongoDB 和文件系统作为主存储二选一，Redis 仅作可配置缓存层（开关、TTL、大小限制），移除 RedisStorage
+- **MongoDB TTL 索引修复** — 索引从无效的 `expires` 字段改为 `created` + `expireAfterSeconds`，滚动删除正确生效
+- **FilesystemStorage 完整实现** — 修复 `StorageInterface` 兼容性，存储完整文档（含 token、metadata、source）
+- **依赖版本校验** — aternos/codex v4.1.0、codex-minecraft v5.2.0、sherlock v1.1.3 均已最新
+
+### 🐛 修复
+
+- **AccessTokenFilter 引号格式** — 修复 pattern 中多余 `"` 导致的匹配失败
+- **ClientIdFilter/SessionTokenFilter 模式修复** — 去除 pattern 中多余的引号，确保正确匹配
+- **IPv6 地址过滤优化** — 正确处理 `::ffff:127.0.0.1` 等混合格式
+- **各类过滤器 PHP 8.5 兼容** — 避免可变长后顾断言，改用简单模式
+
+### 📖 文档
+
+- README / API.md / AGENTS.md 全面更新
+- 生成 Postman Collection（23 个请求）
+- 新增 CHANGELOG.md 更新日志
+
+### ⚠️ 弃用
+
+- **`/1/` API 端点** — 标记为已弃用，推荐使用 `/v1/` 替代。`/1/log` 上传接口将在过渡期内保持可用
+
 ## 1.5.4 — 2026-07-28
 
 ### ✨ 新功能

@@ -1,4 +1,4 @@
-# LogShare v1.5.4
+# LogShare v1.5.5
 
 Minecraft / Hytale 日志分析与分享平台。基于 Aternos Codex 和 Sherlock 构建，提供日志上传、自动诊断、敏感信息脱敏和大模型 AI 辅助分析能力。
 
