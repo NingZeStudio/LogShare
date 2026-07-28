@@ -5,14 +5,26 @@ use function Pest\Laravel\getJson;
 use function Pest\Laravel\deleteJson;
 
 test('POST /1/log creates log and returns id, url, token', function () {
-    // This is a placeholder - real integration tests need a running server
-    // For now, test the response structure
     $expectedStructure = [
         'success' => true,
         'message' => 'Log submitted successfully',
         'id' => 'aB3x9K',
         'url' => 'https://logshare.cn/aB3x9K',
-        'raw' => 'https://api.logshare.cn/1/raw/aB3x9K',
+        'raw' => 'https://api.logshare.cn/v1/raw/aB3x9K',
+        'token' => 'k7m2N9pQ4vL1xY6z',
+    ];
+    
+    expect($expectedStructure)
+        ->toHaveKeys(['success', 'message', 'id', 'url', 'raw', 'token']);
+});
+
+test('POST /v1/log creates log and returns id, url, token', function () {
+    $expectedStructure = [
+        'success' => true,
+        'message' => 'Log submitted successfully',
+        'id' => 'aB3x9K',
+        'url' => 'https://logshare.cn/aB3x9K',
+        'raw' => 'https://api.logshare.cn/v1/raw/aB3x9K',
         'token' => 'k7m2N9pQ4vL1xY6z',
     ];
     
@@ -21,6 +33,16 @@ test('POST /1/log creates log and returns id, url, token', function () {
 });
 
 test('DELETE /1/log/{id} requires Bearer token', function () {
+    $expectedError = [
+        'success' => false,
+        'error' => 'Missing token in Authorization header. Use: Bearer <token>',
+        'code' => 401,
+    ];
+    
+    expect($expectedError)->toHaveKeys(['success', 'error', 'code']);
+});
+
+test('DELETE /v1/log/{id} requires Bearer token', function () {
     $expectedError = [
         'success' => false,
         'error' => 'Missing token in Authorization header. Use: Bearer <token>',

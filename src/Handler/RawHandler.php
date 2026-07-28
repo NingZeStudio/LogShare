@@ -8,7 +8,7 @@ class RawHandler extends \Handler
     {
         try {
             $this->validateMethod('GET');
-            $logId = $this->extractId('/1/raw/');
+            $logId = $this->extractId(['/1/raw/', '/v1/raw/']);
         } catch (\ApiError $e) {
             $e->output();
         }

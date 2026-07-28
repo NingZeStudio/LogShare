@@ -41,13 +41,26 @@ class RequestValidator
      * 从 URL 路径提取 ID 参数
      * 支持单 ID 和多 ID（逗号分隔）
      *
-     * @param string $prefix URL 前缀，例如 "/1/raw/"
+     * @param string|array $prefix URL 前缀，例如 "/1/raw/" 或 ["/1/raw/", "/v1/raw/"]
      * @return array ID 列表
      * @throws ApiError
      */
-    public static function extractIds(string $prefix): array
+    public static function extractIds(string|array $prefix): array
     {
-        $urlId = substr($_SERVER['REQUEST_URI'], strlen($prefix));
+        $prefixes = is_array($prefix) ? $prefix : [$prefix];
+        $urlId = null;
+
+        foreach ($prefixes as $p) {
+            if (str_starts_with($_SERVER['REQUEST_URI'], $p)) {
+                $urlId = substr($_SERVER['REQUEST_URI'], strlen($p));
+                break;
+            }
+        }
+
+        if ($urlId === null) {
+            $urlId = substr($_SERVER['REQUEST_URI'], strlen($prefixes[0]));
+        }
+
         $urlId = explode('?', $urlId)[0]; // 移除查询参数
         $urlId = trim($urlId, '/');
 
