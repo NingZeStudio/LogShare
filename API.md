@@ -24,9 +24,30 @@ POST /v1/log
 
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|
-| `content` | string | 是 | 日志内容 |
+| `content` | string | 是* | 日志内容（多文件上传时可为空，见下） |
+| `files` | array | 否 | 附加文件数组，每个元素 `{name, content}` |
 | `metadata[]` | array | 否 | 元数据 |
 | `source` | string | 否 | 来源标识（最长 64 字符） |
+
+\* 当提供 `files` 时 `content` 可省略，主文件取 `files[0]`。
+
+**多文件上传：**
+
+每个 `files[].content` 可为纯文本，也可为 ZIP 压缩包（`name` 以 `.zip` 结尾时自动展开为多个文件，保留内部相对路径）：
+
+```json
+{
+    "content": "主文件内容（可选）",
+    "files": [
+        { "name": "crash-reports/crash-01.txt", "content": "---- Minecraft Crash Report ----\n..." },
+        { "name": "server-logs.zip", "content": "<zip 二进制内容>" }
+    ]
+}
+```
+
+- 展开后每个文件独立经过脱敏过滤链
+- 上限：文件数 ≤ 200，解压后累计 ≤ 12MB（`storage.uploadFiles`）
+- ZIP 条目名会做路径遍历防护（拒绝 `../`、绝对路径）
 
 **响应：**
 
@@ -84,7 +105,49 @@ GET /1/raw/{id}   （已弃用，保留兼容）
 GET /v1/raw/{id}
 ```
 
-返回 `Content-Type: text/plain; charset=utf-8`，直接输出日志原文。
+返回 `Content-Type: text/plain; charset=utf-8`，直接输出日志原文（多文件日志返回主文件）。
+
+### 获取附加文件
+
+```
+GET /1/raw/{id}/{filename}   （已弃用，保留兼容）
+GET /v1/raw/{id}/{filename}
+```
+
+`{filename}` 支持子路径，需 URL 编码：
+
+```
+GET /v1/raw/mAbCdE/crash-reports/crash-01.txt
+```
+
+返回该文件原文（`text/plain`）。文件不存在返回 404。路径会做遍历防护（拒绝 `../`、绝对路径）。
+
+### 获取日志元信息与文件列表
+
+```
+GET /1/log/{id}   （已弃用，保留兼容）
+GET /v1/log/{id}
+```
+
+返回日志元信息及附加文件列表（不含内容）：
+
+```json
+{
+    "success": true,
+    "message": "Log metadata retrieved successfully",
+    "id": "mAbCdE",
+    "size": 4096,
+    "lines": 120,
+    "created": 1755200000,
+    "expires": 1755804800,
+    "metadata": [],
+    "source": "minecraft-server",
+    "files": [
+        { "name": "crash-reports/crash-01.txt", "size": 2048 }
+    ],
+    "raw": "https://api.logshare.cn/v1/raw/mAbCdE"
+}
+```
 
 ---
 
@@ -114,6 +177,8 @@ POST /v1/analyse
 
 ## AI 分析
 
+当配置 `ai.agent.enabled` 为 `true` 时，AI 接口走 LogAgent（模型驱动工具循环）；否则保持旧版直连分析。SSE 事件协议见下。
+
 ### 基于已存储日志
 
 ```
@@ -121,7 +186,7 @@ GET /1/ai/{id}   （已弃用，保留兼容）
 GET /v1/ai/{id}
 ```
 
-SSE（Server-Sent Events）流式输出。连接建立后持续推送 `data:` 行，以 `event: done` 结束。
+SSE（Server-Sent Events）流式输出。LogAgent 模式下，Agent 可读取该日志 ID 下的所有文件（`list_log_files` / `read_log_file` 工具，作用域限定在当前 ID）。
 
 ### 直接提交内容
 
@@ -131,6 +196,37 @@ POST /v1/ai/analyse
 ```
 
 不落盘，直接提交内容给 AI 分析。请求格式同 `POST /log`。SSE 流式输出，缓存基于内容哈希（30 分钟 TTL）。
+
+**可选字段 `id`：** 传入已存在的日志 ID 时，Agent 获得该日志文件的访问权（会话作用域），可用于多文件对比；`content` 可省略（缺省读取该 ID 主文件）。缓存键基于该 ID。
+
+```json
+{
+    "content": "可选，附加分析内容",
+    "id": "mAbCdE"
+}
+```
+
+### SSE 事件协议
+
+LogAgent 模式（`ai.agent.enabled`）会输出额外的 `event: status` 事件，旧的 `data:`（正文增量）与 `event: done` 保持不变，兼容只读旧协议的客户端。
+
+| 事件 | 载荷 `data` | 说明 |
+|------|-------------|------|
+| `event: status` | `{"type":"thinking","delta":"..."}` | 模型思维链（reasoning_content）逐段推送，供前端展示 |
+| `event: status` | `{"type":"tool","name":"web_search_exa","arguments":{...}}` | 即将调用某工具 |
+| `event: status` | `{"type":"tool_result","name":"web_search_exa","summary":"...","truncated":true}` | 工具返回摘要（完整结果进 LLM 上下文） |
+| `event: status` | `{"type":"limit","rounds":3}` | 达到工具循环上限 |
+| `data:`（原有） | `{"choices":[{"delta":{"content":"..."}}]}` | 正文增量 |
+| `event: done` | `{"status":"completed"}` | 流结束 |
+
+**可注册的工具：**
+
+| 工具 | 说明 | 注册条件 |
+|------|------|----------|
+| `web_search_exa` | Exa 网络搜索 | 配置 `ai.mcp.webSearch.url` |
+| `rag_search` | 内部知识库检索 | 配置 `ai.mcp.rag.url` |
+| `list_log_files` | 列出当前会话日志的文件 | 请求绑定日志 ID |
+| `read_log_file` | 读取文件指定行区间 | 请求绑定日志 ID |
 
 ---
 

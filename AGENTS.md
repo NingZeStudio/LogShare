@@ -2,68 +2,90 @@
 
 ## Overview
 
-Minecraft / Hytale log analysis and sharing platform (v1.5.5). Fork-like evolution of Aternos Codex / mclogs.  
-Monolithic PHP 8.4+ app: `index.php` HTTP entrypoint, `src/` + `Config.inc.php` at root.
-
-## Project structure
-
-```
-index.php                HTTP entrypoint
-core.php                 Bootstrap + PSR-4-style autoloader
-src/                     Application classes (namespaced + global)
-Config.inc.php           All configuration in one file (gitignored; use Config.inc.example.php as template)
-Config.inc.example.php   Config template with safe defaults
-openapi.yaml             OpenAPI 3.1 specification
-postman_collection.json  Postman collection
-tests/                   Pest test suite
-docker/                  compose.yaml + nginx/php configs
-storage/logs/            Filesystem storage (disabled by default)
-```
-
-`CORE_PATH` is the project root (parent of `index.php`, `src/`, `Config.inc.php`).
+Minecraft / Hytale log analysis and sharing platform (v1.5.5). Monolithic PHP 8.4+ app with `index.php` entrypoint, `src/` classes, and `Config.inc.php` at root.
 
 ## Entrypoint & routing
 
-`index.php` requires `core.php`, then calls `Router::dispatch()`.  
-All routes defined in `Router::getRoutes()` — add a row to register a new endpoint and create its `Handler\*` class in `src/Handler/`.
+`index.php` → `core.php` bootstrap → `Router::dispatch()`.  
+Routes live in `src/Router.php::getRoutes()` as `[METHOD, path, HandlerClass, [rate_limit, window]]`.  
+Register new endpoints by adding a route row and creating a `src/Handler/` class.
 
-The `Router` class (`src/Router.php`) matches `{method} {path}` patterns, supports `{id}` placeholders, and enforces per-route Redis-based rate limiting. Disable a route by adding its `"METHOD /path"` to the `disabled` array in `getRoutes()`.
-
-Both `/1/log` and `/v1/log` handle POST (create) and DELETE (delete with token auth via `Bearer <token>`). `/1/` endpoints are deprecated but kept for ecosystem migration.
-
-## Autoloader
-
-Single PSR-4-style autoloader in `core.php` maps namespace\Class → `src/Namespace/Class.php`.  
-Global classes (`Log`, `Id`, `Config`, `Router`, `Detective`, `ContentParser`, `ApiResponse`, `ApiError`, `RequestValidator`, `Handler`) live in `src/` and are loaded the same way.
-
-## Key features that differ from defaults
-
-- **Config system**: `Config::Get('name')` reads from `Config.inc.php`. The file returns a single array keyed by name. No .env, no framework config. Loaded once at boot in `core.php`.
-- **ID format**: 7 chars — 1 storage-prefix char (encoded via checksum) + 6 random chars. See `src/Id.php:97` for encoding logic.
-- **Storage**: MongoDB ↔ Filesystem 二选一（prefix `m`/`f`）。Redis 仅为可选缓存层（可开关，配置 TTL/maxSize）。`RedisStorage` 已删除。
-- **MongoDB TTL**: 索引建在 `created` 字段上，`expireAfterSeconds` = `storageTime`（默认 7 天）。`renew()` 更新 `created` 重置 TTL。
-- **Pre-filters**: Applied on input before storage — Trim, LimitBytes (10MB), LimitLines (50K), IPv4/IPv6/IPv6Short/UUID/XUID/SessionToken/ClientId/Coordinate/Username/AccessToken redaction. Configurable in `Config.inc.php`.
-- **Content parsing**: Accepts `application/x-www-form-urlencoded` or `application/json`. Supports gzip/deflate `Content-Encoding`. Extracts `content`, `metadata[]`, and `source` fields from JSON.
-- **API response**: Custom `ApiResponse` helper — `::success()`, `::error()`, `::json()`, `::text()`. Always JSON.
-- **API versioning**: Simultaneous `/1/` (deprecated) and `/v1/` endpoints. `LogHandler::handleCreate()` detects request path to return appropriate `raw` URL (`/1/raw/` vs `/v1/raw/`). `RequestValidator::extractIds()` supports both prefixes.
-- **Docker**: compose.yaml with nginx (port 9300), php-fpm (8.5), mongo, redis. Nginx roots at `/web/mclogs`.
-- **Handlers**: Endpoint logic in `src/Handler/` classes extending base `Handler`. Each class has a `handle()` method called by Router.
+Both `/1/` (deprecated) and `/v1/` paths coexist. `LogHandler` detects the request prefix to return the correct `raw` URL.
 
 ## Commands
 
 ```bash
 composer install                  # vendor/ (gitignored)
-composer test                     # Pest 测试套件
-composer stan                     # PHPStan 静态分析 (level 5)
+composer test                     # Pest suite
+composer test:architecture        # Pest architecture rules
+composer stan                     # PHPStan level 5
+composer cs-fix                   # php-cs-fixer
 ```
 
-No test/lint/typecheck tooling is configured. The project has no `composer scripts` section, no CI.
+No CI configured. Tests auto-create `Config.inc.php` from `Config.inc.example.php` if missing (`tests/bootstrap.php`).
 
-## Important constraints
+## Config
 
-- Requires PHP 8.4+, ext-json, ext-zlib, ext-mbstring, mongodb extension, redis extension.
-- MongoDB + Redis must be reachable (hostnames set in config files).
-- `Config.inc.php` is gitignored — copy `Config.inc.example.php` to `Config.inc.php` and fill in your values.
-- Do not change ID character set (`Config.inc.php` key `id.characters`) — it will break all existing log IDs.
-- Max upload: nginx `client_max_body_size 210m`, PHP `post_max_size 16M`, app `maxLength` 10MB.
-- README explicitly states: not recommended for private deployment without customization.
+`Config::Get('name')` auto-loads `Config.inc.php` on first call. The file returns a single array keyed by section. No `.env`, no framework config.
+
+`Config.inc.php` is gitignored. Copy `Config.inc.example.php` to create it.
+
+**Do not change `id.characters`** — it will break all existing log IDs.
+
+## Storage & cache
+
+- MongoDB (`m` prefix) ↔ Filesystem (`f` prefix), selected via `storage.storageId`.
+- A log id may hold multiple files: primary content in `data` plus additional files in `files: [{name, data, size}]`.
+- Multi-file upload via `POST /v1/log` JSON `files` array; `.zip` entries are expanded (`UploadParser`, path-traversal protected). Limits under `storage.uploadFiles` (200 files / 12MB total).
+- Redis is an optional cache layer (`cache.enabled`), with TTL and maxSize config. Multi-file logs exceeding `cache.maxSize` are skipped.
+- MongoDB TTL index on `created`, `expireAfterSeconds` = `storageTime` (default 7 days). `renew()` resets TTL.
+
+## ID format
+
+7 characters: 1 storage-prefix char (checksum-encoded) + 6 random chars from `id.characters`. See `src/Id.php:97` for encoding.
+
+## Request handling conventions
+
+Handlers extend `\Handler` base class, which provides:
+- `validateMethod()`, `extractId()`, `extractIds()`
+- `parseContent()`, `validateContentExists()`
+- `respondSuccess()`, `respondJson()`, `respondError()`, `respondText()`
+
+**Handlers must not access `$_SERVER`, `$_GET`, or `$_POST` directly** (enforced by architecture test). Use the base class helpers and `ContentParser` instead.
+
+`RequestValidator` is a global utility that does use `$_SERVER` — this is allowed.
+
+## Pre-filters
+
+Applied before storage. Configured in `Config.inc.php` under `filter.pre`:
+- Trim, LimitBytes (10MB), LimitLines (50K)
+- IPv4, IPv6, IPv6Short, UUID, XUID, SessionToken, ClientId, Coordinate, Username, AccessToken redaction
+
+## Content parsing
+
+`ContentParser` accepts `application/x-www-form-urlencoded` and `application/json`. Supports gzip/deflate `Content-Encoding`. Extracts `content`, `metadata[]`, `source`, and `files[]` fields from JSON. Raw file lists are normalized/expanded by `UploadParser`.
+
+## AI / LogAgent
+
+When `ai.agent.enabled` is true, `/v1/ai/*` routes run the model-driven tool loop (`Agent\LogAgent`):
+
+- `Client\MCPClient` — lightweight Streamable-HTTP MCP client (curl + JSON-RPC, zero deps). Used for `web_search_exa` (Exa hosted endpoint) and `rag_search` (user-hosted RAG, configured via `ai.mcp.rag.url`).
+- `Client\AIClient::streamChat()` — low-level streaming LLM request with multi-key rotation; parses `content`, `reasoning_content` and `tool_calls` from stream deltas.
+- Session-scoped file tools `list_log_files` / `read_log_file` operate only on the bound log id (`logId`), so the agent cannot read other logs.
+- SSE contract: `event: status` with `type` = thinking / tool / tool_result / limit, plus legacy `data:` content deltas and `event: done`. See `API.md`.
+
+## Docker
+
+```bash
+docker compose -f docker/compose.yaml up -d
+```
+
+- nginx listens on `9300`, root at `/web/mclogs`, `client_max_body_size 210m`
+- php-fpm 8.5 with `post_max_size = 16M`
+- mongo:latest, redis:7-alpine
+
+## Constraints
+
+- Requires PHP 8.4+, ext-json, ext-zlib, ext-mbstring, mongodb, redis.
+- MongoDB + Redis hostnames set in `Config.inc.php`.
+- Max upload: nginx 210MB, PHP 16MB, app 10MB (`maxLength`).
