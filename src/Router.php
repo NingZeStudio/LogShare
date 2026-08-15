@@ -59,7 +59,15 @@ class Router
 
     private static function matchPath(string $pattern, string $uri): ?array
     {
-        $regex = preg_replace('/\{([a-zA-Z_]+)\}/', '(?P<$1>[^/]+)', $pattern);
+        $regex = preg_replace_callback(
+            '/\{([a-zA-Z_]+)(?::([^}]+))?\}/',
+            function ($matches) {
+                $name = $matches[1];
+                $subPattern = $matches[2] ?? '[^/]+';
+                return '(?P<' . $name . '>' . $subPattern . ')';
+            },
+            $pattern
+        );
         $regex = '#^' . $regex . '$#';
 
         if (!preg_match($regex, $uri, $matches)) {
@@ -116,6 +124,8 @@ class Router
                 ['GET',     '/1/limits',           \Handler\LimitsHandler::class,    [36000, 60]          ],
                 ['GET',     '/1/filters',          \Handler\FiltersHandler::class,   [36000, 60]          ],
                 ['GET',     '/1/raw/{id}',         \Handler\RawHandler::class,       [36000, 60]          ],
+                ['GET',     '/1/raw/{id}/{filename:.+}', \Handler\RawHandler::class, [36000, 60]          ],
+                ['GET',     '/1/log/{id}',         \Handler\LogMetaHandler::class,   [36000, 60]          ],
                 ['GET',     '/1/insights/{id}',    \Handler\InsightsHandler::class,  [36000, 60]          ],
                 ['GET',     '/1/ai/{id}',          \Handler\AIHandler::class,        [36000, 60]          ],
                 ['POST',    '/1/ai/analyse',       \Handler\AIAnalyseHandler::class, [36000, 60]          ],
@@ -127,6 +137,8 @@ class Router
                 ['GET',     '/v1/limits',          \Handler\LimitsHandler::class,    [36000, 60]          ],
                 ['GET',     '/v1/filters',         \Handler\FiltersHandler::class,   [36000, 60]          ],
                 ['GET',     '/v1/raw/{id}',        \Handler\RawHandler::class,       [36000, 60]          ],
+                ['GET',     '/v1/raw/{id}/{filename:.+}', \Handler\RawHandler::class, [36000, 60]          ],
+                ['GET',     '/v1/log/{id}',        \Handler\LogMetaHandler::class,   [36000, 60]          ],
                 ['GET',     '/v1/insights/{id}',   \Handler\InsightsHandler::class,  [36000, 60]          ],
                 ['GET',     '/v1/ai/{id}',         \Handler\AIHandler::class,        [36000, 60]          ],
                 ['POST',    '/v1/ai/analyse',      \Handler\AIAnalyseHandler::class, [36000, 60]          ],

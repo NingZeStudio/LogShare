@@ -8,7 +8,8 @@ class RawHandler extends \Handler
     {
         try {
             $this->validateMethod('GET');
-            $logId = $this->extractId(['/1/raw/', '/v1/raw/']);
+            $logId = Router::param('id') ?? $this->extractId(['/1/raw/', '/v1/raw/']);
+            $filename = Router::param('filename');
         } catch (\ApiError $e) {
             $e->output();
         }
@@ -22,6 +23,15 @@ class RawHandler extends \Handler
         }
 
         $log->renew();
+
+        if ($filename !== null) {
+            $content = $log->getFile($filename);
+            if ($content === null) {
+                $error = new \ApiError(404, "File not found.");
+                $error->output();
+            }
+            $this->respondText($content, 'text/plain');
+        }
 
         $this->respondText($log->getContent(), 'text/plain');
     }
