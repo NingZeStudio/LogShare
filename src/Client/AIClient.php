@@ -10,37 +10,57 @@ class AIClient
     private const DEFAULT_CONNECT_TIMEOUT = 15;
     private const CACHE_TTL = 1800;
 
-    public static function analyzeStream(string $content, ?string $cacheKey = null, int $cacheTTL = self::CACHE_TTL): void
-    {
-        if ($cacheKey !== null) {
-            $cached = self::checkCache($cacheKey);
-            if ($cached !== null) {
-                self::startSSE();
-                echo "data: " . json_encode(['choices' => [['delta' => ['content' => $cached]]]], JSON_UNESCAPED_UNICODE) . "\n\n";
-                echo "event: done\ndata: {\"status\":\"completed\"}\n\n";
-                flush();
-                return;
-            }
-        }
-
+    /**
+     * Stream a chat completion with optional tools.
+     *
+     * The response is forwarded to the provided callbacks as SSE-style chunks arrive:
+     *  - $onDelta(string):  text content delta
+     *  - $onReasoning(string): reasoning_content delta (thinking trace)
+     *  - $onToolCalls(array): complete tool_calls once the stream finishes
+     *  - $onDone(string, bool): full text content + whether tool calls were present
+     *
+     * Multiple API keys are tried in order; a 429 or failed request switches to the next key.
+     *
+     * @param array $messages Full chat message list
+     * @param array $tools Tool definitions for function calling (empty to disable)
+     * @param callable $onDelta
+     * @param callable $onReasoning
+     * @param callable $onToolCalls
+     * @param callable $onDone
+     * @return void
+     * @throws \Exception When all API keys fail
+     */
+    public static function streamChat(
+        array $messages,
+        array $tools,
+        callable $onDelta,
+        callable $onReasoning,
+        callable $onToolCalls,
+        callable $onDone
+    ): void {
         $config = self::getConfig();
         $keys = $config['apiKeys'];
-
-        self::startSSE();
 
         $lastException = null;
         $success = false;
 
         foreach ($keys as $apiKey) {
             try {
-                $payload = self::buildPayload($content, $config['model']);
+                $payload = self::buildPayload($messages, $config['model'], $tools);
                 $buffer = '';
                 $fullContent = '';
+                $toolCalls = [];
 
                 $ch = curl_init($config['baseUrl']);
                 curl_setopt_array($ch, self::curlOptions($payload, $apiKey, $config['timeout']));
                 curl_setopt($ch, CURLOPT_RETURNTRANSFER, false);
-                curl_setopt($ch, CURLOPT_WRITEFUNCTION, function($ch, $data) use (&$buffer, &$fullContent, $cacheKey, $cacheTTL) {
+                curl_setopt($ch, CURLOPT_WRITEFUNCTION, function ($ch, $data) use (
+                    &$buffer,
+                    &$fullContent,
+                    &$toolCalls,
+                    $onDelta,
+                    $onReasoning
+                ) {
                     $bytesReceived = strlen($data);
                     $buffer .= $data;
 
@@ -48,34 +68,63 @@ class AIClient
                         $line = substr($buffer, 0, $pos);
                         $buffer = substr($buffer, $pos + 1);
 
-                        if (str_starts_with($line, 'data: ')) {
-                            $lineData = substr($line, 6);
-                            $trimmedData = trim($lineData);
+                        if (!str_starts_with($line, 'data: ')) {
+                            continue;
+                        }
 
-                            if ($trimmedData === '[DONE]') {
-                                self::writeCache($cacheKey, $fullContent, $cacheTTL);
-                                echo "event: done\ndata: {\"status\":\"completed\"}\n\n";
-                                flush();
-                                return $bytesReceived;
+                        $lineData = substr($line, 6);
+                        $trimmedData = trim($lineData);
+
+                        if ($trimmedData === '[DONE]') {
+                            return $bytesReceived;
+                        }
+
+                        $parsed = json_decode($lineData, true);
+                        if (!is_array($parsed)) {
+                            continue;
+                        }
+
+                        $delta = $parsed['choices'][0]['delta'] ?? [];
+
+                        if (isset($delta['content']) && is_string($delta['content'])) {
+                            $fullContent .= $delta['content'];
+                            $onDelta($delta['content']);
+                        }
+
+                        if (isset($delta['reasoning_content']) && is_string($delta['reasoning_content'])) {
+                            $onReasoning($delta['reasoning_content']);
+                        }
+
+                        if (isset($delta['tool_calls']) && is_array($delta['tool_calls'])) {
+                            foreach ($delta['tool_calls'] as $toolCall) {
+                                $index = $toolCall['index'] ?? 0;
+                                if (!isset($toolCalls[$index])) {
+                                    $toolCalls[$index] = [
+                                        'id' => null,
+                                        'type' => 'function',
+                                        'name' => null,
+                                        'arguments' => '',
+                                    ];
+                                }
+                                if (isset($toolCall['id'])) {
+                                    $toolCalls[$index]['id'] = $toolCall['id'];
+                                }
+                                if (isset($toolCall['function']['name'])) {
+                                    $toolCalls[$index]['name'] = $toolCall['function']['name'];
+                                }
+                                if (isset($toolCall['function']['arguments'])) {
+                                    $toolCalls[$index]['arguments'] .= $toolCall['function']['arguments'];
+                                }
                             }
-
-                            $parsed = json_decode($lineData, true);
-                            if (is_array($parsed) && isset($parsed['choices'][0]['delta']['content'])) {
-                                $fullContent .= $parsed['choices'][0]['delta']['content'];
-                            }
-
-                            echo "data: {$lineData}\n\n";
-                            flush();
                         }
                     }
 
-                    return $bytesReceived;
+                    return strlen($data);
                 });
 
                 curl_exec($ch);
                 $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
                 $curlError = curl_error($ch);
-                curl_close($ch);
 
                 if (!empty($curlError)) {
                     throw new \Exception('CURL error: ' . $curlError);
@@ -89,6 +138,9 @@ class AIClient
                 }
 
                 $success = true;
+                $toolCalls = array_values($toolCalls);
+                $onToolCalls($toolCalls);
+                $onDone($fullContent, !empty($toolCalls));
                 break;
 
             } catch (\Exception $e) {
@@ -100,9 +152,72 @@ class AIClient
         }
 
         if (!$success) {
-            echo "event: error\ndata: " . json_encode(['error' => '所有 API Key 均尝试失败: ' . ($lastException ? $lastException->getMessage() : '未知错误')], JSON_UNESCAPED_UNICODE) . "\n\n";
+            throw new \Exception('所有 API Key 均尝试失败: ' . ($lastException ? $lastException->getMessage() : '未知错误'));
+        }
+    }
+
+    /**
+     * Stream an AI analysis of a log content as SSE, with caching.
+     *
+     * @param string $content
+     * @param string|null $cacheKey
+     * @param int $cacheTTL
+     * @return void
+     */
+    public static function analyzeStream(string $content, ?string $cacheKey = null, int $cacheTTL = self::CACHE_TTL): void
+    {
+        if ($cacheKey !== null) {
+            $cached = self::checkCache($cacheKey);
+            if ($cached !== null) {
+                self::startSSE();
+                echo "data: " . json_encode(['choices' => [['delta' => ['content' => $cached]]]], JSON_UNESCAPED_UNICODE) . "\n\n";
+                echo "event: done\ndata: {\"status\":\"completed\"}\n\n";
+                flush();
+                return;
+            }
+        }
+
+        self::startSSE();
+
+        try {
+            self::streamChat(
+                self::analysisMessages($content),
+                [],
+                function (string $delta) {
+                    echo "data: " . json_encode(['choices' => [['delta' => ['content' => $delta]]]], JSON_UNESCAPED_UNICODE) . "\n\n";
+                    flush();
+                },
+                function (string $reasoning) {
+                    // Legacy plain analysis does not forward the thinking trace
+                },
+                function (array $toolCalls) {
+                    // No tools are registered for legacy analysis
+                },
+                function (string $fullContent, bool $hasToolCalls) use ($cacheKey, $cacheTTL) {
+                    if ($cacheKey !== null && $fullContent !== '') {
+                        self::writeCache($cacheKey, $fullContent, $cacheTTL);
+                    }
+                    echo "event: done\ndata: {\"status\":\"completed\"}\n\n";
+                    flush();
+                }
+            );
+        } catch (\Exception $e) {
+            echo "event: error\ndata: " . json_encode(['error' => $e->getMessage()], JSON_UNESCAPED_UNICODE) . "\n\n";
             flush();
         }
+    }
+
+    /**
+     * Build the default analysis message list for legacy analysis.
+     *
+     * @param string $content
+     * @return array
+     */
+    public static function analysisMessages(string $content): array
+    {
+        return [
+            ['role' => 'user', 'content' => "这怎么回事\n\n" . $content]
+        ];
     }
 
     private static function startSSE(): void
@@ -154,15 +269,19 @@ class AIClient
         ];
     }
 
-    private static function buildPayload(string $content, string $model): array
+    private static function buildPayload(array $messages, string $model, array $tools): array
     {
-        return [
+        $payload = [
             'model' => $model,
             'stream' => true,
-            'messages' => [
-                ['role' => 'user', 'content' => "这怎么回事\n\n" . $content]
-            ]
+            'messages' => $messages,
         ];
+
+        if (!empty($tools)) {
+            $payload['tools'] = $tools;
+        }
+
+        return $payload;
     }
 
     private static function curlOptions(array $payload, string $apiKey, int $timeout): array
