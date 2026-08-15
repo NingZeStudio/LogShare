@@ -51,6 +51,39 @@ test('LIKE fallback ranks title hits above body-only hits', function () {
     expect($results[0]['title'])->toBe('内存溢出专题');
 });
 
+test('search splits CJK multi-keyword queries with AND semantics', function () {
+    $pdo = $this->rag->getPdo();
+    $pdo->exec("INSERT INTO docs(title, body, source) VALUES
+        ('更换皮肤与披风', '支持微软账号更换皮肤，通过 Mojang API 上传', 'skin.md'),
+        ('账号管理', '管理微软账号与离线账号', 'account.md')");
+
+    // Both terms appear only in skin.md
+    $results = $this->rag->search('更换皮肤 微软账号', 5);
+    expect($results)->toHaveCount(1);
+    expect($results[0]['source'])->toBe('skin.md');
+});
+
+test('search split terms require all terms to match', function () {
+    $pdo = $this->rag->getPdo();
+    $pdo->exec("INSERT INTO docs(title, body, source) VALUES
+        ('控制布局编辑器', '用于编辑控制布局', 'editor.md'),
+        ('控件层', '承载控件的区域', 'layer.md')");
+
+    // "控制布局" only in editor.md, "控件层" only in layer.md -> no doc has both
+    $results = $this->rag->search('控制布局 控件层', 5);
+    expect($results)->toBe([]);
+});
+
+test('splitTerms splits on whitespace and punctuation', function () {
+    $ref = new ReflectionClass(RagSearch::class);
+    $method = $ref->getMethod('splitTerms');
+
+    expect($method->invoke(null, '更换皮肤，微软账号、离线账号'))->toBe(['更换皮肤', '微软账号', '离线账号']);
+    expect($method->invoke(null, '  a  b  a  '))->toBe(['a', 'b']);
+    expect($method->invoke(null, ''))->toBe([]);
+    expect($method->invoke(null, 'Forge;Fabric:NeoForge'))->toBe(['Forge', 'Fabric', 'NeoForge']);
+});
+
 test('search returns empty for unrelated queries', function () {
     expect($this->rag->search('zzznotexist', 5))->toBe([]);
     expect($this->rag->search('', 5))->toBe([]);

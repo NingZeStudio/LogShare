@@ -189,34 +189,63 @@ class RagSearch
             }
         }
 
-        // 2. LIKE fallback (catches CJK phrases and partial substrings).
-        //    Title hits rank above body hits; shorter chunks rank first.
-        $needle = '%' . str_replace(['%', '_'], ['\%', '\_'], $query) . '%';
-        $stmt = $this->pdo->prepare(
-            "SELECT title, body, source,
-                    (CASE WHEN title LIKE ? ESCAPE '\\' THEN 2 ELSE 0 END
-                          + CASE WHEN body LIKE ? ESCAPE '\\' THEN 1 ELSE 0 END) AS rank
-             FROM docs
-             WHERE title LIKE ? ESCAPE '\\' OR body LIKE ? ESCAPE '\\'
-             ORDER BY rank DESC, length(body) ASC
-             LIMIT " . $k
-        );
-        $stmt->execute([$needle, $needle, $needle, $needle]);
-        foreach ($stmt->fetchAll() as $row) {
-            $key = $row['source'] . '#' . $row['title'];
-            if (isset($seen[$key])) {
-                continue;
+        // 2. LIKE fallback with term splitting (AND semantics for CJK multi-keyword queries).
+        //    Each term must appear in the title or body; title hits rank above body hits.
+        $terms = self::splitTerms($query);
+        if (!empty($terms)) {
+            $rankParts = [];
+            $rankParams = [];
+            $whereParts = [];
+            $whereParams = [];
+
+            foreach ($terms as $term) {
+                $like = '%' . str_replace(['\\', '%', '_'], ['\\\\', '\%', '\_'], $term) . '%';
+                $rankParts[] = "(CASE WHEN title LIKE ? ESCAPE '\\' THEN 2 ELSE 0 END + CASE WHEN body LIKE ? ESCAPE '\\' THEN 1 ELSE 0 END)";
+                $rankParams[] = $like;
+                $rankParams[] = $like;
+                $whereParts[] = "(title LIKE ? ESCAPE '\\' OR body LIKE ? ESCAPE '\\')";
+                $whereParams[] = $like;
+                $whereParams[] = $like;
             }
-            $seen[$key] = true;
-            $results[] = [
-                'title' => $row['title'],
-                'body' => $row['body'],
-                'source' => $row['source'],
-                'score' => 'fallback',
-            ];
+
+            $sql = "SELECT title, body, source, (" . implode(' + ', $rankParts) . ") AS rank
+                    FROM docs WHERE " . implode(' AND ', $whereParts) . "
+                    ORDER BY rank DESC, length(body) ASC LIMIT " . $k;
+            $stmt = $this->pdo->prepare($sql);
+            $stmt->execute(array_merge($rankParams, $whereParams));
+
+            foreach ($stmt->fetchAll() as $row) {
+                $key = $row['source'] . '#' . $row['title'];
+                if (isset($seen[$key])) {
+                    continue;
+                }
+                $seen[$key] = true;
+                $results[] = [
+                    'title' => $row['title'],
+                    'body' => $row['body'],
+                    'source' => $row['source'],
+                    'score' => 'fallback',
+                ];
+            }
         }
 
         return array_slice($results, 0, $k);
+    }
+
+    /**
+     * Split a query into distinct non-empty terms on whitespace and punctuation.
+     *
+     * @param string $query
+     * @return array<int, string>
+     */
+    private static function splitTerms(string $query): array
+    {
+        $terms = preg_split('/[\s,，、;；:：.。!！?？\t]+/u', $query);
+        if ($terms === false) {
+            return [];
+        }
+
+        return array_values(array_unique(array_filter(array_map('trim', $terms), fn($t) => $t !== '')));
     }
 
     /**
