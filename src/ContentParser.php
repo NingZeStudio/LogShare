@@ -127,6 +127,15 @@ class ContentParser
             $result['source'] = substr($data['source'], 0, 64);
         }
 
+        // Parse additional files (multi-file uploads)
+        if (isset($data['files']) && is_array($data['files'])) {
+            $files = UploadParser::parseFiles($data['files']);
+            if ($files instanceof ApiError) {
+                return $files;
+            }
+            $result['files'] = $files;
+        }
+
         return $result;
     }
 }
