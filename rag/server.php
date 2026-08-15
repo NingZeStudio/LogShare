@@ -13,7 +13,7 @@
 
 require_once __DIR__ . '/RagSearch.php';
 
-$dbPath = getenv('RAG_DB_PATH') ?: (__DIR__ . '/index.db');
+$dbPath = RagSearch::resolveDbPath();
 
 header('Content-Type: application/json');
 header('Cache-Control: no-cache');

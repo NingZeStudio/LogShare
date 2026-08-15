@@ -103,10 +103,13 @@ return [
                 'headers' => [],
             ],
             'rag' => [
-                // 本地 RAG MCP server（SQLite FTS5）：php -S 127.0.0.1:8081 rag/server.php
-                // 先构建索引：php rag/build_index.php
-                'url' => null,
+                // 内置 RAG MCP server（SQLite FTS5 纯本地检索）。
+                // Docker Compose 已包含 rag 服务，默认 url 指向服务名；
+                // 本地开发可改用 http://127.0.0.1:8081（先 php rag/build_index.php）。
+                'url' => 'http://rag:8081',
                 'headers' => [],
+                // SQLite 数据库路径（相对项目根）
+                'db' => 'rag/index.db',
             ],
         ],
     ],

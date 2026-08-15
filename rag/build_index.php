@@ -15,7 +15,7 @@ require_once __DIR__ . '/RagSearch.php';
 
 $ragDir = __DIR__;
 $knowledgeDir = $argv[1] ?? ($ragDir . '/knowledge');
-$dbPath = $argv[2] ?? (getenv('RAG_DB_PATH') ?: $ragDir . '/index.db');
+$dbPath = $argv[2] ?? RagSearch::resolveDbPath();
 
 echo "RAG 索引构建\n";
 echo "  知识库目录: {$knowledgeDir}\n";
