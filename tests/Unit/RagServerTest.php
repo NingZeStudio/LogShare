@@ -14,11 +14,13 @@ beforeAll(function () {
     $GLOBALS['rag_db'] = $dbPath;
 
     $port = 19300 + mt_rand(1, 400);
+    $logFile = CORE_PATH . '/tmp/rag_server_test_' . uniqid() . '.log';
     $cmd = sprintf(
-        'RAG_DB_PATH=%s php -S 127.0.0.1:%d %s > /dev/null 2>&1 & echo $!',
+        'RAG_DB_PATH=%s php -S 127.0.0.1:%d %s > %s 2>&1 & echo $!',
         escapeshellarg($dbPath),
         $port,
-        escapeshellarg(CORE_PATH . '/rag/server.php')
+        escapeshellarg(CORE_PATH . '/rag/server.php'),
+        escapeshellarg($logFile)
     );
     $pid = (int) trim((string) shell_exec($cmd));
 
@@ -34,8 +36,10 @@ beforeAll(function () {
     }
 
     if (!$ready) {
-        throw new RuntimeException('RAG server failed to start');
+        $stderr = is_file($logFile) ? trim((string) file_get_contents($logFile)) : '';
+        throw new RuntimeException('RAG server failed to start' . ($stderr !== '' ? ': ' . $stderr : ''));
     }
+    @unlink($logFile);
 
     $GLOBALS['rag_url'] = 'http://127.0.0.1:' . $port;
     $GLOBALS['rag_pid'] = $pid;

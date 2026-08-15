@@ -40,6 +40,17 @@ test('search matches CJK phrases via LIKE fallback', function () {
     expect($results[0]['score'])->toBe('fallback');
 });
 
+test('LIKE fallback ranks title hits above body-only hits', function () {
+    $pdo = $this->rag->getPdo();
+    $pdo->exec("INSERT INTO docs(title, body, source) VALUES
+        ('内存溢出专题', '详细讨论内存泄漏与 GC 调优', 'mem.md'),
+        ('其他', '这里提到了内存，但正文无关紧要', 'other.md')");
+
+    $results = $this->rag->search('内存', 5);
+    expect(count($results))->toBeGreaterThanOrEqual(2);
+    expect($results[0]['title'])->toBe('内存溢出专题');
+});
+
 test('search returns empty for unrelated queries', function () {
     expect($this->rag->search('zzznotexist', 5))->toBe([]);
     expect($this->rag->search('', 5))->toBe([]);

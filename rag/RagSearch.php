@@ -189,14 +189,19 @@ class RagSearch
             }
         }
 
-        // 2. LIKE fallback (catches CJK phrases and partial substrings)
+        // 2. LIKE fallback (catches CJK phrases and partial substrings).
+        //    Title hits rank above body hits; shorter chunks rank first.
         $needle = '%' . str_replace(['%', '_'], ['\%', '\_'], $query) . '%';
         $stmt = $this->pdo->prepare(
-            "SELECT title, body, source FROM docs
+            "SELECT title, body, source,
+                    (CASE WHEN title LIKE ? ESCAPE '\\' THEN 2 ELSE 0 END
+                          + CASE WHEN body LIKE ? ESCAPE '\\' THEN 1 ELSE 0 END) AS rank
+             FROM docs
              WHERE title LIKE ? ESCAPE '\\' OR body LIKE ? ESCAPE '\\'
+             ORDER BY rank DESC, length(body) ASC
              LIMIT " . $k
         );
-        $stmt->execute([$needle, $needle]);
+        $stmt->execute([$needle, $needle, $needle, $needle]);
         foreach ($stmt->fetchAll() as $row) {
             $key = $row['source'] . '#' . $row['title'];
             if (isset($seen[$key])) {
