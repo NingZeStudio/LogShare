@@ -25,7 +25,28 @@ class RedisMock
         return self::$data[$key];
     }
 
+    public function exists(string $key): bool
+    {
+        if (!isset(self::$data[$key])) {
+            return false;
+        }
+        if (isset(self::$ttl[$key]) && self::$ttl[$key] < time()) {
+            unset(self::$data[$key], self::$ttl[$key]);
+            return false;
+        }
+        return true;
+    }
+
     public function set(string $key, string $value, string|int $mode = 'EX', int $ttl = 0): bool
+    {
+        self::$data[$key] = $value;
+        if ($ttl > 0) {
+            self::$ttl[$key] = time() + $ttl;
+        }
+        return true;
+    }
+
+    public function setEx(string $key, int $ttl, string $value): bool
     {
         self::$data[$key] = $value;
         if ($ttl > 0) {

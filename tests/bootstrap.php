@@ -9,6 +9,10 @@ if (!file_exists(__DIR__ . '/../Config.inc.php')) {
     copy(__DIR__ . '/../Config.inc.example.php', __DIR__ . '/../Config.inc.php');
 }
 
+// Load mock classes before aliasing (they are outside the src/ autoloader)
+require_once __DIR__ . '/Mocks/RedisMock.php';
+require_once __DIR__ . '/Mocks/MongoDBMock.php';
+
 // Mock Redis/Mongo for unit tests
 if (!extension_loaded('redis')) {
     class_alias('Tests\Mocks\RedisMock', 'Redis');
