@@ -100,7 +100,7 @@ class Id
         $chars = str_split($config['characters']);
 
         if ($this->fullId === null) {
-            if ($this->rawId === null || $this->storageId === null) {
+            if ($this->rawId === '' || $this->storageId === '') {
                 throw new Exception("Raw and storage id cannot be empty to generate full id.");
             }
 

@@ -6,11 +6,7 @@ class FiltersHandler extends \Handler
 {
     public function handle(): void
     {
-        try {
-            $this->validateMethod('GET');
-        } catch (\ApiError $e) {
-            $e->output();
-        }
+        $this->validateMethod('GET');
 
         $filters = [
             [

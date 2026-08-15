@@ -6,12 +6,8 @@ class AIHandler extends \Handler
 {
     public function handle(): void
     {
-        try {
-            $this->validateMethod('GET');
-            $logId = $this->extractId(['/1/ai/', '/v1/ai/']);
-        } catch (\ApiError $e) {
-            $e->output();
-        }
+        $this->validateMethod('GET');
+        $logId = $this->extractId(['/1/ai/', '/v1/ai/']);
 
         $id = new \Id($logId);
         $log = new \Log($id);

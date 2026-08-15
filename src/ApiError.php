@@ -1,12 +1,13 @@
 <?php
 
-class ApiError implements JsonSerializable
+class ApiError extends \Exception implements JsonSerializable
 {
-    public function __construct(
-        protected int $httpCode,
-        protected string $message,
-    )
+    protected int $httpCode;
+
+    public function __construct(int $httpCode, string $message)
     {
+        $this->httpCode = $httpCode;
+        parent::__construct($message, $httpCode);
     }
 
     public function jsonSerialize(): array
@@ -20,11 +21,6 @@ class ApiError implements JsonSerializable
     public function getHttpCode(): int
     {
         return $this->httpCode;
-    }
-
-    public function getMessage(): string
-    {
-        return $this->message;
     }
 
     /**

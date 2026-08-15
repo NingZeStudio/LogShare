@@ -12,7 +12,7 @@ parameters:
     - src/Client/*
     - src/Storage/*
   ignoreErrors:
-    - '#Access to an undefined property#'
-    - '#Property .* does not exist#'
-  checkMissingIterableValueType: false
-  checkGenericClassInNonGenericObjectType: false
+    # Aternos Codex type hierarchy: analyse() lives on AnalysableLogInterface,
+    # while detect() returns the base LogInterface. Runtime classes implement both.
+    - message: '#Call to an undefined method Aternos\\Codex\\Log\\Log::analyse#'
+      path: src/Log.php

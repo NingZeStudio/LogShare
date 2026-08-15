@@ -8,16 +8,12 @@ class LogHandler extends \Handler
 {
     public function handle(): void
     {
-        try {
-            if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-                $this->handleCreate();
-            } elseif ($_SERVER['REQUEST_METHOD'] === 'DELETE') {
-                $this->handleDelete();
-            } else {
-                throw new \ApiError(405, "Method not allowed. Use POST to create or DELETE to delete.");
-            }
-        } catch (\ApiError $e) {
-            $e->output();
+        $this->validateMethod(['POST', 'DELETE']);
+
+        if ($this->requestMethod() === 'POST') {
+            $this->handleCreate();
+        } elseif ($this->requestMethod() === 'DELETE') {
+            $this->handleDelete();
         }
     }
 
@@ -53,7 +49,7 @@ class LogHandler extends \Handler
 
         $urls = \Config::Get('urls');
 
-        $apiPrefix = str_starts_with($_SERVER['REQUEST_URI'], '/v1/') ? 'v1' : '1';
+        $apiPrefix = $this->apiPrefix();
 
         $this->respondSuccess([
             'id' => $id->get(),
@@ -67,7 +63,7 @@ class LogHandler extends \Handler
     {
         $logIds = $this->extractIds(['/1/log/', '/v1/log/']);
 
-        $authorizationHeader = $_SERVER['HTTP_AUTHORIZATION'] ?? null;
+        $authorizationHeader = $this->authorizationHeader();
         $requestToken = null;
         if ($authorizationHeader && str_starts_with($authorizationHeader, 'Bearer ')) {
             $requestToken = substr($authorizationHeader, 7);

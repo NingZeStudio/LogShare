@@ -6,11 +6,7 @@ class AnalyseHandler extends \Handler
 {
     public function handle(): void
     {
-        try {
-            $this->validateMethod('POST');
-        } catch (\ApiError $e) {
-            $e->output();
-        }
+        $this->validateMethod('POST');
 
         $contentResult = $this->parseContent();
         $contentResult = $this->validateContentExists($contentResult);

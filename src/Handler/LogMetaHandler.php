@@ -6,12 +6,8 @@ class LogMetaHandler extends \Handler
 {
     public function handle(): void
     {
-        try {
-            $this->validateMethod('GET');
-            $logId = Router::param('id') ?? $this->extractId(['/1/log/', '/v1/log/']);
-        } catch (\ApiError $e) {
-            $e->output();
-        }
+        $this->validateMethod('GET');
+        $logId = \Router::param('id') ?? $this->extractId(['/1/log/', '/v1/log/']);
 
         $id = new \Id($logId);
         $log = new \Log($id);
@@ -37,7 +33,7 @@ class LogMetaHandler extends \Handler
     private function rawUrl(\Id $id): string
     {
         $urls = \Config::Get('urls');
-        $apiPrefix = str_starts_with($_SERVER['REQUEST_URI'], '/v1/') ? 'v1' : '1';
+        $apiPrefix = $this->apiPrefix();
         return $urls['apiBaseUrl'] . "/{$apiPrefix}/raw/" . $id->get();
     }
 }
