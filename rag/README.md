@@ -10,8 +10,19 @@ rag/
 ├── build_index.php    CLI：扫描 knowledge/ 构建索引
 ├── server.php         Streamable HTTP MCP server（JSON-RPC 2.0）
 ├── index.db           SQLite 索引（构建生成，路径由 ai.mcp.rag.db 指定，勿提交）
-└── knowledge/         静态知识库文档（Markdown / TXT）
+├── knowledge/         知识库正文（Markdown / TXT，见下）
+│   └── docs/          实际文档，按 `## ` 标题切块入索引
+└── public/            文档站静态资源（图片等，不参与索引）
 ```
+
+## 知识库文档
+
+`knowledge/docs/` 存放检索正文，`build_index.php` 递归索引其中所有 `.md` / `.txt` / `.log` 文件。
+
+- 每个 `## ` 二级标题作为一个检索单元（切块），标题权重高于正文，标题尽量用检索关键词
+- `public/` 为文档站静态资源（图片），位于 `knowledge/` 之外，不会被索引
+- 文档来源为 Markdown（如 VitePress），索引前应保持纯 Markdown（不含 `:::` 容器、HTML 标签、图片链接等噪声）
+- 引用具体错误类名、功能名、报错文本时检索命中率最高
 
 ## 使用
 
