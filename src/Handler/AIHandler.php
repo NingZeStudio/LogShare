@@ -23,6 +23,15 @@ class AIHandler extends \Handler
 
         $log->renew();
 
+        $agentConfig = \Config::Get('ai')['agent'] ?? [];
+        if ($agentConfig['enabled'] ?? false) {
+            \Agent\LogAgent::analyze($log->getContent(), [
+                'cacheKey' => "ai:analysis:" . $id->getRaw(),
+                'logId' => $id->get(),
+            ]);
+            return;
+        }
+
         \Client\AIClient::analyzeStream($log->getContent(), "ai:analysis:" . $id->getRaw());
     }
 }

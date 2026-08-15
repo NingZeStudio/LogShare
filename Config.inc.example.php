@@ -91,6 +91,22 @@ return [
         'baseUrl' => 'https://integrate.api.nvidia.com/v1/chat/completions',
         'model' => 'stepfun-ai/step-3.7-flash',
         'timeout' => 180,
+        'agent' => [
+            'enabled' => false,
+            'maxToolRounds' => 3,
+            'maxFileLines' => 500,
+            'maxFileBytes' => 16 * 1024,
+        ],
+        'mcp' => [
+            'webSearch' => [
+                'url' => 'https://mcp.exa.ai/mcp',
+                'headers' => [],
+            ],
+            'rag' => [
+                'url' => null,
+                'headers' => [],
+            ],
+        ],
     ],
 
 ];
