@@ -17,6 +17,8 @@ rag/
 
 数据库路径由 `Config.inc.php` 的 `ai.mcp.rag.db` 指定（相对项目根，默认 `rag/index.db`）；`RAG_DB_PATH` 环境变量仅作开发/测试覆盖。
 
+> **注意**：`server.php` / `build_index.php` 解析路径时会读取项目根 `Config.inc.php`（`ai.mcp.rag.db`）；若文件缺失则回退到默认 `rag/index.db`。RAG 服务与 LogShare 共用同一份配置。
+
 ### 1. 构建索引
 
 ```bash

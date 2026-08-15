@@ -5,6 +5,7 @@ parameters:
   level: 5
   paths:
     - src
+    - rag
   excludePaths:
     - src/Printer/*
     - src/Data/*

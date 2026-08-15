@@ -50,7 +50,9 @@ beforeAll(function () {
     }
 
     if (!$ready) {
-        throw new RuntimeException('RAG/LLM servers failed to start');
+        $ragErr = is_file(CORE_PATH . '/tmp/rag_loop_rag.err.log') ? trim((string) file_get_contents(CORE_PATH . '/tmp/rag_loop_rag.err.log')) : '';
+        $llmErr = is_file(CORE_PATH . '/tmp/rag_loop_llm.err.log') ? trim((string) file_get_contents(CORE_PATH . '/tmp/rag_loop_llm.err.log')) : '';
+        throw new RuntimeException('RAG/LLM servers failed to start' . ($ragErr !== '' ? ' [rag] ' . $ragErr : '') . ($llmErr !== '' ? ' [llm] ' . $llmErr : ''));
     }
 });
 

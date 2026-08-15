@@ -9,6 +9,10 @@
  *   php -S 127.0.0.1:8081 rag/server.php
  *
  * Configure LogShare with ai.mcp.rag.url = http://127.0.0.1:8081
+ *
+ * Security: this server has no authentication (internal knowledge base). Bind it
+ * to loopback for local use, or put it behind an nginx reverse proxy with access
+ * control when exposing it on a network.
  */
 
 require_once __DIR__ . '/RagSearch.php';
@@ -21,8 +25,9 @@ header('Cache-Control: no-cache');
 try {
     $rag = new RagSearch($dbPath);
 } catch (Throwable $e) {
+    error_log("[RAG] 数据库不可用: " . $e->getMessage());
     http_response_code(500);
-    echo json_encode(['jsonrpc' => '2.0', 'error' => ['code' => -32603, 'message' => 'RAG database unavailable: ' . $e->getMessage()]], JSON_UNESCAPED_UNICODE);
+    echo json_encode(['jsonrpc' => '2.0', 'error' => ['code' => -32603, 'message' => 'RAG database unavailable']], JSON_UNESCAPED_UNICODE);
     exit;
 }
 
