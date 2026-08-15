@@ -236,7 +236,20 @@ paths:
               properties:
                 content:
                   type: string
-                  description: Raw log content
+                  description: Raw log content (optional when `files` is provided)
+                files:
+                  type: array
+                  description: Additional files stored under the same ID. Each `content` may be plain text or a ZIP archive (auto-expanded when `name` ends with `.zip`). Limits: 200 files / 12MB total after expansion.
+                  items:
+                    type: object
+                    required: [name, content]
+                    properties:
+                      name:
+                        type: string
+                        description: File name, may include relative sub-paths
+                      content:
+                        type: string
+                        description: File content or ZIP archive bytes
                 metadata:
                   type: array
                   items:
@@ -316,6 +329,45 @@ paths:
         '429':
           $ref: '#/components/responses/RateLimited'
   /1/log/{id}:
+    get:
+      tags: [Logs]
+      summary: Get log metadata and file list
+      description: |
+        Returns log metadata (size, lines, timestamps) and the list of additional
+        files stored under this ID (without their content).
+        
+        (Deprecated; use /v1/log/{id} instead)
+      operationId: getLogMeta
+      deprecated: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: '^[a-zA-Z0-9]{7}$'
+          example: "aB3x9K"
+      responses:
+        '200':
+          description: Log metadata
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean, example: true }
+                  id: { type: string }
+                  files:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        name: { type: string }
+                        size: { type: integer }
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/RateLimited'
     delete:
       tags: [Logs]
       summary: Delete a single log (alternative path)
@@ -357,6 +409,50 @@ paths:
         '429':
           $ref: '#/components/responses/RateLimited'
   /v1/log/{id}:
+    get:
+      tags: [Logs]
+      summary: Get log metadata and file list
+      description: |
+        Returns log metadata (size, lines, timestamps) and the list of additional
+        files stored under this ID (without their content).
+      operationId: getLogMetaV1
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: '^[a-zA-Z0-9]{7}$'
+          example: "aB3x9K"
+      responses:
+        '200':
+          description: Log metadata
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean, example: true }
+                  message: { type: string, example: "Log metadata retrieved successfully" }
+                  id: { type: string, example: "aB3x9K" }
+                  size: { type: integer }
+                  lines: { type: integer }
+                  created: { type: integer, nullable: true }
+                  expires: { type: integer, nullable: true }
+                  metadata: { type: array, items: { $ref: '#/components/schemas/MetadataEntry' } }
+                  source: { type: string, nullable: true }
+                  files:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        name: { type: string }
+                        size: { type: integer }
+                  raw: { type: string }
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/RateLimited'
     delete:
       tags: [Logs]
       summary: Delete a single log (alternative path)
@@ -508,6 +604,43 @@ paths:
           $ref: '#/components/responses/NotFound'
         '429':
           $ref: '#/components/responses/RateLimited'
+  /1/raw/{id}/{filename}:
+    get:
+      tags: [Logs]
+      summary: Get a specific additional file of a log
+      description: |
+        Returns one additional file of a multi-file log as `text/plain`.
+        `filename` may contain sub-paths (URL-encoded). Path traversal is rejected.
+        
+        (Deprecated; use /v1/raw/{id}/{filename} instead)
+      operationId: getRawFile
+      deprecated: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: '^[a-zA-Z0-9]{7}$'
+          example: "aB3x9K"
+        - name: filename
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: '^[^/].*[^/]$'
+          example: "crash-reports/crash-01.txt"
+      responses:
+        '200':
+          description: File content
+          content:
+            text/plain:
+              schema:
+                type: string
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/RateLimited'
   /v1/raw/{id}:
     get:
       tags: [Logs]
@@ -534,6 +667,40 @@ paths:
                 [12:34:56] [Server thread/INFO]: Starting minecraft server version 1.20.1
                 [12:34:56] [Server thread/INFO]: Loading properties
                 ...
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+  /v1/raw/{id}/{filename}:
+    get:
+      tags: [Logs]
+      summary: Get a specific additional file of a log
+      description: |
+        Returns one additional file of a multi-file log as `text/plain`.
+        `filename` may contain sub-paths (URL-encoded). Path traversal is rejected.
+      operationId: getRawFileV1
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: '^[a-zA-Z0-9]{7}$'
+          example: "aB3x9K"
+        - name: filename
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: '^[^/].*[^/]$'
+          example: "crash-reports/crash-01.txt"
+      responses:
+        '200':
+          description: File content
+          content:
+            text/plain:
+              schema:
+                type: string
         '404':
           $ref: '#/components/responses/NotFound'
         '429':
@@ -644,8 +811,12 @@ paths:
       tags: [AI]
       summary: Stream AI analysis of a stored log
       description: |
-        Streams AI-generated analysis (markdown) via SSE. Requires NVIDIA API keys in config.
-        Response is `text/event-stream` with `data: <chunk>` lines.
+        Streams AI-generated analysis (markdown) via SSE. Response is `text/event-stream`
+        with `data: <chunk>` lines.
+        
+        When `ai.agent.enabled` is true this runs the LogAgent tool loop bound to this
+        log ID (file tools `list_log_files` / `read_log_file` are scoped to it) and emits
+        additional `event: status` events (`type`: thinking / tool / tool_result / limit).
       operationId: getAIAnalysisV1
       parameters:
         - name: id
@@ -729,6 +900,13 @@ paths:
       summary: Stream AI analysis of raw content
       description: |
         Same as `/v1/ai/{id}` but analyses provided content directly without storage.
+        
+        When `id` (a stored log ID) is provided, the AI agent gains access to that
+        log's files for multi-file comparison; `content` may then be omitted.
+        
+        When `ai.agent.enabled` is true the endpoint runs the LogAgent tool loop and
+        emits additional `event: status` events (`type`: thinking / tool / tool_result / limit)
+        alongside the legacy `data:` content lines.
       operationId: aiAnalyseRawV1
       requestBody:
         required: true
@@ -748,6 +926,11 @@ paths:
               properties:
                 content:
                   type: string
+                  description: Raw log content (optional when `id` is provided)
+                id:
+                  type: string
+                  description: Stored log ID to bind the session to (enables file tools)
+                  pattern: '^[a-zA-Z0-9]{7}$'
       responses:
         '200':
           description: SSE stream

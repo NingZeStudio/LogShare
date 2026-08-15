@@ -1,5 +1,25 @@
 # Changelog
 
+## 1.6.0 — 2026-08-15
+
+### ✨ 新功能
+
+- **多文件日志上传** — `POST /v1/log` 支持 `files` 数组，同一 ID 下可存多个文件（主文件 + 附加文件）；`.zip` 压缩包自动展开（含子目录，路径遍历防护，上限 200 文件 / 12MB）
+- **子文件读取** — 新增 `GET /v1/raw/{id}/{filename}`（支持子路径）与 `GET /v1/log/{id}`（元信息 + 文件列表）
+- **LogAgent（AI 智能体）** — 新增模型驱动工具循环 `Agent\LogAgent`：LLM 自主调用工具（网络搜索 / RAG / 会话日志文件），SSE 流式透传思维链与工具事件
+- **MCP 客户端** — 新增 `Client\MCPClient`（Streamable HTTP，零依赖），接入 Exa WebSearch 托管端点与自建 RAG server
+- **会话文件工具** — Agent 的 `list_log_files` / `read_log_file` 仅可访问当前分析日志 ID 下的文件，无法越权读取其他日志
+
+### 🔧 改进
+
+- `AIClient` 拆出底层 `streamChat()`，支持 content / reasoning / tool_calls 三分支流式解析，多 key 轮询保留
+- `Router` 支持 `{param:.+}` 通配段（子文件路由）
+- SSE 协议扩展 `event: status`（thinking / tool / tool_result / limit），兼容旧客户端
+
+### ⚠️ 配置变更
+
+- `ai.agent`（enabled / maxToolRounds / maxFileLines / maxFileBytes）与 `ai.mcp`（webSearch / rag）新增于 `Config.inc.example.php`，默认关闭
+
 ## 1.5.5 — 2026-07-28
 
 ### 🔧 改进
