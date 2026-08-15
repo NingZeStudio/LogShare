@@ -162,6 +162,36 @@ class LogAgent
             ];
         }
 
+        if ($logId !== null) {
+            $tools[] = [
+                'type' => 'function',
+                'function' => [
+                    'name' => 'list_log_files',
+                    'description' => '列出当前日志 ID 下的所有文件（含主文件与附加文件）。',
+                    'parameters' => [
+                        'type' => 'object',
+                        'properties' => new \stdClass(),
+                    ],
+                ],
+            ];
+            $tools[] = [
+                'type' => 'function',
+                'function' => [
+                    'name' => 'read_log_file',
+                    'description' => '读取当前日志下指定文件的指定行区间。主文件名为 main。',
+                    'parameters' => [
+                        'type' => 'object',
+                        'properties' => [
+                            'filename' => ['type' => 'string', 'description' => '文件名（主文件为 main，或使用 list_log_files 列出的名称）'],
+                            'start_line' => ['type' => 'number', 'description' => '起始行号（1 开始），默认 1'],
+                            'end_line' => ['type' => 'number', 'description' => '结束行号，默认到文件末尾'],
+                        ],
+                        'required' => ['filename'],
+                    ],
+                ],
+            ];
+        }
+
         return $tools;
     }
 
@@ -235,6 +265,12 @@ PROMPT;
                     $endpoint = $mcp['rag'] ?? [];
                     return self::callMcpTool('rag_search', $arguments, $endpoint);
 
+                case 'list_log_files':
+                    return self::listLogFiles($logId);
+
+                case 'read_log_file':
+                    return self::readLogFile($logId, $arguments);
+
                 default:
                     return '未知工具: ' . $name;
             }
@@ -257,6 +293,114 @@ PROMPT;
         $contents = $client->callTool($name, $arguments);
 
         return implode("\n\n", $contents);
+    }
+
+    /**
+     * List the files bound to the current log session.
+     *
+     * @param string|null $logId
+     * @return string
+     */
+    private static function listLogFiles(?string $logId): string
+    {
+        if ($logId === null) {
+            return '当前会话未绑定日志文件';
+        }
+
+        $log = self::loadSessionLog($logId);
+        if ($log === null) {
+            return '日志不存在: ' . $logId;
+        }
+
+        $lines = [
+            "日志 {$logId} 文件列表：",
+            sprintf('- main（主文件，%d 字节，%d 行）', $log->getSize(), $log->getLineNumbers()),
+        ];
+        foreach ($log->getFiles() as $file) {
+            $lines[] = sprintf('- %s（%d 字节，%d 行）', $file['name'], $file['size'], $log->getFileLineNumbers($file['name']));
+        }
+
+        return implode("\n", $lines);
+    }
+
+    /**
+     * Read a line range from a file bound to the current log session.
+     *
+     * @param string|null $logId
+     * @param array $arguments
+     * @return string
+     */
+    private static function readLogFile(?string $logId, array $arguments): string
+    {
+        if ($logId === null) {
+            return '当前会话未绑定日志文件';
+        }
+
+        $log = self::loadSessionLog($logId);
+        if ($log === null) {
+            return '日志不存在: ' . $logId;
+        }
+
+        $filename = $arguments['filename'] ?? '';
+        if ($filename === 'main' || $filename === '') {
+            $content = $log->getContent();
+        } else {
+            $content = $log->getFile($filename);
+            if ($content === null) {
+                return '文件不存在: ' . $filename;
+            }
+        }
+
+        $agentConfig = \Config::Get('ai')['agent'] ?? [];
+        $maxLines = (int) ($agentConfig['maxFileLines'] ?? 500);
+        $maxBytes = (int) ($agentConfig['maxFileBytes'] ?? 16 * 1024);
+
+        $allLines = explode("\n", $content);
+        $total = count($allLines);
+
+        $startLine = max(1, (int) ($arguments['start_line'] ?? 1));
+        $endLine = (int) ($arguments['end_line'] ?? $total);
+        if ($endLine <= 0 || $endLine > $total) {
+            $endLine = $total;
+        }
+        if ($endLine - $startLine + 1 > $maxLines) {
+            $endLine = $startLine + $maxLines - 1;
+        }
+
+        $slice = array_slice($allLines, $startLine - 1, $endLine - $startLine + 1);
+        $text = implode("\n", $slice);
+
+        $truncatedBytes = false;
+        if (strlen($text) > $maxBytes) {
+            $text = mb_substr($text, 0, $maxBytes);
+            $truncatedBytes = true;
+        }
+
+        $tail = '';
+        if ($truncatedBytes || $endLine < $total) {
+            $tail = "\n[已截断，可继续使用 read_log_file 传入 start_line 读取后续行]";
+        }
+
+        return sprintf(
+            "文件 %s（共 %d 行）\n第 %d-%d 行：\n%s%s",
+            $filename === '' ? 'main' : $filename,
+            $total,
+            $startLine,
+            $endLine,
+            $text,
+            $tail
+        );
+    }
+
+    /**
+     * @param string|null $logId
+     * @return \Log|null
+     */
+    private static function loadSessionLog(?string $logId): ?\Log
+    {
+        $id = new \Id($logId);
+        $log = new \Log($id);
+        return $log->exists() ? $log : null;
     }
 
     private static function truncateForModel(string $text): string
