@@ -2,6 +2,17 @@
 
 require_once(__DIR__ . '/core.php');
 
+// Global exception handler: converts any uncaught exception into a JSON error
+// response instead of leaking a PHP fatal/stack trace.
+set_exception_handler(function (\Throwable $e) {
+    if ($e instanceof ApiError) {
+        $e->output();
+    }
+
+    error_log("[Fatal] " . $e->getMessage() . ' @ ' . $e->getFile() . ':' . $e->getLine());
+    ApiResponse::error('Internal server error.', 500);
+});
+
 try {
     \Client\MongoDBClient::ensureIndexes();
 } catch (\Exception $e) {

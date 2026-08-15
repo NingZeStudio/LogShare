@@ -11,6 +11,10 @@ services:
       - php-fpm
     networks:
       - mclogs-network
+    # Upload size is enforced in layers:
+    #   nginx  client_max_body_size 210m (see mclogs.conf) → transport ceiling
+    #   php    post_max_size 16M (see mclogs.ini)          → fastcgi ceiling
+    #   app    storage.maxLength 10MB (Config.inc.php)      → business limit
 
   php-fpm:
     container_name: mclogs-php
