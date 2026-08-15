@@ -74,7 +74,8 @@ Applied before storage. Configured in `Config.inc.php` under `filter.pre`:
 
 When `ai.agent.enabled` is true, `/v1/ai/*` routes run the model-driven tool loop (`Agent\LogAgent`):
 
-- `Client\MCPClient` — lightweight Streamable-HTTP MCP client (curl + JSON-RPC, zero deps). Used for `web_search_exa` (Exa hosted endpoint) and `rag_search` (user-hosted RAG, configured via `ai.mcp.rag.url`).
+- `Client\MCPClient` — lightweight Streamable-HTTP MCP client (curl + JSON-RPC, zero deps). Used for `web_search_exa` (Exa hosted endpoint) and `rag_search`.
+- `rag/` — built-in RAG MCP server (`server.php`), pure local SQLite FTS5 (BM25) retrieval over static knowledge docs (`rag/knowledge/`). Build index via `php rag/build_index.php`, run via `php -S 127.0.0.1:8081 rag/server.php`, then set `ai.mcp.rag.url`.
 - `Client\AIClient::streamChat()` — low-level streaming LLM request with multi-key rotation; parses `content`, `reasoning_content` and `tool_calls` from stream deltas.
 - Session-scoped file tools `list_log_files` / `read_log_file` operate only on the bound log id (`logId`), so the agent cannot read other logs.
 - SSE contract: `event: status` with `type` = thinking / tool / tool_result / limit, plus legacy `data:` content deltas and `event: done`. See `API.md`.

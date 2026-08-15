@@ -103,6 +103,8 @@ return [
                 'headers' => [],
             ],
             'rag' => [
+                // 本地 RAG MCP server（SQLite FTS5）：php -S 127.0.0.1:8081 rag/server.php
+                // 先构建索引：php rag/build_index.php
                 'url' => null,
                 'headers' => [],
             ],

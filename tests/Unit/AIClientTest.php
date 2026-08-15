@@ -99,7 +99,7 @@ test('streamChat merges streamed tool_calls fragments', function () {
     $call = $received[0];
     expect($call['id'])->toBe('call_1');
     expect($call['name'])->toBe('web_search_exa');
-    expect(json_decode($call['arguments'], true))->toMatchArray(['query' => 'minecraft crash']);
+    expect(json_decode($call['arguments'], true))->toMatchArray(['query' => 'OutOfMemoryError']);
 });
 
 test('streamChat continues with tool result messages', function () {
