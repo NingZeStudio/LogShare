@@ -28,17 +28,24 @@ class LogHandler extends \Handler
 
         $metadata = [];
         $source = null;
+        $files = null;
         if (is_array($content)) {
             $metadata = $content['metadata'] ?? [];
             $source = $content['source'] ?? null;
+            $files = !empty($content['files']) ? $content['files'] : null;
             $content = $content['content'];
+
+            // Multi-file upload: fall back to the first file as the primary content
+            if (empty($content) && $files !== null) {
+                $content = $files[0]['data'] ?? '';
+            }
         }
 
         $log = new \Log();
         $token = new Token();
 
         try {
-            $id = $log->put($content, $token, $metadata, $source);
+            $id = $log->put($content, $token, $metadata, $source, $files);
         } catch (\Exception $e) {
             $error = new \ApiError(400, $e->getMessage());
             $error->output();

@@ -19,6 +19,10 @@ return [
         'storageTime' => 7 * 24 * 60 * 60,
         'maxLength' => 10 * 1024 * 1024,
         'maxLines' => 50_000,
+        'uploadFiles' => [
+            'maxFiles' => 200,
+            'maxTotalBytes' => 12 * 1024 * 1024,
+        ],
     ],
 
     /* ─── Cache (Redis) ──────────────────────────────────── */

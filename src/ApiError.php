@@ -17,6 +17,16 @@ class ApiError implements JsonSerializable
         ];
     }
 
+    public function getHttpCode(): int
+    {
+        return $this->httpCode;
+    }
+
+    public function getMessage(): string
+    {
+        return $this->message;
+    }
+
     /**
      * Output this error as a JSON response and terminate the script
      * @return never
