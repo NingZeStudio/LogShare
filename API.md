@@ -224,9 +224,11 @@ LogAgent 模式（`ai.agent.enabled`）会输出额外的 `event: status` 事件
 | 工具 | 说明 | 注册条件 |
 |------|------|----------|
 | `web_search_exa` | Exa 网络搜索 | 配置 `ai.mcp.webSearch.url` |
-| `rag_search` | 内部知识库检索 | 配置 `ai.mcp.rag.url` |
+| `rag_search` | 内置 RAG 知识库检索（SQLite FTS5） | 配置 `ai.mcp.rag.url` |
 | `list_log_files` | 列出当前会话日志的文件 | 请求绑定日志 ID |
 | `read_log_file` | 读取文件指定行区间 | 请求绑定日志 ID |
+
+> RAG 为内置服务（`rag/` 目录），SQLite FTS5 纯本地检索。构建索引 `php rag/build_index.php`；Docker Compose 已含 `rag` 容器（启动自动重建索引），默认 `ai.mcp.rag.url = http://rag:8081`，数据库路径由 `ai.mcp.rag.db` 指定。
 
 ---
 
