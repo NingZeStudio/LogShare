@@ -25,9 +25,15 @@ if ($hasToolResult) {
     $emit(json_encode(['choices' => [['delta' => [], 'finish_reason' => 'stop']]]));
     $emit('[DONE]');
 } elseif ($hasTools) {
-    $emit(json_encode(['choices' => [['delta' => ['role' => 'assistant', 'reasoning_content' => '我需要搜索', 'content' => ''], 'finish_reason' => null]]], JSON_UNESCAPED_UNICODE));
-    $emit(json_encode(['choices' => [['delta' => ['tool_calls' => [['index' => 0, 'id' => 'call_1', 'type' => 'function', 'function' => ['name' => 'web_search_exa', 'arguments' => '{"query":"minecraft']]]], 'finish_reason' => null]]], JSON_UNESCAPED_UNICODE));
-    $emit(json_encode(['choices' => [['delta' => ['tool_calls' => [['index' => 0, 'function' => ['arguments' => ' crash"}']]]], 'finish_reason' => null]]], JSON_UNESCAPED_UNICODE));
+    // Pick a tool name that the client actually registered, preferring rag_search
+    $toolNames = array_column($req['tools'] ?? [], 'function');
+    $toolNames = array_column($toolNames, 'name');
+    $toolName = in_array('rag_search', $toolNames, true) ? 'rag_search' : 'web_search_exa';
+
+    $emit(json_encode(['choices' => [['delta' => ['role' => 'assistant', 'reasoning_content' => '我需要检索', 'content' => ''], 'finish_reason' => null]]], JSON_UNESCAPED_UNICODE));
+    $emit(json_encode(['choices' => [['delta' => ['tool_calls' => [['index' => 0, 'id' => 'call_1', 'type' => 'function', 'function' => ['name' => $toolName, 'arguments' => '{"query":"OutOfMemoryError']]]], 'finish_reason' => null]]], JSON_UNESCAPED_UNICODE));
+    $emit(json_encode(['choices' => [['delta' => ['tool_calls' => [['index' => 0, 'function' => ['arguments' => '"']]]], 'finish_reason' => null]]], JSON_UNESCAPED_UNICODE));
+    $emit(json_encode(['choices' => [['delta' => ['tool_calls' => [['index' => 0, 'function' => ['arguments' => '}']]]], 'finish_reason' => null]]], JSON_UNESCAPED_UNICODE));
     $emit(json_encode(['choices' => [['delta' => [], 'finish_reason' => 'tool_calls']]]));
     $emit('[DONE]');
 } else {
