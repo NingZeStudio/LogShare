@@ -27,7 +27,8 @@ class RedisCache extends RedisClient implements CacheInterface
     public static function Get(string $key): ?string
     {
         self::Connect();
-        return self::$connection->get($key) ?: null;
+        $value = self::$connection->get($key);
+        return $value === false ? null : $value;
     }
 
     /**

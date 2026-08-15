@@ -127,3 +127,43 @@ test('Log put applies pre filters to additional files', function () {
 
     $loaded->delete();
 });
+test('FilesystemStorage Renew resets created timestamp', function () {
+    $data = $this->dataProp->getValue();
+    $data['filesystem']['path'] = substr($this->tmpDir, strlen(CORE_PATH)) . '/';
+    $this->dataProp->setValue(null, $data);
+
+    $id = FilesystemStorage::Put('main', null, [], null);
+    $before = FilesystemStorage::Get($id);
+    expect($before['created'])->toBeInt();
+
+    sleep(1);
+    expect(FilesystemStorage::Renew($id))->toBeTrue();
+    $after = FilesystemStorage::Get($id);
+    expect($after['created'])->toBeGreaterThanOrEqual($before['created']);
+
+    FilesystemStorage::Delete($id);
+});
+
+test('FilesystemStorage CleanupExpired removes expired logs only', function () {
+    $data = $this->dataProp->getValue();
+    $data['filesystem']['path'] = substr($this->tmpDir, strlen(CORE_PATH)) . '/';
+    $data['storage']['storageTime'] = 3600;
+    $this->dataProp->setValue(null, $data);
+
+    $idExpired = FilesystemStorage::Put('expired', null, [], null);
+    $idFresh = FilesystemStorage::Put('fresh', null, [], null);
+
+    // Backdate the expired document's created field
+    $path = $this->tmpDir . '/' . $idExpired->getRaw();
+    $doc = json_decode(file_get_contents($path), true);
+    $doc['created'] = time() - 7200;
+    file_put_contents($path, json_encode($doc));
+
+    $deleted = FilesystemStorage::CleanupExpired();
+    expect($deleted)->toBe(1);
+
+    expect(FilesystemStorage::Get($idExpired))->toBeNull();
+    expect(FilesystemStorage::Get($idFresh))->not->toBeNull();
+
+    FilesystemStorage::Delete($idFresh);
+});

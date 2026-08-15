@@ -112,7 +112,61 @@ class FilesystemStorage implements StorageInterface
             return false;
         }
 
-        return touch($path);
+        $content = file_get_contents($path);
+        if ($content === false) {
+            return false;
+        }
+
+        $document = json_decode($content, true);
+        if (!is_array($document)) {
+            return false;
+        }
+
+        // Reset created to now, mirroring the MongoDB TTL reset behaviour.
+        $document['created'] = time();
+
+        return file_put_contents($path, json_encode($document, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)) !== false;
+    }
+
+    /**
+     * Delete expired log files. Files whose `created` timestamp is older than
+     * `storage.storageTime` are removed. Falls back to file mtime for documents
+     * without a `created` field.
+     *
+     * @return int Number of deleted files
+     */
+    public static function CleanupExpired(): int
+    {
+        $config = \Config::Get("filesystem");
+        $basePath = CORE_PATH . $config['path'];
+
+        $storageConfig = \Config::Get('storage');
+        $storageTime = (int) ($storageConfig['storageTime'] ?? (7 * 24 * 60 * 60));
+        $now = time();
+        $deleted = 0;
+
+        if (!is_dir($basePath)) {
+            return 0;
+        }
+
+        foreach (glob($basePath . '*') ?: [] as $file) {
+            if (!is_file($file)) {
+                continue;
+            }
+
+            $content = @file_get_contents($file);
+            $document = $content !== false ? json_decode($content, true) : null;
+            $created = is_array($document) && isset($document['created'])
+                ? (int) $document['created']
+                : @filemtime($file);
+
+            if ($created > 0 && $created + $storageTime < $now) {
+                @unlink($file);
+                $deleted++;
+            }
+        }
+
+        return $deleted;
     }
 
     public static function Delete(\Id $id): bool
