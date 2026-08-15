@@ -22,11 +22,15 @@ composer stan                     # PHPStan level 5
 composer cs-fix                   # php-cs-fixer
 ```
 
-No CI configured. Tests auto-create `Config.inc.php` from `Config.inc.example.php` if missing (`tests/bootstrap.php`).
+CI runs in `.github/workflows/ci.yaml` (tests on PHP 8.4/8.5, PHPStan, architecture tests, docker build). Tests auto-create `Config.inc.php` from `Config.inc.example.php` if missing (`tests/bootstrap.php`).
+
+> **Termux note:** run `PHPSTAN_TURBO=0 composer stan` — PHPStan's turbo extension is not available on Termux (needs glibc). CI on Ubuntu is unaffected.
 
 ## Config
 
 `Config::Get('name')` auto-loads `Config.inc.php` on first call. The file returns a single array keyed by section. No `.env`, no framework config.
+
+Environment overrides applied in `Config::load()` (see `src/Config.php`): `MONGODB_URI`, `REDIS_HOST`, `REDIS_PORT`, `REDIS_TIMEOUT`, `AI_API_KEYS` (comma-separated), `AI_BASE_URL`, `AI_MODEL`.
 
 `Config.inc.php` is gitignored. Copy `Config.inc.example.php` to create it.
 
@@ -39,6 +43,7 @@ No CI configured. Tests auto-create `Config.inc.php` from `Config.inc.example.ph
 - Multi-file upload via `POST /v1/log` JSON `files` array; `.zip` entries are expanded (`UploadParser`, path-traversal protected). Limits under `storage.uploadFiles` (200 files / 12MB total).
 - Redis is an optional cache layer (`cache.enabled`), with TTL and maxSize config. Multi-file logs exceeding `cache.maxSize` are skipped.
 - MongoDB TTL index on `created`, `expireAfterSeconds` = `storageTime` (default 7 days). `renew()` resets TTL.
+- Filesystem storage (`f`) has no TTL index; `FilesystemStorage::Renew()` updates the stored `created` field, and `CleanupExpired()` deletes expired files. `Log::renew()` triggers a probabilistic (1%) cleanup sweep.
 
 ## ID format
 
