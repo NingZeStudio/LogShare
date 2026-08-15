@@ -31,6 +31,35 @@ class RagSearch
         return $this->pdo;
     }
 
+    /**
+     * Resolve the SQLite database path.
+     *
+     * Priority: RAG_DB_PATH env var (dev/tests override) > ai.mcp.rag.db in
+     * Config.inc.php > default <project>/rag/index.db.
+     *
+     * @return string
+     */
+    public static function resolveDbPath(): string
+    {
+        $projectRoot = dirname(__DIR__);
+
+        $env = getenv('RAG_DB_PATH');
+        if (is_string($env) && $env !== '') {
+            return $env;
+        }
+
+        $configFile = $projectRoot . '/Config.inc.php';
+        if (file_exists($configFile)) {
+            $data = require $configFile;
+            $db = $data['ai']['mcp']['rag']['db'] ?? null;
+            if (is_string($db) && $db !== '') {
+                return str_starts_with($db, '/') ? $db : $projectRoot . '/' . $db;
+            }
+        }
+
+        return $projectRoot . '/index.db';
+    }
+
     private function ensureSchema(): void
     {
         $this->pdo->exec(

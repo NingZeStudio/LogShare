@@ -30,6 +30,20 @@ services:
     depends_on:
       - mongo
       - redis
+      - rag
+    networks:
+      - mclogs-network
+
+  rag:
+    # Built-in RAG MCP server (SQLite FTS5). Index is (re)built on every start
+    # from rag/knowledge/; database path comes from ai.mcp.rag.db in Config.inc.php.
+    image: php:8.5-cli
+    container_name: mclogs-rag
+    working_dir: /web/mclogs
+    volumes:
+      - ../:/web/mclogs
+    command: >
+      sh -c "php rag/build_index.php && exec php -S 0.0.0.0:8081 rag/server.php"
     networks:
       - mclogs-network
 
