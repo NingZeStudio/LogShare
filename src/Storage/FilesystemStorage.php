@@ -7,7 +7,7 @@ use Data\Token;
 
 class FilesystemStorage implements StorageInterface
 {
-    public static function Put(string $data, ?Token $token = null, array $metadata = [], ?string $source = null): ?\Id
+    public static function Put(string $data, ?Token $token = null, array $metadata = [], ?string $source = null, ?array $files = null): ?\Id
     {
         $config = \Config::Get("filesystem");
         $basePath = CORE_PATH . $config['path'];
@@ -40,6 +40,17 @@ class FilesystemStorage implements StorageInterface
             $document['source'] = substr($source, 0, 64);
         }
 
+        if (!empty($files)) {
+            $document['files'] = array_values(array_map(
+                fn($file) => [
+                    'name' => $file['name'],
+                    'data' => $file['data'],
+                    'size' => strlen($file['data']),
+                ],
+                $files
+            ));
+        }
+
         file_put_contents($basePath . $id->getRaw(), json_encode($document, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
         return $id;
     }
@@ -63,12 +74,31 @@ class FilesystemStorage implements StorageInterface
             return null;
         }
 
+        $files = [];
+        if (!empty($document['files'])) {
+            foreach ($document['files'] as $file) {
+                if ($includeContent) {
+                    $files[] = [
+                        'name' => $file['name'] ?? '',
+                        'data' => $file['data'] ?? '',
+                        'size' => isset($file['size']) ? (int) $file['size'] : strlen($file['data'] ?? ''),
+                    ];
+                } else {
+                    $files[] = [
+                        'name' => $file['name'] ?? '',
+                        'size' => isset($file['size']) ? (int) $file['size'] : strlen($file['data'] ?? ''),
+                    ];
+                }
+            }
+        }
+
         return [
             'data' => $document['data'] ?? null,
             'token' => $document['token'] ?? null,
             'metadata' => $document['metadata'] ?? [],
             'source' => $document['source'] ?? null,
             'created' => $document['created'] ?? null,
+            'files' => $files,
         ];
     }
 

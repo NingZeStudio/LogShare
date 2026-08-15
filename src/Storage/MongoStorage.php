@@ -19,7 +19,7 @@ class MongoStorage extends \Client\MongoDBClient implements StorageInterface
      * @param string|null $source
      * @return ?\Id ID or null
      */
-    public static function Put(string $data, ?Token $token = null, array $metadata = [], ?string $source = null): ?\Id
+    public static function Put(string $data, ?Token $token = null, array $metadata = [], ?string $source = null, ?array $files = null): ?\Id
     {
         $id = new \Id();
         $id->setStorage("m");
@@ -46,6 +46,17 @@ class MongoStorage extends \Client\MongoDBClient implements StorageInterface
             $document["source"] = substr($source, 0, 64);
         }
 
+        if (!empty($files)) {
+            $document["files"] = array_values(array_map(
+                fn($file) => [
+                    'name' => $file['name'],
+                    'data' => $file['data'],
+                    'size' => strlen($file['data']),
+                ],
+                $files
+            ));
+        }
+
         self::getCollection()->insertOne($document);
 
         return $id;
@@ -62,7 +73,7 @@ class MongoStorage extends \Client\MongoDBClient implements StorageInterface
     {
         $options = [];
         if (!$includeContent) {
-            $options['projection'] = ['data' => 0];
+            $options['projection'] = ['data' => 0, 'files.data' => 0];
         }
 
         $result = self::getCollection()->findOne(["_id" => $id->getRaw()], $options);
@@ -76,12 +87,31 @@ class MongoStorage extends \Client\MongoDBClient implements StorageInterface
             return null;
         }
 
+        $files = [];
+        if (!empty($result->files)) {
+            foreach ($result->files as $file) {
+                if ($includeContent) {
+                    $files[] = [
+                        'name' => $file->name ?? '',
+                        'data' => $file->data ?? '',
+                        'size' => isset($file->size) ? (int) $file->size : strlen($file->data ?? ''),
+                    ];
+                } else {
+                    $files[] = [
+                        'name' => $file->name ?? '',
+                        'size' => isset($file->size) ? (int) $file->size : strlen($file->data ?? ''),
+                    ];
+                }
+            }
+        }
+
         return [
             'data' => $result->data ?? null,
             'token' => $result->token ?? null,
             'metadata' => $result->metadata ?? [],
             'source' => $result->source ?? null,
             'created' => $result->created ?? null,
+            'files' => $files,
         ];
     }
 

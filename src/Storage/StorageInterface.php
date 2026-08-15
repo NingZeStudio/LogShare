@@ -14,9 +14,10 @@ interface StorageInterface
      * @param Token|null $token
      * @param MetadataEntry[] $metadata
      * @param string|null $source
+     * @param array|null $files Additional files stored under the same id: [['name' => string, 'data' => string, 'size' => int]]
      * @return ?\Id ID or null
      */
-    public static function Put(string $data, ?Token $token = null, array $metadata = [], ?string $source = null): ?\Id;
+    public static function Put(string $data, ?Token $token = null, array $metadata = [], ?string $source = null, ?array $files = null): ?\Id;
 
     /**
      * Get some data from the storage by id

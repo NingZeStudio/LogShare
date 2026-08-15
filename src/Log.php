@@ -35,6 +35,7 @@ class Log
     private ?string $source = null;
     private ?int $created = null;
     private ?int $expires = null;
+    private array $files = [];
     protected \Aternos\Codex\Log\Log $log;
     protected ?ObfuscatedString $obfuscatedContent = null;
 
@@ -128,8 +129,16 @@ class Log
         $this->token = isset($result['token']) ? new Token($result['token']) : null;
         $this->metadata = MetadataEntry::allFromArray($result['metadata'] ?? []);
         $this->source = $result['source'] ?? null;
-        $this->created = $result['created']?->toDateTime()->getTimestamp() ?? null;
+        $createdValue = $result['created'] ?? null;
+        if ($createdValue instanceof \MongoDB\BSON\UTCDateTime) {
+            $this->created = $createdValue->toDateTime()->getTimestamp();
+        } elseif (is_numeric($createdValue)) {
+            $this->created = (int) $createdValue;
+        } else {
+            $this->created = null;
+        }
         $this->expires = $this->created !== null ? $this->created + $config['storageTime'] : null;
+        $this->files = $result['files'] ?? [];
         $this->exists = true;
 
         $this->analyse();
@@ -347,15 +356,36 @@ class Log
      * @param Token|null $token
      * @param MetadataEntry[] $metadata
      * @param string|null $source
+     * @param array|null $files Additional files stored under the same id: [['name' => string, 'data' => string]]
      * @return ?Id
      */
-    public function put(string $data, ?Token $token = null, array $metadata = [], ?string $source = null): ?Id
+    public function put(string $data, ?Token $token = null, array $metadata = [], ?string $source = null, ?array $files = null): ?Id
     {
         $this->data = $data;
         $this->preFilter();
         $this->token = $token ?? new Token();
         $this->metadata = $metadata;
         $this->source = $source;
+        $this->files = [];
+
+        if (!empty($files)) {
+            $filteredFiles = [];
+            foreach ($files as $file) {
+                $name = $file['name'] ?? '';
+                $content = $file['data'] ?? '';
+                $filteredContent = $content;
+                $filterConfig = Config::Get('filter');
+                foreach ($filterConfig['pre'] as $preFilterClass) {
+                    $filteredContent = $preFilterClass::filter($filteredContent);
+                }
+                $filteredFiles[] = [
+                    'name' => $name,
+                    'data' => $filteredContent,
+                    'size' => strlen($filteredContent),
+                ];
+            }
+            $this->files = $filteredFiles;
+        }
 
         $config = Config::Get('storage');
 
@@ -364,18 +394,22 @@ class Log
          */
         $storage = $config['storages'][$config['storageId']]['class'];
 
-        $this->id = $storage::Put($this->data, $this->token, $this->metadata, $this->source);
+        $this->id = $storage::Put($this->data, $this->token, $this->metadata, $this->source, $this->files);
         $this->exists = true;
 
         if ($this->id !== null && $this->isCacheEnabled()) {
-            if ($this->shouldCacheToRedis($this->data)) {
+            $filesBytes = array_sum(array_map(fn($file) => strlen($file['data'] ?? ''), $this->files));
+            $cacheConfig = Config::Get('cache');
+            $maxCacheSize = $cacheConfig['maxSize'] ?? (600 * 1024);
+            if ($this->shouldCacheToRedis($this->data) && strlen($this->data) + $filesBytes <= $maxCacheSize) {
                 try {
                     $this->saveToRedisCache([
                         'data' => $this->data,
                         'token' => $this->token->get(),
                         'metadata' => array_map(fn($entry) => $entry->jsonSerialize(), $this->metadata),
                         'source' => $this->source,
-                        'created' => time()
+                        'created' => time(),
+                        'files' => $this->files,
                     ]);
                     error_log("[Redis] 缓存写入成功: " . $this->id->getRaw());
                 } catch (\Exception $e) {
@@ -500,6 +534,60 @@ class Log
     }
 
     /**
+     * Get the list of additional files stored under this log id
+     *
+     * Each entry: ['name' => string, 'size' => int]
+     *
+     * @return array<int, array{name: string, size: int}>
+     */
+    public function getFiles(): array
+    {
+        return array_map(fn($file) => [
+            'name' => $file['name'] ?? '',
+            'size' => isset($file['size']) ? (int) $file['size'] : strlen($file['data'] ?? ''),
+        ], $this->files);
+    }
+
+    /**
+     * Get the raw content of an additional file by its name
+     *
+     * @param string $name
+     * @return string|null
+     */
+    public function getFile(string $name): ?string
+    {
+        foreach ($this->files as $file) {
+            if (($file['name'] ?? '') === $name) {
+                return $file['data'] ?? '';
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Check whether an additional file exists under this log id
+     *
+     * @param string $name
+     * @return bool
+     */
+    public function hasFile(string $name): bool
+    {
+        return $this->getFile($name) !== null;
+    }
+
+    /**
+     * Get the line count of an additional file
+     *
+     * @param string $name
+     * @return int 0 if the file does not exist
+     */
+    public function getFileLineNumbers(string $name): int
+    {
+        $content = $this->getFile($name);
+        return $content === null ? 0 : substr_count($content, "\n") + 1;
+    }
+
+    /**
      * Get the created timestamp
      *
      * @return int|null
@@ -573,6 +661,7 @@ class Log
             'token' => $decoded['token'] ?? null,
             'metadata' => $decoded['metadata'] ?? [],
             'source' => $decoded['source'] ?? null,
+            'files' => $decoded['files'] ?? [],
             'created' => isset($decoded['created']) ? new \MongoDB\BSON\UTCDateTime($decoded['created'] * 1000) : null,
         ];
     }
