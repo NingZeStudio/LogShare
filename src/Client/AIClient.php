@@ -50,6 +50,7 @@ class AIClient
                 $buffer = '';
                 $fullContent = '';
                 $toolCalls = [];
+                $responseBody = '';
 
                 $ch = curl_init($config['baseUrl']);
                 curl_setopt_array($ch, self::curlOptions($payload, $apiKey, $config['timeout']));
@@ -58,11 +59,17 @@ class AIClient
                     &$buffer,
                     &$fullContent,
                     &$toolCalls,
+                    &$responseBody,
                     $onDelta,
                     $onReasoning
                 ) {
                     $bytesReceived = strlen($data);
                     $buffer .= $data;
+
+                    // Keep a bounded copy of the raw response for error diagnostics
+                    if (strlen($responseBody) < 8192) {
+                        $responseBody .= $data;
+                    }
 
                     while (($pos = strpos($buffer, "\n")) !== false) {
                         $line = substr($buffer, 0, $pos);
@@ -134,7 +141,7 @@ class AIClient
                     continue;
                 }
                 if ($httpCode !== 200 && $httpCode !== 0) {
-                    throw new \Exception('HTTP ' . $httpCode);
+                    throw new \Exception('HTTP ' . $httpCode . ': ' . self::extractErrorDetail($responseBody));
                 }
 
                 $success = true;
@@ -297,6 +304,32 @@ class AIClient
             CURLOPT_TIMEOUT => $timeout,
             CURLOPT_CONNECTTIMEOUT => self::DEFAULT_CONNECT_TIMEOUT,
         ];
+    }
+
+    /**
+     * Extract a human-readable detail from a non-2xx response body.
+     *
+     * @param string $body Raw response body (bounded copy)
+     * @return string
+     */
+    private static function extractErrorDetail(string $body): string
+    {
+        if (trim($body) === '') {
+            return 'empty response body';
+        }
+
+        $decoded = json_decode($body, true);
+        if (is_array($decoded)) {
+            $error = $decoded['error'] ?? null;
+            if (is_array($error) && isset($error['message'])) {
+                return $error['message'];
+            }
+            if (is_string($error)) {
+                return $error;
+            }
+        }
+
+        return mb_substr(preg_replace('/\s+/', ' ', trim($body)), 0, 300);
     }
 
     private static function writeCache(?string $cacheKey, string $fullContent, int $cacheTTL): void
