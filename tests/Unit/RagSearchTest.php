@@ -84,6 +84,51 @@ test('splitTerms splits on whitespace and punctuation', function () {
     expect($method->invoke(null, 'Forge;Fabric:NeoForge'))->toBe(['Forge', 'Fabric', 'NeoForge']);
 });
 
+test('snippet returns whole body for short chunks', function () {
+    $ref = new ReflectionClass(RagSearch::class);
+    $method = $ref->getMethod('extractSnippet');
+
+    $body = '这是一段很短的正文，直接整段返回。';
+    expect($method->invoke(null, $body, ['短']))->toBe($body);
+});
+
+test('snippet centers on the first matching term for long bodies', function () {
+    $ref = new ReflectionClass(RagSearch::class);
+    $method = $ref->getMethod('extractSnippet');
+
+    // 命中词在中后段，snippet 应围绕它，且以省略号开头
+    $prefix = str_repeat('前置无关内容。', 60); // 420 字符
+    $hit = '目标关键词';
+    $suffix = str_repeat('后置无关内容。', 60);
+    $body = $prefix . $hit . $suffix;
+
+    $snippet = $method->invoke(null, $body, ['目标关键词']);
+
+    expect($snippet)->toContain('目标关键词');
+    expect($snippet)->toStartWith('…');
+    expect(mb_strlen($snippet))->toBeLessThan(mb_strlen($body));
+});
+
+test('snippet returns leading fragment when term only matches title', function () {
+    $ref = new ReflectionClass(RagSearch::class);
+    $method = $ref->getMethod('extractSnippet');
+
+    $body = str_repeat('正文里没有任何查询词。', 60); // 660 字符
+    $snippet = $method->invoke(null, $body, ['标题词']);
+
+    expect($snippet)->not->toContain('标题词');
+    expect($snippet)->toEndWith('…');
+});
+
+test('search returns snippet alongside each result', function () {
+    $results = $this->rag->search('OutOfMemoryError', 2);
+    expect($results)->not->toBe([]);
+    foreach ($results as $r) {
+        expect($r)->toHaveKeys(['title', 'body', 'source', 'score', 'snippet']);
+        expect($r['snippet'])->toBeString();
+    }
+});
+
 test('search returns empty for unrelated queries', function () {
     expect($this->rag->search('zzznotexist', 5))->toBe([]);
     expect($this->rag->search('', 5))->toBe([]);

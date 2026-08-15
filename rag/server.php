@@ -127,8 +127,8 @@ function formatResults(array $results, array $stats): string
     $lines = ["在知识库中找到 " . count($results) . " 条相关文档：", ""];
     foreach ($results as $i => $result) {
         $lines[] = '[' . ($i + 1) . '] ' . $result['title'] . '（来源: ' . $result['source'] . '）';
-        $body = preg_replace('/\s+/', ' ', $result['body']);
-        $lines[] = '    ' . (mb_strlen($body) > 400 ? mb_substr($body, 0, 400) . '…' : $body);
+        $snippet = preg_replace('/\s+/', ' ', $result['snippet'] ?? $result['body']);
+        $lines[] = '    ' . $snippet;
         $lines[] = '';
     }
 

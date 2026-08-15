@@ -11,6 +11,17 @@
  */
 class RagSearch
 {
+    /**
+     * 正文短于该长度（字符）时整段返回，优先保证上下文理解。
+     */
+    private const SNIPPET_FULL_BODY_LIMIT = 600;
+
+    /**
+     * 长正文围绕命中词向前/后各扩展的最大字符窗口；实际以句子边界为断点，
+     * 长度随内容自然变化，不固定。
+     */
+    private const SNIPPET_HALF_WINDOW = 250;
+
     private PDO $pdo;
 
     public function __construct(private string $dbPath)
@@ -153,7 +164,7 @@ class RagSearch
      *
      * @param string $query
      * @param int $k Maximum number of results
-     * @return array<int, array{title: string, body: string, source: string, score: string}>
+     * @return array<int, array{title: string, body: string, source: string, score: mixed, snippet: string}>
      */
     public function search(string $query, int $k = 5): array
     {
@@ -163,6 +174,7 @@ class RagSearch
             return [];
         }
 
+        $terms = self::splitTerms($query);
         $results = [];
         $seen = [];
 
@@ -185,13 +197,13 @@ class RagSearch
                     'body' => $row['body'],
                     'source' => $row['source'],
                     'score' => $row['rank'],
+                    'snippet' => self::extractSnippet($row['body'], $terms),
                 ];
             }
         }
 
         // 2. LIKE fallback with term splitting (AND semantics for CJK multi-keyword queries).
         //    Each term must appear in the title or body; title hits rank above body hits.
-        $terms = self::splitTerms($query);
         if (!empty($terms)) {
             $rankParts = [];
             $rankParams = [];
@@ -225,11 +237,78 @@ class RagSearch
                     'body' => $row['body'],
                     'source' => $row['source'],
                     'score' => 'fallback',
+                    'snippet' => self::extractSnippet($row['body'], $terms),
                 ];
             }
         }
 
         return array_slice($results, 0, $k);
+    }
+
+    /**
+     * 围绕命中词提取上下文片段。
+     *
+     * 取舍策略：
+     *  - 短正文（≤ SNIPPET_FULL_BODY_LIMIT）整段返回，保上下文理解；
+     *  - 长正文围绕第一个命中词，向前/后扩展到最近的句子边界
+     *    （句号/问号/叹号/换行），命中词始终位于片段中央，保搜索细度；
+     *  - 窗口以句子边界为自然断点，长度随内容变化，不硬编码固定字节数。
+     *
+     * @param string $body
+     * @param array<int, string> $terms
+     * @return string
+     */
+    private static function extractSnippet(string $body, array $terms): string
+    {
+        $bodyLen = mb_strlen($body);
+        if ($bodyLen === 0) {
+            return '';
+        }
+
+        if ($bodyLen <= self::SNIPPET_FULL_BODY_LIMIT) {
+            return $body;
+        }
+
+        $hitPos = null;
+        $hitLen = 0;
+        foreach ($terms as $term) {
+            $pos = mb_stripos($body, $term);
+            if ($pos !== false && ($hitPos === null || $pos < $hitPos)) {
+                $hitPos = $pos;
+                $hitLen = mb_strlen($term);
+            }
+        }
+
+        // 命中标题、正文无词时，返回正文开头片段
+        if ($hitPos === null) {
+            return mb_substr($body, 0, self::SNIPPET_HALF_WINDOW) . '…';
+        }
+
+        $start = $hitPos;
+        while ($start > 0 && $hitPos - $start < self::SNIPPET_HALF_WINDOW) {
+            if (self::isSentenceBoundary(mb_substr($body, $start - 1, 1))) {
+                break;
+            }
+            $start--;
+        }
+
+        $end = $hitPos + $hitLen;
+        while ($end < $bodyLen && $end - $hitPos < self::SNIPPET_HALF_WINDOW) {
+            $end++;
+            if (self::isSentenceBoundary(mb_substr($body, $end - 1, 1))) {
+                break;
+            }
+        }
+
+        return ($start > 0 ? '…' : '')
+            . mb_substr($body, $start, $end - $start)
+            . ($end < $bodyLen ? '…' : '');
+    }
+
+    private static function isSentenceBoundary(string $ch): bool
+    {
+        // 仅句末标点作为句子边界；换行不作边界（Markdown 列表项/行内换行不代表句子结束）
+        return in_array($ch, ['。', '！', '？', '；', '.', '!', '?', ';'], true);
     }
 
     /**
