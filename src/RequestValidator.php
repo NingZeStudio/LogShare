@@ -7,6 +7,47 @@
 class RequestValidator
 {
     /**
+     * Get the current HTTP request method.
+     *
+     * @return string
+     */
+    public static function getMethod(): string
+    {
+        return $_SERVER['REQUEST_METHOD'] ?? 'GET';
+    }
+
+    /**
+     * Get the current request URI.
+     *
+     * @return string
+     */
+    public static function getRequestUri(): string
+    {
+        return $_SERVER['REQUEST_URI'] ?? '';
+    }
+
+    /**
+     * Get the value of the Authorization header, if present.
+     *
+     * @return string|null
+     */
+    public static function getAuthorizationHeader(): ?string
+    {
+        $header = $_SERVER['HTTP_AUTHORIZATION'] ?? null;
+        return is_string($header) ? $header : null;
+    }
+
+    /**
+     * Check whether the current request uses the /v1/ prefix.
+     *
+     * @return bool
+     */
+    public static function isV1Request(): bool
+    {
+        return str_starts_with(self::getRequestUri(), '/v1/');
+    }
+
+    /**
      * 验证 HTTP 请求方法
      *
      * @param string|array $allowedMethods 允许的请求方法

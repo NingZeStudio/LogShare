@@ -19,12 +19,14 @@ class MongoCache extends MongoDBClient implements CacheInterface
             $date = new UTCDateTime((time() + $duration) * 1000);
         }
 
-        if (self::Exists($key)) {
-            self::getCollection()->updateOne(["_id" => $key], ["data" => $value, "expires" => $date]);
-        }
-        else {
-            self::getCollection()->insertOne(["_id" => $key, "data" => $value, "expires" => $date]);
-        }
+        $update = [
+            '$set' => [
+                "data" => $value,
+                "expires" => $date,
+            ],
+        ];
+
+        self::getCollection()->updateOne(["_id" => $key], $update, ['upsert' => true]);
     }
 
     /**
@@ -41,5 +43,14 @@ class MongoCache extends MongoDBClient implements CacheInterface
     public static function Exists(string $key): bool
     {
         return self::getCollection()->findOne(["_id" => $key]) !== null;
+    }
+
+    /**
+     * @inheritDoc
+     */
+    public static function Delete(string $key): bool
+    {
+        $result = self::getCollection()->deleteOne(["_id" => $key]);
+        return $result->getDeletedCount() > 0;
     }
 }

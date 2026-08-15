@@ -12,9 +12,9 @@ class ApiResponse
      * @param mixed $data 响应数据
      * @param string $message 成功消息
      * @param int $httpCode HTTP 状态码
-     * @return void
+     * @return never
      */
-    public static function success(mixed $data = null, string $message = 'Success', int $httpCode = 200): void
+    public static function success(mixed $data = null, string $message = 'Success', int $httpCode = 200): never
     {
         http_response_code($httpCode);
         header('Content-Type: application/json');
@@ -43,9 +43,9 @@ class ApiResponse
      * @param string $message 错误消息
      * @param int $httpCode HTTP 状态码
      * @param mixed $errors 详细错误信息
-     * @return void
+     * @return never
      */
-    public static function error(string $message, int $httpCode = 400, mixed $errors = null): void
+    public static function error(string $message, int $httpCode = 400, mixed $errors = null): never
     {
         http_response_code($httpCode);
         header('Content-Type: application/json');
@@ -68,9 +68,9 @@ class ApiResponse
      *
      * @param mixed $data 响应数据
      * @param int $httpCode HTTP 状态码
-     * @return void
+     * @return never
      */
-    public static function json(mixed $data, int $httpCode = 200): void
+    public static function json(mixed $data, int $httpCode = 200): never
     {
         http_response_code($httpCode);
         header('Content-Type: application/json');
@@ -84,9 +84,9 @@ class ApiResponse
      * @param string $content 响应内容
      * @param string $contentType 内容类型
      * @param int $httpCode HTTP 状态码
-     * @return void
+     * @return never
      */
-    public static function text(string $content, string $contentType = 'text/plain', int $httpCode = 200): void
+    public static function text(string $content, string $contentType = 'text/plain', int $httpCode = 200): never
     {
         http_response_code($httpCode);
         header('Content-Type: ' . $contentType);

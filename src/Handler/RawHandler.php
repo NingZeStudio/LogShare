@@ -6,13 +6,9 @@ class RawHandler extends \Handler
 {
     public function handle(): void
     {
-        try {
-            $this->validateMethod('GET');
-            $logId = Router::param('id') ?? $this->extractId(['/1/raw/', '/v1/raw/']);
-            $filename = Router::param('filename');
-        } catch (\ApiError $e) {
-            $e->output();
-        }
+        $this->validateMethod('GET');
+        $logId = \Router::param('id') ?? $this->extractId(['/1/raw/', '/v1/raw/']);
+        $filename = \Router::param('filename');
 
         $id = new \Id($logId);
         $log = new \Log($id);

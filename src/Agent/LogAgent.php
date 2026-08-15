@@ -44,7 +44,7 @@ class LogAgent
             }
         }
 
-        $config = \Config::Get('ai') ?? [];
+        $config = \Config::Get('ai');
         $agentConfig = $config['agent'] ?? [];
         $maxRounds = (int) ($agentConfig['maxToolRounds'] ?? self::DEFAULT_MAX_TOOL_ROUNDS);
 

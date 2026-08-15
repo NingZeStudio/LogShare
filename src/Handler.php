@@ -19,6 +19,21 @@ abstract class Handler
         return RequestValidator::extractIds($prefix);
     }
 
+    protected function requestMethod(): string
+    {
+        return RequestValidator::getMethod();
+    }
+
+    protected function apiPrefix(): string
+    {
+        return RequestValidator::isV1Request() ? 'v1' : '1';
+    }
+
+    protected function authorizationHeader(): ?string
+    {
+        return RequestValidator::getAuthorizationHeader();
+    }
+
     protected function parseContent(): string|ApiError|array
     {
         return (new ContentParser())->getContent();

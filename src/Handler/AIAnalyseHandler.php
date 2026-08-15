@@ -6,11 +6,7 @@ class AIAnalyseHandler extends \Handler
 {
     public function handle(): void
     {
-        try {
-            $this->validateMethod('POST');
-        } catch (\ApiError $e) {
-            $e->output();
-        }
+        $this->validateMethod('POST');
 
         $contentResult = $this->parseContent();
         $contentResult = $this->validateContentExists($contentResult);
@@ -19,7 +15,7 @@ class AIAnalyseHandler extends \Handler
         $logId = is_array($contentResult) ? ($contentResult['id'] ?? null) : null;
 
         if (is_string($logId) && $logId !== '') {
-            if (!RequestValidator::isValidId($logId)) {
+            if (!\RequestValidator::isValidId($logId)) {
                 $error = new \ApiError(400, "Invalid log id.");
                 $error->output();
             }
