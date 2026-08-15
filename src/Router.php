@@ -3,6 +3,7 @@
 class Router
 {
     private static array $match = [];
+    private static ?array $compiledRoutes = null;
 
     public static function param(string $name): ?string
     {
@@ -15,9 +16,9 @@ class Router
         $uri = parse_url($_SERVER['REQUEST_URI'], PHP_URL_PATH);
         $uri = rtrim($uri, '/') ?: '/';
 
-        $routeConfig = self::getRoutes();
-        $routes = $routeConfig['routes'];
-        $disabled = $routeConfig['disabled'] ?? [];
+        $compiled = self::getCompiledRoutes();
+        $routes = $compiled['routes'];
+        $disabled = $compiled['disabled'];
 
         foreach ($routes as $route) {
             if ($route[0] !== $method) {
@@ -29,7 +30,7 @@ class Router
                 continue;
             }
 
-            $params = self::matchPath($routePath, $uri);
+            $params = self::matchCompiled($route, $routePath, $uri);
             if ($params === null) {
                 continue;
             }
@@ -57,8 +58,73 @@ class Router
         ApiResponse::error('Endpoint not found', 404);
     }
 
-    private static function matchPath(string $pattern, string $uri): ?array
+    /**
+     * Build the route table once and cache the compiled regex per route.
+     *
+     * @return array{0?: mixed, routes: array, disabled: array}
+     */
+    private static function getCompiledRoutes(): array
     {
+        if (self::$compiledRoutes !== null) {
+            return self::$compiledRoutes;
+        }
+
+        $routeConfig = self::getRoutes();
+        $compiled = [];
+
+        foreach ($routeConfig['routes'] as $route) {
+            $routePath = rtrim($route[1], '/') ?: '/';
+            $compiled[] = [
+                $route[0],
+                $routePath,
+                $route[2] ?? null,
+                $route[3] ?? null,
+                self::compilePath($routePath),
+            ];
+        }
+
+        return self::$compiledRoutes = [
+            'routes' => $compiled,
+            'disabled' => $routeConfig['disabled'] ?? [],
+        ];
+    }
+
+    /**
+     * Match a compiled route against a URI.
+     *
+     * @param array $route
+     * @param string $routePath
+     * @param string $uri
+     * @return array|null
+     */
+    private static function matchCompiled(array $route, string $routePath, string $uri): ?array
+    {
+        if ($route[4] === null) {
+            return $routePath === $uri ? [] : null;
+        }
+
+        if (!preg_match($route[4], $uri, $matches)) {
+            return null;
+        }
+
+        return array_filter($matches, fn($key) => is_string($key), ARRAY_FILTER_USE_KEY) ?: [];
+    }
+
+    /**
+     * Compile a route path pattern into a regular expression.
+     *
+     * Supports `{name}` and `{name:regex}` placeholders. Returns null when the
+     * pattern contains no placeholders (exact match).
+     *
+     * @param string $pattern
+     * @return string|null
+     */
+    private static function compilePath(string $pattern): ?string
+    {
+        if (!str_contains($pattern, '{')) {
+            return null;
+        }
+
         $regex = preg_replace_callback(
             '/\{([a-zA-Z_]+)(?::([^}]+))?\}/',
             function ($matches) {
@@ -68,7 +134,23 @@ class Router
             },
             $pattern
         );
-        $regex = '#^' . $regex . '$#';
+
+        return '#^' . $regex . '$#';
+    }
+
+    /**
+     * Match a path pattern against a URI. Public for tests.
+     *
+     * @param string $pattern
+     * @param string $uri
+     * @return array|null
+     */
+    public static function matchPath(string $pattern, string $uri): ?array
+    {
+        $regex = self::compilePath($pattern);
+        if ($regex === null) {
+            return $pattern === $uri ? [] : null;
+        }
 
         if (!preg_match($regex, $uri, $matches)) {
             return null;

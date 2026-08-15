@@ -36,6 +36,7 @@ class Log
     private ?int $created = null;
     private ?int $expires = null;
     private array $files = [];
+    private ?int $lineCount = null;
     protected \Aternos\Codex\Log\Log $log;
     protected ?ObfuscatedString $obfuscatedContent = null;
 
@@ -151,7 +152,9 @@ class Log
      */
     public function analyse(): Analysis
     {
-        $this->log = (new Detective())->setLogFile(new StringLogFile($this->data))->detect();
+        $detected = (new Detective())->setLogFile(new StringLogFile($this->data))->detect();
+        /** @var \Aternos\Codex\Log\Log $detected */
+        $this->log = $detected;
         $this->log->parse();
         $this->analysis = $this->log->analyse();
         $this->deobfuscateContent();
@@ -255,7 +258,9 @@ class Log
         $this->obfuscatedContent = new ObfuscatedString($this->data, $map);
         if ($content = $this->obfuscatedContent->getMappedContent()) {
             $this->data = $content;
-            $this->log = (new Detective())->setLogFile(new StringLogFile($this->data))->detect();
+            $detected = (new Detective())->setLogFile(new StringLogFile($this->data))->detect();
+            /** @var \Aternos\Codex\Log\Log $detected */
+            $this->log = $detected;
             $this->log->parse();
         }
     }
@@ -305,7 +310,10 @@ class Log
      */
     public function getLineNumbers(): int
     {
-        return count(explode("\n", $this->data));
+        if ($this->lineCount === null) {
+            $this->lineCount = substr_count($this->data, "\n") + 1;
+        }
+        return $this->lineCount;
     }
 
     /**
@@ -318,6 +326,7 @@ class Log
         $errorCount = 0;
 
         foreach ($this->log as $entry) {
+            /** @var \Aternos\Codex\Log\Entry $entry */
             if ($entry->getLevel()->asInt() <= Level::ERROR->asInt()) {
                 $errorCount++;
             }
@@ -345,6 +354,7 @@ class Log
     public function setData(string $data): Log
     {
         $this->data = $data;
+        $this->lineCount = null;
         $this->preFilter();
         return $this;
     }
@@ -362,6 +372,7 @@ class Log
     public function put(string $data, ?Token $token = null, array $metadata = [], ?string $source = null, ?array $files = null): ?Id
     {
         $this->data = $data;
+        $this->lineCount = null;
         $this->preFilter();
         $this->token = $token ?? new Token();
         $this->metadata = $metadata;
@@ -434,6 +445,14 @@ class Log
         $storage = $config['storages'][$this->id->getStorage()]['class'];
 
         $storage::Renew($this->id);
+
+        if ($this->id->getStorage() === 'f' && mt_rand(1, 100) === 1) {
+            try {
+                \Storage\FilesystemStorage::CleanupExpired();
+            } catch (\Exception $e) {
+                error_log("[Filesystem] 过期日志清理失败: " . $e->getMessage());
+            }
+        }
 
         if ($this->isCacheEnabled()) {
             try {

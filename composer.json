@@ -15,8 +15,7 @@
         "aternos/sherlock": "^1.0.3",
         "ext-zlib": "*",
         "ext-mbstring": "*",
-        "aternos/codex-hytale": "^2.0.0",
-        "chillerlan/php-qrcode": "^5.0"
+        "aternos/codex-hytale": "^2.0.0"
     },
     "require-dev": {
         "pestphp/pest": "^3.0",
@@ -33,6 +32,7 @@
     },
     "autoload": {
         "psr-4": {
+            "LogShare\\": "src/",
             "": "src/"
         },
         "files": [
