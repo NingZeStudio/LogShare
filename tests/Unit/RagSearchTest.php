@@ -152,13 +152,32 @@ test('search results include title, body, source', function () {
 test('chunkMarkdown splits on ## headings', function () {
     $chunks = RagSearch::chunkMarkdown('a.md', "preamble\n\n## 标题一\n内容一\n\n## 标题二\n内容二\n");
 
-    expect($chunks)->toHaveCount(2);
-    expect($chunks[0]['title'])->toBe('标题一');
-    expect($chunks[0]['body'])->toContain('内容一');
-    expect($chunks[1]['title'])->toBe('标题二');
+    expect($chunks)->toHaveCount(3);
+    expect($chunks[0]['title'])->toBe('a.md');
+    expect($chunks[0]['body'])->toBe('preamble');
+    expect($chunks[1]['title'])->toBe('标题一');
+    expect($chunks[1]['body'])->toContain('内容一');
+    expect($chunks[2]['title'])->toBe('标题二');
 });
 
-test('chunkMarkdown returns whole file when no headings', function () {
+test('chunkMarkdown preserves H1 title and prefixes it to H2 chunks', function () {
+    $chunks = RagSearch::chunkMarkdown('basic-concepts.md', "# 基本概念\n\n渲染基础介绍。\n\n## 缓冲构建器\n顶点数据\n\n## 绘制模式\n绘制方式\n");
+
+    expect($chunks)->toHaveCount(3);
+    expect($chunks[0]['title'])->toBe('基本概念');
+    expect($chunks[0]['body'])->toContain('渲染基础介绍');
+    expect($chunks[1]['title'])->toBe('基本概念 > 缓冲构建器');
+    expect($chunks[2]['title'])->toBe('基本概念 > 绘制模式');
+});
+
+test('chunkMarkdown uses H1 as chunk title when no H2 exists', function () {
+    $chunks = RagSearch::chunkMarkdown('creating-a-project.md', "# 创建项目\n\n正文内容...\n");
+
+    expect($chunks)->toHaveCount(1);
+    expect($chunks[0]['title'])->toBe('创建项目');
+});
+
+test('chunkMarkdown falls back to filename when no H1 or H2', function () {
     $chunks = RagSearch::chunkMarkdown('a.md', 'no headings here');
 
     expect($chunks)->toHaveCount(1);
