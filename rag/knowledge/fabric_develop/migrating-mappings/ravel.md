@@ -1,3 +1,5 @@
+# 使用 Ravel 迁移映射
+
 Ravel 是一个 IntelliJ IDEA 插件，用于重新映射源代码文件，基于 IntelliJ 的 PSI 和 Mapping-IO， 支持重新映射 Java、Kotlin、Mixin（用 Java 编写）、类调整器和访问加宽器。
 
 你可以从 JetBrains Marketplace 安装，也可以从 GitHub Releases 下载 ZIP 文件，然后点击插件设置中的齿轮图标，再点击 **Install Plugin From Disk**（从磁盘安装插件）进行安装。

@@ -1,3 +1,5 @@
+# 设置 IntelliJ IDEA
+
 请确保先安装 JDK。
 
 ## 安装 IntelliJ IDEA

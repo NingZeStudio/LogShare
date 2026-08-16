@@ -1,3 +1,5 @@
+# Loom
+
 Fabric Loom，或者简称为 Loom，是一个 Gradle 插件，用于在 Fabric 生态系统中开发模组。
 
 Loom 提供在开发环境中安装 Minecraft 和模组的实用程序，以便你可以根据 Minecraft 混淆及其在发行版和版本之间的差异对它们进行链接。 Loom 还提供用于 Fabric Loader、Mixin 编译处理和 Fabric Loader 的 jar-in-jar 系统的实用程序的运行配置。

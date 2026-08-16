@@ -1,3 +1,5 @@
+# 基本渲染概念
+
 Minecraft 26.2 不支持使用原始 OpenGL，因为它已发布可选的 Vulkan 后端。 相反，你必须使用 `Blaze3D` 抽象层，它位于你的代码和渲染后端（OpenGL 或 Vulkan）之间。
 
 从 1.21.6 开始，渲染管线实现了大变化，比如移动到 `RenderType` 和 `RenderPipeline` 以及更重要的还有 `RenderState`，其最终目标是在绘制当前帧时可以准备下一帧。 在“准备”阶段，所有用于渲染的游戏数据都会提取至 `RenderState`，所以另一个线程可专心渲染当前帧，同时也能提取下一帧。

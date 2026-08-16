@@ -1,3 +1,5 @@
+# 迁移映射
+
 如果你 计划将模组更新到 26.1 或更高版本，则需要从 Yarn 迁移到 Mojang 映射。
 
 有两种方式实现：你可以使用 **Loom Gradle 插件** ，也可以使用 **Ravel IntelliJ IDEA 插件**。

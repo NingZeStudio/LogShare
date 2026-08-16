@@ -1,3 +1,5 @@
+# 在 HUD 中渲染
+
 在基本渲染概念页面和绘制到 GUI 中，我们已经简要介绍了如何将内容渲染到 HUD，因此本页我们将重点介绍 Hud API 以及 `DeltaTracker` 参数。
 
 ## `HudElementRegistry`
