@@ -1,3 +1,5 @@
+# 设置 VS Code
+
 虽然使用 Visual Studio Code 开发模组是可行的，但是我们不推荐这样做。
 建议使用 IntelliJ IDEA，它拥有专门的 Java 工具链、高级功能和有用的社区创建插件，例如 **Minecraft Development**。
 

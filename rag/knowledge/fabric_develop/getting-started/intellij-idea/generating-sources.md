@@ -1,3 +1,5 @@
+# 在 IntelliJ IDEA 中生成源代码
+
 Fabric 工具链允许你通过在本地生成 Minecraft 源代码来访问它，并且你可以使用 IntelliJ IDEA 方便地浏览它。 要生成源代码，你需要运行 `genSources` Gradle 任务。
 
 这可以通过在 Gradle 面板中运行 **Tasks** > **`fabric`** 下的 `genSources` 任务来完成：

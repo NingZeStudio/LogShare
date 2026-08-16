@@ -1,3 +1,5 @@
+# 在 VS Code 中启动游戏
+
 Fabric 工具链与 Visual Studio Code 集成，提供了一种快捷的方法来运行游戏实例以测试和调试你的模组。
 
 ## 生成启动目标

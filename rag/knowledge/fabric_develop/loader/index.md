@@ -1,3 +1,5 @@
+# Fabric Loader
+
 Fabric Loader 是 Fabric 的轻量模组加载器。 它提供了修改任何 Java 应用程序所需的必要工具。 另一方面，特定于游戏和版本的钩子则属于 Fabric API 的范畴。
 
 虽然 Fabric Loader 主要用于 Minecraft，但也可以为其他 Java 应用程序创建游戏提供程序（例如《杀戮尖塔》或 Hytale 等游戏）。

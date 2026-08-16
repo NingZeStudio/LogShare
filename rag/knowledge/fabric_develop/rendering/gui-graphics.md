@@ -1,3 +1,5 @@
+# 绘制到 GUI
+
 本文假设您已经看过基本渲染概念。
 
 `GuiGraphicsExtractor` 类是用于在游戏内渲染的主类， 用于渲染形状、文本和纹理，并且如前所述，用于操作 `PoseStack` 和使用 `BufferBuilder`。

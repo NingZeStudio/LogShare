@@ -1,3 +1,5 @@
+# fabric.mod.json
+
 `fabric.mod.json` 文件是 Fabric Loader 加载模组时使用的元数据文件。 它必须放置在 JAR 包的根目录下，模组才能被正常加载。
 
 模组模板中包含了一个预定义的 `fabric.mod.json` 文件，你也可以通过 Fabric Loom 生成它。
