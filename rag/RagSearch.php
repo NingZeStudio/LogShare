@@ -126,6 +126,9 @@ class RagSearch
     /**
      * Split a markdown file into chunks on `## ` headings.
      *
+     * The `# ` page title is preserved and prefixed to each chunk title, so the
+     * document's main heading remains searchable.
+     *
      * @param string $source
      * @param string $content
      * @return array<int, array{title: string, body: string}>
@@ -137,10 +140,16 @@ class RagSearch
             return [];
         }
 
+        // Preserve the `# ` page title (H1) for searchability
+        $docTitle = null;
+        if (preg_match('/^#\s+(.+)$/m', $content, $matches)) {
+            $docTitle = trim($matches[1]);
+        }
+
         $sections = preg_split('/^##\s+(.+)$/m', $content, -1, PREG_SPLIT_DELIM_CAPTURE);
         if ($sections === false || count($sections) <= 1) {
             return [[
-                'title' => basename($source),
+                'title' => $docTitle ?? basename($source),
                 'body' => $content,
             ]];
         }
@@ -150,9 +159,23 @@ class RagSearch
         // $sections alternates: [preamble, heading1, body1, heading2, body2, ...]
         for ($i = 0; $i < count($sections); $i += 2) {
             $body = $sections[$i];
-            if ($heading !== null && trim($body) !== '') {
-                $chunks[] = ['title' => $heading, 'body' => trim($body)];
+
+            if ($heading === null) {
+                // Preamble before the first H2: drop the H1 line, keep the intro text
+                $preamble = preg_replace('/^#\s+[^\n]*\n?/m', '', $body);
+                if (trim($preamble) !== '') {
+                    $chunks[] = [
+                        'title' => $docTitle ?? basename($source),
+                        'body' => trim($preamble),
+                    ];
+                }
+            } elseif (trim($body) !== '') {
+                $chunks[] = [
+                    'title' => $docTitle !== null ? $docTitle . ' > ' . $heading : $heading,
+                    'body' => trim($body),
+                ];
             }
+
             $heading = $sections[$i + 1] ?? null;
         }
 
