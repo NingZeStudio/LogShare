@@ -174,7 +174,9 @@ class Router
             } else {
                 \Cache\RedisCache::Set($key, (string)($current + 1), $window);
             }
-        } catch (\Exception $e) {
+        } catch (\Throwable $e) {
+            // Fail-open: if Redis is unavailable, skip rate limiting rather than
+            // rejecting the request (or worse, leaking a fatal error).
             error_log("[Router] Rate limit check failed: " . $e->getMessage());
         }
     }
