@@ -49,7 +49,7 @@ class LogAgent
         $maxRounds = (int) ($agentConfig['maxToolRounds'] ?? self::DEFAULT_MAX_TOOL_ROUNDS);
 
         $tools = self::buildTools($config, $logId);
-        $messages = self::buildMessages($content, $logId, $config);
+        $messages = self::buildMessages($content, $logId, $config, self::fetchTopics($config));
 
         self::startSSE();
 
@@ -160,6 +160,17 @@ class LogAgent
                     ],
                 ],
             ];
+            $tools[] = [
+                'type' => 'function',
+                'function' => [
+                    'name' => 'list_topics',
+                    'description' => '列出内部知识库涵盖的主题与文档分布。在不知道检索方向、或搜索无结果时，先调用本工具了解知识库有什么，再针对性搜索。',
+                    'parameters' => [
+                        'type' => 'object',
+                        'properties' => new \stdClass(),
+                    ],
+                ],
+            ];
         }
 
         if ($logId !== null) {
@@ -195,9 +206,13 @@ class LogAgent
         return $tools;
     }
 
-    private static function buildMessages(string $content, ?string $logId, array $config): array
+    private static function buildMessages(string $content, ?string $logId, array $config, string $topicsText = ''): array
     {
         $system = $config['systemPrompt'] ?? self::defaultSystemPrompt($logId);
+
+        if ($topicsText !== '') {
+            $system .= "\n\n以下是你可检索的内部知识库所涵盖的主题（帮助判断检索方向，搜索前先浏览）：\n" . $topicsText;
+        }
 
         $userContent = "需要分析的日志内容：\n\n" . self::truncateForModel($content);
         if (strlen($content) > self::MAX_TOOL_RESULT_BYTES) {
@@ -208,6 +223,35 @@ class LogAgent
             ['role' => 'system', 'content' => $system],
             ['role' => 'user', 'content' => $userContent],
         ];
+    }
+
+    /**
+     * Fetch the knowledge base topic overview from the RAG server.
+     *
+     * Injects the topic map into the system prompt so the AI knows what the
+     * knowledge base covers and can pick search directions accordingly.
+     *
+     * @param array $config
+     * @return string Empty when RAG is not configured or unreachable
+     */
+    private static function fetchTopics(array $config): string
+    {
+        $mcp = $config['mcp'] ?? [];
+        $endpoint = $mcp['rag'] ?? [];
+        $url = $endpoint['url'] ?? '';
+
+        if ($url === '') {
+            return '';
+        }
+
+        try {
+            $client = new MCPClient($url, is_array($endpoint['headers'] ?? null) ? $endpoint['headers'] : [], (int) ($endpoint['timeout'] ?? 10));
+            $contents = $client->callTool('list_topics', []);
+            return implode("\n\n", $contents);
+        } catch (\Exception $e) {
+            error_log("[LogAgent] 获取知识库主题失败: " . $e->getMessage());
+            return '';
+        }
     }
 
     private static function defaultSystemPrompt(?string $logId): string
@@ -264,6 +308,10 @@ PROMPT;
                 case 'rag_search':
                     $endpoint = $mcp['rag'] ?? [];
                     return self::callMcpTool('rag_search', $arguments, $endpoint);
+
+                case 'list_topics':
+                    $endpoint = $mcp['rag'] ?? [];
+                    return self::callMcpTool('list_topics', [], $endpoint);
 
                 case 'list_log_files':
                     return self::listLogFiles($logId);
