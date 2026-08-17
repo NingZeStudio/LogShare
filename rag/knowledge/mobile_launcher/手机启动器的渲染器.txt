@@ -1,0 +1,69 @@
+一、启动器 渲染器体系（标准认知模型）
+1. 架构定位（必须明确）
+手机端启动器（ Launcher）本质：启动器（前端）+ PojavLauncher / Boat（后端执行环境）、渲染器 = OpenGL→OpenGL ES / Vulkan 兼容层
+核心问题：Android GPU 只支持 OpenGL ES，而 Minecraft Java 需要 Desktop OpenGL→所有渲染器本质都是“图形 API 翻译层”
+---
+2. 渲染器来源分层
+（1）内置 / 默认：Krypton Wrapper（KW）、Holy GL4ES（Holy，旧默认，逐步淘汰）、Large Thin Wrapper（LTW old）、VirGLRenderer（VirGL）、Vulkan Zink（Zink）
+（2）插件渲染器（主流扩展）：MobileGlues（MG）、ANGLE、Large Thin Wrapper（LTW new）
+（3）兼容 / 过渡 / 已边缘化：LTW（Pojav专用）、VirGL、ANGLE、Holy GL4ES
+---
+二、核心渲染器
+1. Krypton Wrapper（KW / NG-GL4ES）
+本质：新一代 GL4ES 变体（不是全新架构）、属于 OpenGL → OpenGL ES 翻译路线
+介绍：KW采用OpenGL 2.1图形API和相关扩展增强（比 Holy 更完整）、支持 MC 1.17+、兼容范围广，且已内置在*内
+优点：当前 启动器 默认 → 优先适配、高版本 MC 兼容显著优于 Holy、性能稳定（通常 ≈ 或优于 Holy）、维护活跃（生态主线）
+缺点：本质仍是 GL4ES → 上限有限、部分现代模组 / 光影仍缺扩展、个别模组存在兼容问题（如特殊渲染管线）
+使用场景：默认选择（90%用户）、原版 / Forge / Fabric 常规模组、不追求重度光影
+---
+2. Holy GL4ES
+本质：GL4ES 实现（旧版本）
+介绍：主要采用OpenGL 2.1
+优点：在原版下拥有极高稳定性、老设备（ES2.0）兼容性最好
+缺点：无法良好支持MC 1.17和新版 Forge / Fabric
+官方已明确：未来会移除 / 不建议使用
+使用场景：老设备、运行在MC1.12.x版本及以下
+---
+3. MobileGlues（MG）
+本质：基于 OpenGL ES 3.x 的原生实现（不是 GL4ES）、接近“真正现代 OpenGL 子集”，没有内置在启动器中
+介绍：MG采用OpenGL 3.x图形API、支持现代渲染管线、在Android端是当前唯一“接近原生现代 OpenGL 行为”的方案
+优点：Sodium / Iris / Create 支持优秀、光影支持强（Iris / OptiFine /Oculus）、模组兼容性强、性能-画质平衡最好（中高端设备）
+缺点：需要 ES 3.0+（老设备不可用）、安装复杂、部分光影仍有限制
+使用场景：Fabric+Sodium+Iris、光影玩家、中高端手机
+---
+4. Zink（Mesa / Vulkan 路线）🧠【高阶方案】
+本质：将OpenGL图形API语言转为Vulkan图形API（Mesa Zink）
+介绍：理论可达 OpenGL 4.x（Zink 是目前唯一能在 Android 上提供“接近完整 Desktop OpenGL 4.x 能力”的方案）
+优点：解决“缺 OpenGL 扩展”问题、可运行高级光影和依赖 OpenGL 4.x 的模组、对主流 GPU（尤其 Adreno）表现好
+缺点：强依赖 Vulkan 驱动质量、容易崩溃、配置复杂（Mesa / Turnip）、兼容性不稳定（主流 Adreno GPU 支持较好，Mali 设备问题较多）
+使用场景：高端主流设备、KW / MG 跑不了的模组 / 光影
+---
+5. Large Thin Wrapper（LTW）
+本质：采用OpenGL 3.0图形API
+优点：模组支持良好、可开部分中低配光影
+缺点：仅支持 MC 1.17+、已被 KW / MG 挤压
+使用场景：Pojav 体系用户
+---
+6. VirGL
+本质：虚拟 GPU（Guest → Host）
+介绍：采用OpenGL 4.x图形API、API 类型为Desktop OpenGL（非 ES）、MC理论支持1.7+
+优点：可提供 OpenGL 4.x 图形API、绕过设备限制（不依赖手机 GPU 的真实 OpenGL 能力）、兼容极端情况
+缺点：CPU / 内存 / 带宽开销巨大（多层调用）、不稳定、已被官方淘汰
+使用场景：调试、极端兼容测试
+---
+ 7. ANGLE
+本质：Google 开发的图形转换层（OpenGL ES→Vulkan / DX）
+介绍：采用OpenGL ES 3.x图形API、能转化后端（Android：OpenGL ES→Vulkan，Windows：OpenGL ES→DirectX，iOS：OpenGL ES→Metal）
+优点：驱动兼容性强、稳定性较好（特定设备下）、iOS 平台优势明显
+缺点：性能不占优、OpenGL 能力有限、在 Android 上被替代
+使用场景：搭载iOS系统的手机
+---
+8. VGPU（Virtual GPU）
+本质：虚拟 GPU 渲染，通常基于类似 VirGL / 虚拟化 OpenGL 管线，本质仍是客户端 → 虚拟层 → 宿主 GPU
+介绍：支持较高 OpenGL（理论可达 3.x / 4.x，视实现）、完全绕过部分硬件限制
+优点：在某些极端情况下：可运行普通渲染器无法运行的模组、可绕过 GPU 驱动缺陷、对“缺扩展”问题容忍度高
+缺点：性能极差、延迟高、帧率低、稳定性差
+使用场景：仅用于调试 / 验证问题是否为 GPU 驱动导致、极端兼容测试
+---
+三、当前真实推荐优先级
+MobileGlues（模组/光影）→Krypton Wrapper（默认）→Zink（高阶）→LTW（补充）→Holy（仅兜底）→VirGL / ANGLE /VGPU（忽略）
