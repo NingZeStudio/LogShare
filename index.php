@@ -14,8 +14,11 @@ set_exception_handler(function (\Throwable $e) {
 });
 
 try {
-    \Client\MongoDBClient::ensureIndexes();
-} catch (\Exception $e) {
+    $storageConfig = \Config::Get('storage');
+    if (($storageConfig['storageId'] ?? null) === 'm') {
+        \Client\MongoDBClient::ensureIndexes();
+    }
+} catch (\Throwable $e) {
     error_log("Failed to ensure MongoDB indexes: " . $e->getMessage());
 }
 

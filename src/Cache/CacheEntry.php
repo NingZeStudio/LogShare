@@ -14,7 +14,7 @@ class CacheEntry
     {
         $this->key = $key;
         $config = \Config::Get('cache');
-        if (isset($config['cacheId'])) {
+        if (($config['enabled'] ?? true) && isset($config['cacheId'])) {
             $this->cache = new $config['cacheId']();
         }
     }

@@ -1,5 +1,11 @@
 <?php
 
+// composer.json autoload.files also loads this file, so guard against a second
+// require (which would otherwise redefine CORE_PATH and re-register the autoloader).
+if (defined('CORE_PATH')) {
+    return;
+}
+
 define('CORE_PATH', dirname(__FILE__));
 
 require_once(CORE_PATH . '/vendor/autoload.php');
