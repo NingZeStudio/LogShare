@@ -68,7 +68,7 @@ class RagSearch
             }
         }
 
-        return $projectRoot . '/index.db';
+        return $projectRoot . '/rag/index.db';
     }
 
     private function ensureSchema(): void

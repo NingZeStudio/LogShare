@@ -43,6 +43,18 @@ test('parseJsonData requires content', function () {
     expect($result)->toBeInstanceOf(ApiError::class);
 });
 
+test('parseJsonData allows omitted content when files are provided', function () {
+    $result = parseJsonViaContentParser([
+        'files' => [
+            ['name' => 'latest.log', 'content' => "[12:00] INFO: start\n"],
+        ],
+    ]);
+
+    expect($result)->toBeArray();
+    expect($result['content'])->toBe('');
+    expect($result['files'])->toHaveCount(1);
+});
+
 test('parseJsonData parses files array via UploadParser', function () {
     $result = parseJsonViaContentParser([
         'content' => 'main',

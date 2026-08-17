@@ -45,6 +45,8 @@ class AIClient
         $success = false;
 
         foreach ($keys as $apiKey) {
+            $emitted = false;
+
             try {
                 $payload = self::buildPayload($messages, $config['model'], $tools);
                 $buffer = '';
@@ -60,6 +62,7 @@ class AIClient
                     &$fullContent,
                     &$toolCalls,
                     &$responseBody,
+                    &$emitted,
                     $onDelta,
                     $onReasoning
                 ) {
@@ -72,7 +75,7 @@ class AIClient
                     }
 
                     while (($pos = strpos($buffer, "\n")) !== false) {
-                        $line = substr($buffer, 0, $pos);
+                        $line = rtrim(substr($buffer, 0, $pos), "\r");
                         $buffer = substr($buffer, $pos + 1);
 
                         if (!str_starts_with($line, 'data: ')) {
@@ -95,10 +98,12 @@ class AIClient
 
                         if (isset($delta['content']) && is_string($delta['content'])) {
                             $fullContent .= $delta['content'];
+                            $emitted = true;
                             $onDelta($delta['content']);
                         }
 
                         if (isset($delta['reasoning_content']) && is_string($delta['reasoning_content'])) {
+                            $emitted = true;
                             $onReasoning($delta['reasoning_content']);
                         }
 
@@ -154,6 +159,11 @@ class AIClient
                 $lastException = $e;
                 $keyPrefix = substr($apiKey, 0, 16) . '...';
                 error_log("[AI Client] Stream Key {$keyPrefix} 失败: " . $e->getMessage());
+
+                if ($emitted) {
+                    // 已向客户端 emit 了部分内容，换 key 重试会造成重复输出，直接失败
+                    break;
+                }
                 continue;
             }
         }

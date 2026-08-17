@@ -150,11 +150,19 @@ class UploadParser
                     return new ApiError(400, "Invalid file name in archive: " . htmlspecialchars($entryName));
                 }
 
+                // 预判条目声明解压大小，防止高压缩比 zip 炸弹在解压时 OOM
+                $stat = $zip->statIndex($i);
+                $declaredSize = is_array($stat) ? $stat['size'] : 0;
+                if ($declaredSize > $remainingBudget) {
+                    return new ApiError(413, "Expanded upload exceeds maximum total size.");
+                }
+
                 $entryContent = $zip->getFromIndex($i);
                 if ($entryContent === false) {
                     continue;
                 }
 
+                // 解压后再校验一次（防声明 size 被篡改）
                 if (strlen($entryContent) > $remainingBudget) {
                     return new ApiError(413, "Expanded upload exceeds maximum total size.");
                 }

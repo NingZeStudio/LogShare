@@ -48,4 +48,29 @@ class RedisCache extends RedisClient implements CacheInterface
         self::Connect();
         return (bool)self::$connection->del($key);
     }
+
+    /**
+     * Atomically increment a counter key (used by the rate limiter).
+     *
+     * @param string $key
+     * @return int New value of the counter
+     */
+    public static function Incr(string $key): int
+    {
+        self::Connect();
+        return (int)self::$connection->incr($key);
+    }
+
+    /**
+     * Set a TTL on an existing key (used by the rate limiter).
+     *
+     * @param string $key
+     * @param int $seconds
+     * @return bool
+     */
+    public static function Expire(string $key, int $seconds): bool
+    {
+        self::Connect();
+        return (bool)self::$connection->expire($key, $seconds);
+    }
 }

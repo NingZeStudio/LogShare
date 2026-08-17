@@ -15,6 +15,7 @@ class ApiError extends \Exception implements JsonSerializable
         return [
             'success' => false,
             'error' => $this->message,
+            'code' => $this->httpCode,
         ];
     }
 
