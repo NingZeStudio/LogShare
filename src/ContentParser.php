@@ -99,11 +99,18 @@ class ContentParser
      */
     protected function parseJsonData(array $data): array|ApiError
     {
-        if (!isset($data['content'])) {
+        $hasFiles = !empty($data['files']) && is_array($data['files']);
+
+        if (!$hasFiles && !isset($data['content'])) {
             return new ApiError(400, "Required field 'content' not found.");
         }
 
-        if (empty($data['content'])) {
+        // When files are provided, content is optional (primary file is files[0])
+        if (!isset($data['content'])) {
+            $data['content'] = '';
+        }
+
+        if (empty($data['content']) && !$hasFiles) {
             return new ApiError(400, "Required field 'content' is empty.");
         }
 

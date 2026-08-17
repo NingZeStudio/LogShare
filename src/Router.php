@@ -166,13 +166,13 @@ class Router
         $key = "rl:{$method}:{$path}:{$ip}";
 
         try {
-            $current = (int)\Cache\RedisCache::Get($key);
-            if ($current === 0) {
-                \Cache\RedisCache::Set($key, '1', $window);
-            } elseif ($current >= $limit) {
+            // Atomic INCR + one-time EXPIRE avoids the read-modify-write race
+            $current = \Cache\RedisCache::Incr($key);
+            if ($current === 1) {
+                \Cache\RedisCache::Expire($key, $window);
+            }
+            if ($current > $limit) {
                 ApiResponse::error('Rate limit exceeded. Please try again later.', 429);
-            } else {
-                \Cache\RedisCache::Set($key, (string)($current + 1), $window);
             }
         } catch (\Throwable $e) {
             // Fail-open: if Redis is unavailable, skip rate limiting rather than
