@@ -360,4 +360,39 @@ class RagSearch
         $count = $this->pdo->query("SELECT count(*) AS c FROM docs")->fetch()['c'] ?? 0;
         return ['chunks' => (int) $count];
     }
+
+    /**
+     * Knowledge base topic overview grouped by source directory.
+     *
+     * Helps the AI pick relevant search directions before querying.
+     *
+     * @return array<int, array{dir: string, count: int, files: array<int, string>}>
+     */
+    public function topics(): array
+    {
+        $rows = $this->pdo->query("SELECT DISTINCT source FROM docs")->fetchAll();
+
+        $groups = [];
+        foreach ($rows as $row) {
+            $parts = explode('/', (string) $row['source']);
+            $dir = count($parts) > 1 ? $parts[0] : '(根目录)';
+            $file = basename((string) $row['source'], '.md');
+            $groups[$dir][] = $file;
+        }
+
+        $result = [];
+        foreach ($groups as $dir => $files) {
+            // 精简文件名为代表关键词（去 KB 编号、下划线、扩展名）
+            $keywords = array_slice($files, 0, 12);
+            $result[] = [
+                'dir' => $dir,
+                'count' => count($files),
+                'files' => array_map(fn($f) => str_replace(['.txt', '_', '  '], ['', ' ', ' '], $f), $keywords),
+            ];
+        }
+
+        // 目录按文件名排序（中文目录用字节序，稳定）
+        usort($result, fn($a, $b) => strcmp($a['dir'], $b['dir']));
+        return $result;
+    }
 }

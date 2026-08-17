@@ -120,3 +120,24 @@ test('LogAgent tool loop calls rag_search against the local RAG server', functio
     expect($output)->toContain('最终分析结果');
     expect($output)->toContain('event: done');
 });
+
+test('LogAgent fetches knowledge topics and injects them into the system prompt', function () {
+    $configRef = new ReflectionClass(\Config::class);
+    $dataProp = $configRef->getProperty('data');
+    $data = $dataProp->getValue();
+    $config = $data['ai'];
+
+    // fetchTopics returns the RAG topic overview
+    $ref = new ReflectionClass(\Agent\LogAgent::class);
+    $fetch = $ref->getMethod('fetchTopics');
+    $topicsText = $fetch->invoke(null, $config);
+    expect($topicsText)->toContain('主题目录');
+    expect($topicsText)->toContain('oom');
+
+    // buildMessages embeds the topics into the system prompt
+    $build = $ref->getMethod('buildMessages');
+    $messages = $build->invoke(null, 'some log', null, $config, $topicsText);
+    expect($messages[0]['role'])->toBe('system');
+    expect($messages[0]['content'])->toContain('知识库');
+    expect($messages[0]['content'])->toContain('oom');
+});

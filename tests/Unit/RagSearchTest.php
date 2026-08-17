@@ -210,3 +210,28 @@ test('buildIndex indexes markdown files and deletes stale rows', function () {
     array_map('unlink', glob($dir . '/*'));
     rmdir($dir);
 });
+
+test('topics groups docs by source directory', function () {
+    $pdo = $this->rag->getPdo();
+    $pdo->exec("INSERT INTO docs(title, body, source) VALUES
+        ('A', '正文 a', 'zl_help/account.md'),
+        ('B', '正文 b', 'zl_help/auth_server.md'),
+        ('C', '正文 c', '日志分析/日志报错-内存溢出-KB-MEM-001-Java_heap_space.md')");
+
+    $topics = $this->rag->topics();
+
+    expect($topics)->toHaveCount(3);
+    $dirs = array_column($topics, 'dir');
+    expect($dirs)->toContain('(根目录)');
+    expect($dirs)->toContain('zl_help');
+    expect($dirs)->toContain('日志分析');
+
+    foreach ($topics as $t) {
+        expect($t)->toHaveKeys(['dir', 'count', 'files']);
+        expect($t['count'])->toBeInt();
+        expect($t['files'])->toBeArray();
+    }
+
+    $zl = array_values(array_filter($topics, fn($t) => $t['dir'] === 'zl_help'));
+    expect($zl[0]['count'])->toBe(2);
+});

@@ -71,6 +71,14 @@ try {
                             'required' => ['query'],
                         ],
                     ],
+                    [
+                        'name' => 'list_topics',
+                        'description' => '列出知识库涵盖的主题与文档分布，帮助你决定检索方向。搜索前可先调用本工具了解知识库有什么。',
+                        'inputSchema' => [
+                            'type' => 'object',
+                            'properties' => new stdClass(),
+                        ],
+                    ],
                 ],
             ];
             break;
@@ -78,6 +86,12 @@ try {
         case 'tools/call':
             $name = $params['name'] ?? '';
             $arguments = is_array($params['arguments'] ?? null) ? $params['arguments'] : [];
+
+            if ($name === 'list_topics') {
+                $text = formatTopics($rag->topics(), $rag->stats());
+                $response['result'] = ['content' => [['type' => 'text', 'text' => $text]]];
+                break;
+            }
 
             if ($name !== 'rag_search') {
                 throw new RuntimeException('Unknown tool: ' . $name);
@@ -129,6 +143,28 @@ function formatResults(array $results, array $stats): string
         $lines[] = '[' . ($i + 1) . '] ' . $result['title'] . '（来源: ' . $result['source'] . '）';
         $snippet = preg_replace('/\s+/', ' ', $result['snippet'] ?? $result['body']);
         $lines[] = '    ' . $snippet;
+        $lines[] = '';
+    }
+
+    return implode("\n", $lines);
+}
+
+/**
+ * @param array $topics
+ * @param array $stats
+ * @return string
+ */
+function formatTopics(array $topics, array $stats): string
+{
+    if (empty($topics)) {
+        return "知识库为空（共 " . $stats['chunks'] . " 个分块）。";
+    }
+
+    $lines = ["知识库共 " . count($topics) . " 个主题目录、" . $stats['chunks'] . " 个分块：", ""];
+    foreach ($topics as $topic) {
+        $lines[] = '■ ' . $topic['dir'] . '（' . $topic['count'] . ' 篇）';
+        $sample = implode(' / ', $topic['files']);
+        $lines[] = '   ' . $sample;
         $lines[] = '';
     }
 

@@ -63,6 +63,17 @@ test('rag server initializes and exposes rag_search tool', function () {
     $tools = $client->listTools();
     $names = array_column($tools, 'name');
     expect($names)->toContain('rag_search');
+    expect($names)->toContain('list_topics');
+});
+
+test('list_topics returns knowledge base topic overview', function () {
+    $client = new MCPClient($GLOBALS['rag_url']);
+    $result = $client->callTool('list_topics');
+
+    expect($result)->toHaveCount(1);
+    expect($result[0])->toContain('主题目录');
+    // OOM fixture doc lives at the root level, shown without extension
+    expect($result[0])->toContain('oom');
 });
 
 test('rag_search returns matching knowledge entries', function () {

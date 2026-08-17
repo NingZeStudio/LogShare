@@ -64,10 +64,11 @@ test('buildTools registers both tools when both urls are set', function () {
     ];
     $tools = agentCall('buildTools', [$config, null]);
 
-    expect($tools)->toHaveCount(2);
+    expect($tools)->toHaveCount(3);
     $names = array_column(array_column($tools, 'function'), 'name');
     expect($names)->toContain('web_search_exa');
     expect($names)->toContain('rag_search');
+    expect($names)->toContain('list_topics');
 });
 
 test('assistantMessageWithToolCalls formats tool calls', function () {
