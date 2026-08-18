@@ -10,15 +10,6 @@ use Aternos\Codex\Minecraft\Log\Minecraft\Vanilla\VanillaClientLog;
 use Aternos\Codex\Minecraft\Log\Minecraft\Vanilla\VanillaCrashReportLog;
 use Aternos\Codex\Minecraft\Log\Minecraft\Vanilla\VanillaNetworkProtocolErrorReportLog;
 use Aternos\Codex\Minecraft\Log\Minecraft\Vanilla\VanillaServerLog;
-use Aternos\Sherlock\MapLocator\FabricMavenMapLocator;
-use Aternos\Sherlock\MapLocator\LauncherMetaMapLocator;
-use Aternos\Sherlock\Maps\GZURLYarnMap;
-use Aternos\Sherlock\Maps\ObfuscationMap;
-use Aternos\Sherlock\Maps\URLVanillaObfuscationMap;
-use Aternos\Sherlock\Maps\VanillaObfuscationMap;
-use Aternos\Sherlock\Maps\YarnMap;
-use Aternos\Sherlock\ObfuscatedString;
-use Cache\CacheEntry;
 use Data\MetadataEntry;
 use Data\Token;
 use Filter\Filter;
@@ -38,7 +29,6 @@ class Log
     private array $files = [];
     private ?int $lineCount = null;
     protected \Aternos\Codex\Log\Log $log;
-    protected ?ObfuscatedString $obfuscatedContent = null;
 
     /**
      * 缓存统计
@@ -162,80 +152,39 @@ class Log
     }
 
     /**
-     * get the obfuscation map matching this log
-     * @param $version
-     * @return ObfuscationMap|null
+     * Resolve the SpinYarn mapping type for this log.
+     *
+     * @return string|null "yarn" (Fabric) / "vanilla" (Mojang official), or null to skip
      */
-    protected function getObfuscationMap($version): ?ObfuscationMap
+    protected function getMappingType(): ?string
     {
         if (in_array(get_class($this->get()), [
             VanillaServerLog::class,
             VanillaClientLog::class,
             VanillaCrashReportLog::class,
             VanillaNetworkProtocolErrorReportLog::class
-        ])){
-            $urlCache = new CacheEntry("sherlock:vanilla:$version:client");
-
-            $mapURL = $urlCache->get();
-            if (!$mapURL) {
-                $mapURL = (new LauncherMetaMapLocator($version, "client"))->findMappingURL();
-
-                if (!$mapURL) {
-                    return null;
-                }
-
-                $urlCache->set($mapURL, 30 * 24 * 60 * 60);
-            }
-
-            try {
-                $mapCache = new CacheEntry("sherlock:$mapURL");
-                if ($mapContent = $mapCache->get()) {
-                    $map = new VanillaObfuscationMap($mapContent);
-                } else {
-                    $map = new URLVanillaObfuscationMap($mapURL);
-                    $mapCache->set($map->getContent());
-                }
-            } catch (\Exception) {
-            }
-            return $map ?? null;
+        ])) {
+            return 'vanilla';
         }
 
         if ($this->get() instanceof FabricLog) {
-            $urlCache = new CacheEntry("sherlock:yarn:$version:server");
-
-            $mapURL = $urlCache->get();
-            if (!$mapURL) {
-                $mapURL = (new FabricMavenMapLocator($version))->findMappingURL();
-
-                if (!$mapURL) {
-                    return null;
-                }
-
-                $urlCache->set($mapURL, 24 * 60 * 60);
-            }
-
-            try {
-                $mapCache = new CacheEntry("sherlock:$mapURL");
-                if ($mapContent = $mapCache->get()) {
-                    $map = new YarnMap($mapContent);
-                } else {
-                    $map = new GZURLYarnMap($mapURL);
-                    $mapCache->set($map->getContent());
-                }
-            } catch (\Exception) {
-            }
-            return $map ?? null;
+            return 'yarn';
         }
 
         return null;
     }
 
     /**
-     * deobfuscate the content of this log
+     * deobfuscate the content of this log via the SpinYarn PHP extension
      * @return void
      */
     protected function deobfuscateContent()
     {
+        $mappingType = $this->getMappingType();
+        if ($mappingType === null) {
+            return;
+        }
+
         /**
          * @var ?Information $version
          */
@@ -245,24 +194,16 @@ class Log
         }
         $version = $version->getValue();
 
-        try {
-            $map = $this->getObfuscationMap($version);
-        } catch (\Exception) {
-            $map = null;
-        }
-
-        if ($map === null) {
+        $content = \Client\SpinYarnClient::deobfuscate($this->data, $version, $mappingType);
+        if ($content === null) {
             return;
         }
 
-        $this->obfuscatedContent = new ObfuscatedString($this->data, $map);
-        if ($content = $this->obfuscatedContent->getMappedContent()) {
-            $this->data = $content;
-            $detected = (new Detective())->setLogFile(new StringLogFile($this->data))->detect();
-            /** @var \Aternos\Codex\Log\Log $detected */
-            $this->log = $detected;
-            $this->log->parse();
-        }
+        $this->data = $content;
+        $detected = (new Detective())->setLogFile(new StringLogFile($this->data))->detect();
+        /** @var \Aternos\Codex\Log\Log $detected */
+        $this->log = $detected;
+        $this->log->parse();
     }
 
     /**
