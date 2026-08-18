@@ -114,4 +114,15 @@ return [
         ],
     ],
 
+    /* ─── SpinYarn（反混淆 PHP 扩展）────────────────────── */
+    'spinyarn' => [
+        // Yarn/Vanilla 映射目录（绝对路径）。扩展未加载时所有配置仅作占位，
+        // 日志反混淆自动透传跳过。
+        'mappings_dir' => '/opt/spinyarn/mappings',
+        'auto_download' => true,
+        'cache_max_entries' => 44,
+        'cache_high_watermark' => 40,
+        'cache_low_watermark' => 30,
+    ],
+
 ];
