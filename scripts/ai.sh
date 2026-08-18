@@ -1,4 +1,8 @@
-#!/usr/bin/env bash
+#!/bin/sh
+# Termux 没有 /usr/bin/env，用 /bin/sh 兜底；检测到 bash 则重新执行以获得完整特性
+if [ -z "${BASH_VERSION:-}" ] && command -v bash >/dev/null 2>&1; then
+    exec bash "$0" "$@"
+fi
 #
 # ai.sh — 调用 LogShare AI 分析（SSE），解析 data 块并做 codex 风格展示
 #
@@ -18,7 +22,13 @@ CONTENT=""
 ID=""
 
 usage() {
-    sed -n '2,10p' "$0" | sed 's/^# \{0,1\}//'
+    cat <<'EOF'
+用法：
+  ai.sh <log-id>                 分析已存储日志
+  ai.sh -c "日志内容"             直接分析内容（不落盘）
+  ai.sh -t <log-id>              显示思维链（thinking）
+  ai.sh -u http://host:9300 ...  指定服务地址（默认 $LOGSHARE_URL 或 http://127.0.0.1:9300）
+EOF
     exit 1
 }
 
