@@ -20,3 +20,13 @@ test('SpinYarnClient degrades to null for unconfigured mappings dir', function (
     $result = SpinYarnClient::deobfuscate('some log', '1.20.1', 'vanilla');
     expect($result)->toBeNull();
 });
+
+test('resolveMappingsDir resolves relative paths against project root', function () {
+    $ref = new ReflectionClass(SpinYarnClient::class);
+    $method = $ref->getMethod('resolveMappingsDir');
+
+    expect($method->invoke(null, ''))->toBeNull();
+    expect($method->invoke(null, '  '))->toBeNull();
+    expect($method->invoke(null, '/opt/spinyarn/mappings'))->toBe('/opt/spinyarn/mappings');
+    expect($method->invoke(null, 'spinyarn/mappings'))->toBe(CORE_PATH . '/spinyarn/mappings');
+});

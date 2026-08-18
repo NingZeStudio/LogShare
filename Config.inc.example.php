@@ -116,9 +116,10 @@ return [
 
     /* ─── SpinYarn（反混淆 PHP 扩展）────────────────────── */
     'spinyarn' => [
-        // Yarn/Vanilla 映射目录（绝对路径）。扩展未加载时所有配置仅作占位，
-        // 日志反混淆自动透传跳过。
-        'mappings_dir' => '/opt/spinyarn/mappings',
+        // Yarn/Vanilla 映射目录。相对路径按项目根解析；留空则用扩展默认
+        // （SPINYARN_MAPPINGS_DIR 环境变量或宿主 exe 旁 ./mappings）。
+        // Docker 部署可显式设为 /opt/spinyarn/mappings（对应命名卷）。
+        'mappings_dir' => 'spinyarn/mappings',
         'auto_download' => true,
         'cache_max_entries' => 44,
         'cache_high_watermark' => 40,
