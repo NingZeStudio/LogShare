@@ -19,14 +19,12 @@ services:
   php-fpm:
     container_name: mclogs-php
     build:
-      dockerfile_inline: |
-        FROM php:8.5-fpm
-        COPY --from=mlocati/php-extension-installer /usr/bin/install-php-extensions /usr/local/bin/
-        RUN install-php-extensions mongodb redis
-        COPY mclogs.ini /usr/local/etc/php/conf.d/mclogs.ini
+      context: .
+      dockerfile: php-fpm.Dockerfile
     volumes:
       - ../:/web/mclogs
       - ./php-fpm-overrides.conf:/usr/local/etc/php-fpm.d/overrides.conf:ro
+      - spinyarn-mappings:/opt/spinyarn/mappings
     depends_on:
       - mongo
       - redis
@@ -66,6 +64,7 @@ services:
 
 volumes:
   redis:
+  spinyarn-mappings:
 
 networks:
   mclogs-network:
