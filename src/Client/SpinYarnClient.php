@@ -73,7 +73,7 @@ class SpinYarnClient
 
         if ($handle === null) {
             $config = \Config::Get('spinyarn');
-            $mappingsDir = $config['mappings_dir'] ?? '';
+            $mappingsDir = self::resolveMappingsDir($config['mappings_dir'] ?? '');
             $autoDownload = (bool) ($config['auto_download'] ?? true);
             $cacheMax = (int) ($config['cache_max_entries'] ?? 44);
             $cacheHigh = (int) ($config['cache_high_watermark'] ?? 40);
@@ -88,5 +88,24 @@ class SpinYarnClient
         }
 
         return $handle;
+    }
+
+    /**
+     * Resolve the mappings directory: empty → null (extension default), absolute
+     * path → as-is, relative path → resolved against the project root.
+     *
+     * @param string $dir
+     * @return string|null
+     */
+    private static function resolveMappingsDir(string $dir): ?string
+    {
+        $dir = trim($dir);
+        if ($dir === '') {
+            return null;
+        }
+        if (str_starts_with($dir, '/')) {
+            return $dir;
+        }
+        return CORE_PATH . '/' . $dir;
     }
 }
