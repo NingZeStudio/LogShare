@@ -29,7 +29,6 @@ return [
             'src/*',
         ],
         'exclude' => [
-            'src/Printer/*',
             'src/Data/*',
             'src/Cache/*',
             'src/Client/*',

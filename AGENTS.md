@@ -2,7 +2,7 @@
 
 ## Overview
 
-Minecraft / Hytale log analysis and sharing platform (v1.5.5). Monolithic PHP 8.4+ app with `index.php` entrypoint, `src/` classes, and `Config.inc.php` at root.
+Minecraft / Hytale log analysis and sharing platform (v1.6.0). Monolithic PHP 8.4+ app with `index.php` entrypoint, `src/` classes, and `Config.inc.php` at root.
 
 ## Entrypoint & routing
 
@@ -77,7 +77,7 @@ Handlers extend `\Handler` base class, which provides:
 ## Pre-filters
 
 Applied before storage. Configured in `Config.inc.php` under `filter.pre`:
-- Trim, LimitBytes (10MB), LimitLines (50K)
+- Trim, LimitBytes (10MB), LimitLines (50K) — the two `Limit*` filters **reject** oversized input (400) rather than truncating
 - IPv4, IPv6, IPv6Short, UUID, XUID, SessionToken, ClientId, Coordinate, Username, AccessToken redaction
 
 ## Content parsing

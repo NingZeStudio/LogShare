@@ -191,7 +191,6 @@ src/                     核心类库
 ├── Data/                数据模型（Token、MetadataEntry）
 ├── Filter/              预处理过滤链
 ├── Handler/             端点处理类（每个路由对应一个 Handler）
-├── Printer/             日志打印格式化
 ├── Storage/             存储后端（MongoStorage、FilesystemStorage）
 ├── Config.php           配置加载器 + 环境变量覆盖
 ├── ContentParser.php    请求体解析（含 files 数组）

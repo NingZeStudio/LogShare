@@ -1,6 +1,5 @@
 <?php
 
-use Filter\Filter;
 use Filter\IPv4Filter;
 use Filter\IPv6Filter;
 use Filter\IPv6ShortFilter;
@@ -11,6 +10,14 @@ use Filter\ClientIdFilter;
 use Filter\CoordinateFilter;
 use Filter\UsernameFilter;
 use Filter\AccessTokenFilter;
+
+function applyPreFilters(string $input): string
+{
+    foreach (\Config::Get('filter')['pre'] as $class) {
+        $input = $class::filter($input);
+    }
+    return $input;
+}
 
 test('IPv4Filter masks standard IPv4 addresses', function () {
     $input = 'Player[/192.168.1.1:25565] logged in';
@@ -200,7 +207,7 @@ test('AccessTokenFilter masks X-Access-Token header', function () {
 
 test('Filter chain applies all filters in order', function () {
     $input = 'Player Steve[/192.168.1.1:25565] UUID: 550e8400-e29b-41d4-a716-446655440000 at (100, 64, -200)';
-    $output = Filter::filterAll($input);
+    $output = applyPreFilters($input);
     
     expect($output)->not->toContain('192.168.1.1');
     expect($output)->toContain('**.**.**.**');
@@ -229,7 +236,7 @@ test('Filter chain masks sensitive data in simulated Minecraft log', function ()
 [10:11:25] [main/INFO]: clientId:"550e8400e29b41d4a716446655440000"
 LOG;
 
-    $output = Filter::filterAll($input);
+    $output = applyPreFilters($input);
 
     expect($output)->toContain('Minecraft 1.21.1');
     expect($output)->not->toContain('192.168.1.100');
@@ -341,7 +348,7 @@ test('Filter chain masks sensitive data in multi-loader Minecraft logs', functio
 [13:53:06] [main/DEBUG]: xboxUserId:"2535412345678902"
 LOG;
 
-    $output = Filter::filterAll($input);
+    $output = applyPreFilters($input);
 
     expect($output)->toContain('Minecraft 1.21.1');
     expect($output)->toContain('Forge 47.3.0');
@@ -466,7 +473,7 @@ test('Filter chain masks sensitive data in Bukkit/Spigot/Paper plugin logs', fun
 [13:12:02] [Server thread/WARN]: Disabling FakePlugin due to error
 LOG;
 
-    $output = Filter::filterAll($input);
+    $output = applyPreFilters($input);
 
     expect($output)->toContain('CraftBukkit version git-CraftBukkit-1.21.1-R0.1-SNAPSHOT');
     expect($output)->toContain('EssentialsX v2.20.1.0');
