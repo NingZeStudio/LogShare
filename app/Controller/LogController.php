@@ -1,26 +1,21 @@
 <?php
 
-namespace App\Handler;
+namespace App\Controller;
 
+use App\ApiError;
 use App\Data\Token;
+use Hyperf\HttpServer\Annotation\Controller;
+use Hyperf\HttpServer\Annotation\DeleteMapping;
+use Hyperf\HttpServer\Annotation\PostMapping;
+use Psr\Http\Message\ResponseInterface;
 
-class LogHandler extends \App\Handler
+#[Controller(prefix: '/{version:v?1}')]
+class LogController extends AbstractController
 {
-    public function handle(): void
+    #[PostMapping(path: 'log')]
+    public function create(): ResponseInterface
     {
-        $this->validateMethod(['POST', 'DELETE']);
-
-        if ($this->requestMethod() === 'POST') {
-            $this->handleCreate();
-        } elseif ($this->requestMethod() === 'DELETE') {
-            $this->handleDelete();
-        }
-    }
-
-    private function handleCreate(): void
-    {
-        $content = $this->parseContent();
-        $content = $this->validateContentExists($content);
+        $content = $this->validateContentExists($this->parseContent());
 
         $metadata = [];
         $source = null;
@@ -31,7 +26,6 @@ class LogHandler extends \App\Handler
             $files = !empty($content['files']) ? $content['files'] : null;
             $content = $content['content'];
 
-            // Multi-file upload: fall back to the first file as the primary content
             if (empty($content) && $files !== null) {
                 $content = $files[0]['data'] ?? '';
             }
@@ -43,25 +37,28 @@ class LogHandler extends \App\Handler
         try {
             $id = $log->put($content, $token, $metadata, $source, $files);
         } catch (\Exception $e) {
-            $error = new \App\ApiError(400, $e->getMessage());
-            $error->output();
+            throw new ApiError(400, $e->getMessage());
         }
 
         $urls = \App\Config::Get('urls');
-
         $apiPrefix = $this->apiPrefix();
 
-        $this->respondSuccess([
+        return $this->respondSuccess([
             'id' => $id->get(),
             'url' => $urls['baseUrl'] . "/" . $id->get(),
             'raw' => $urls['apiBaseUrl'] . "/{$apiPrefix}/raw/" . $id->get(),
-            'token' => $token->get()
+            'token' => $token->get(),
         ], 'Log submitted successfully');
     }
 
-    private function handleDelete(): void
+    #[DeleteMapping(path: 'log/{id}')]
+    public function delete(string $id): ResponseInterface
     {
-        $logIds = $this->extractIds(['/1/log/', '/v1/log/']);
+        $logIds = array_values(array_filter(array_map('trim', explode(',', $id)), fn($i) => $i !== ''));
+
+        if (empty($logIds)) {
+            throw new ApiError(400, "At least one valid ID is required");
+        }
 
         $authorizationHeader = $this->authorizationHeader();
         $requestToken = null;
@@ -70,23 +67,23 @@ class LogHandler extends \App\Handler
         }
 
         if (!$requestToken) {
-            throw new \App\ApiError(401, "Missing token in Authorization header. Use: Bearer <token>");
+            throw new ApiError(401, "Missing token in Authorization header. Use: Bearer <token>");
         }
 
         $results = [
             'deleted' => [],
-            'failed' => []
+            'failed' => [],
         ];
 
         foreach ($logIds as $logId) {
-            $id = new \App\Id($logId);
-            $log = new \App\Log($id);
+            $logIdObj = new \App\Id($logId);
+            $log = new \App\Log($logIdObj);
 
             if (!$log->exists()) {
                 $results['failed'][] = [
                     'id' => $logId,
                     'message' => "Log not found: {$logId}",
-                    'code' => 404
+                    'code' => 404,
                 ];
                 continue;
             }
@@ -95,7 +92,7 @@ class LogHandler extends \App\Handler
                 $results['failed'][] = [
                     'id' => $logId,
                     'message' => "Invalid token for log: {$logId}",
-                    'code' => 403
+                    'code' => 403,
                 ];
                 continue;
             }
@@ -106,22 +103,22 @@ class LogHandler extends \App\Handler
                 $results['failed'][] = [
                     'id' => $logId,
                     'message' => "Failed to delete log: {$logId}",
-                    'code' => 500
+                    'code' => 500,
                 ];
             }
         }
 
         if (empty($results['deleted'])) {
             $errorMessages = array_column($results['failed'], 'message');
-            $this->respondError("Failed to delete logs: " . implode('; ', $errorMessages), 400, $results['failed']);
+            return $this->respondError("Failed to delete logs: " . implode('; ', $errorMessages), 400, $results['failed']);
         }
 
-        $this->respondSuccess([
+        return $this->respondSuccess([
             'deleted' => $results['deleted'],
             'failed' => $results['failed'],
             'total' => count($logIds),
             'deletedCount' => count($results['deleted']),
-            'failedCount' => count($results['failed'])
+            'failedCount' => count($results['failed']),
         ], 'Log deletion completed');
     }
 }

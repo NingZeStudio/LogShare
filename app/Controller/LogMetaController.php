@@ -1,24 +1,27 @@
 <?php
 
-namespace App\Handler;
+namespace App\Controller;
 
-class LogMetaHandler extends \App\Handler
+use App\ApiError;
+use Hyperf\HttpServer\Annotation\Controller;
+use Hyperf\HttpServer\Annotation\GetMapping;
+use Psr\Http\Message\ResponseInterface;
+
+#[Controller(prefix: '/{version:v?1}')]
+class LogMetaController extends AbstractController
 {
-    public function handle(): void
+    #[GetMapping(path: 'log/{id}')]
+    public function meta(string $id): ResponseInterface
     {
-        $this->validateMethod('GET');
-        $logId = \App\Router::param('id') ?? $this->extractId(['/1/log/', '/v1/log/']);
-
-        $id = new \App\Id($logId);
-        $log = new \App\Log($id);
+        $logId = new \App\Id($id);
+        $log = new \App\Log($logId);
 
         if (!$log->exists()) {
-            $error = new \App\ApiError(404, "Log not found.");
-            $error->output();
+            throw new ApiError(404, "Log not found.");
         }
 
-        $this->respondSuccess([
-            'id' => $id->get(),
+        return $this->respondSuccess([
+            'id' => $logId->get(),
             'size' => $log->getSize(),
             'lines' => $log->getLineNumbers(),
             'created' => $log->getCreated(),
@@ -26,7 +29,7 @@ class LogMetaHandler extends \App\Handler
             'metadata' => array_map(fn($entry) => $entry->jsonSerialize(), $log->getMetadata()),
             'source' => $log->getSource(),
             'files' => $log->getFiles(),
-            'raw' => $this->rawUrl($id),
+            'raw' => $this->rawUrl($logId),
         ], 'Log metadata retrieved successfully');
     }
 

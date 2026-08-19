@@ -11,43 +11,42 @@ function architectureFiles(string $subdir): array
     return $files;
 }
 
-test('handlers do not use $_SERVER directly', function () {
-    foreach (architectureFiles('Handler') as $file) {
+test('controllers do not use $_SERVER directly', function () {
+    foreach (architectureFiles('Controller') as $file) {
         $content = file_get_contents($file);
-        // Allow in base App\Handler class for method validation
-        if (basename($file) === 'Handler.php') continue;
-        
-        expect($content)->not->toContain('$_SERVER[', "File $file uses \$_SERVER directly. Use App\RequestValidator instead.");
+        if (basename($file) === 'AbstractController.php') continue;
+
+        expect($content)->not->toContain('$_SERVER[', "File $file uses \$_SERVER directly. Use RequestInterface instead.");
     }
 });
 
-test('handlers do not use $_GET/$_POST directly', function () {
-    foreach (architectureFiles('Handler') as $file) {
+test('controllers do not use $_GET/$_POST directly', function () {
+    foreach (architectureFiles('Controller') as $file) {
         $content = file_get_contents($file);
-        if (basename($file) === 'Handler.php') continue;
-        
-        expect($content)->not->toContain('$_GET[', "File $file uses \$_GET directly. Use App\ContentParser instead.");
-        expect($content)->not->toContain('$_POST[', "File $file uses \$_POST directly. Use App\ContentParser instead.");
+        if (basename($file) === 'AbstractController.php') continue;
+
+        expect($content)->not->toContain('$_GET[', "File $file uses \$_GET directly. Use ContentParser instead.");
+        expect($content)->not->toContain('$_POST[', "File $file uses \$_POST directly. Use ContentParser instead.");
     }
 });
 
-test('no raw SQL in handlers', function () {
-    foreach (architectureFiles('Handler') as $file) {
+test('no raw SQL in controllers', function () {
+    foreach (architectureFiles('Controller') as $file) {
         $content = file_get_contents($file);
-        if (basename($file) === 'Handler.php') continue;
-        
+        if (basename($file) === 'AbstractController.php') continue;
+
         expect($content)->not->toMatch('/(SELECT|INSERT|UPDATE|DELETE).*FROM/i', "File $file appears to have raw SQL. Use Storage classes.");
     }
 });
 
-test('all handlers extend base App\Handler', function () {
-    foreach (architectureFiles('Handler') as $file) {
+test('all controllers extend base AbstractController', function () {
+    foreach (architectureFiles('Controller') as $file) {
         $className = basename($file, '.php');
-        if ($className === 'Handler') continue;
-        
-        $class = '\App\Handler\\' . $className;
+        if ($className === 'AbstractController') continue;
+
+        $class = '\App\Controller\\' . $className;
         if (class_exists($class)) {
-            expect(is_subclass_of($class, '\App\Handler'))->toBeTrue("$className must extend \\Handler");
+            expect(is_subclass_of($class, '\App\Controller\AbstractController'))->toBeTrue("$className must extend \\App\\Controller\\AbstractController");
         }
     }
 });

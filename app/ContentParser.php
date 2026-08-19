@@ -3,6 +3,7 @@
 namespace App;
 
 use App\Data\MetadataEntry;
+use Hyperf\HttpServer\Contract\RequestInterface;
 
 /**
  * Utility class for reading log content from the http request
@@ -10,6 +11,10 @@ use App\Data\MetadataEntry;
 class ContentParser
 {
     protected const int MAX_ENCODING_STEPS = 5;
+
+    public function __construct(protected RequestInterface $request)
+    {
+    }
 
     /**
      * Get all supported content encodings
@@ -27,19 +32,16 @@ class ContentParser
      */
     public function getContent(): string|ApiError|array
     {
-        $config = Config::Get('storage');
+        $config = \App\Config::Get('storage');
         $limit = $config['maxLength'] * 2;
-        
-        $body = file_get_contents('php://input', false, null, 0, $limit + 1);
-        if ($body === false) {
-            return new ApiError(500, "Failed to read request body.");
-        }
+
+        $body = $this->request->getBody()->getContents();
         if (strlen($body) > $limit) {
             return new ApiError(413, "Request body exceeds maximum allowed size.");
         }
 
-        $encodingHeader = $_SERVER['HTTP_CONTENT_ENCODING'] ?? '';
-        if ($encodingHeader) {
+        $encodingHeader = $this->request->getHeaderLine('Content-Encoding');
+        if ($encodingHeader !== '') {
             $encodingSteps = explode(',', $encodingHeader);
             if (count($encodingSteps) > static::MAX_ENCODING_STEPS) {
                 return new ApiError(400, "Too many Content-Encoding steps.");
@@ -62,12 +64,12 @@ class ContentParser
             }
         }
 
-        $contentTypeHeader = $_SERVER['CONTENT_TYPE'] ?? '';
+        $contentTypeHeader = $this->request->getHeaderLine('Content-Type');
         if ($pos = strpos($contentTypeHeader, ';')) {
             $contentTypeHeader = substr($contentTypeHeader, 0, $pos);
         }
         $contentTypeHeader = trim($contentTypeHeader);
-        
+
         switch ($contentTypeHeader) {
             case "application/json":
                 $data = @json_decode($body, true);
@@ -75,7 +77,7 @@ class ContentParser
                     return new ApiError(400, "Failed to parse JSON body.");
                 }
                 return $this->parseJsonData($data);
-                
+
             case "application/x-www-form-urlencoded":
             default:
                 parse_str($body, $data);

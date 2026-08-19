@@ -1,13 +1,18 @@
 <?php
 
-namespace App\Handler;
+namespace App\Controller;
 
-class AnalyseHandler extends \App\Handler
+use App\ApiError;
+use Hyperf\HttpServer\Annotation\Controller;
+use Hyperf\HttpServer\Annotation\PostMapping;
+use Psr\Http\Message\ResponseInterface;
+
+#[Controller(prefix: '/{version:v?1}')]
+class AnalyseController extends AbstractController
 {
-    public function handle(): void
+    #[PostMapping(path: 'analyse')]
+    public function analyse(): ResponseInterface
     {
-        $this->validateMethod('POST');
-
         $contentResult = $this->parseContent();
         $contentResult = $this->validateContentExists($contentResult);
 
@@ -18,8 +23,7 @@ class AnalyseHandler extends \App\Handler
         try {
             $log->setData($content);
         } catch (\Exception $e) {
-            $error = new \App\ApiError(400, $e->getMessage());
-            $error->output();
+            throw new ApiError(400, $e->getMessage());
         }
 
         $log->analyse();
@@ -27,6 +31,6 @@ class AnalyseHandler extends \App\Handler
         $codexLog = $log->get();
         $codexLog->setIncludeEntries(false);
 
-        $this->respondJson($codexLog);
+        return $this->respondJson($codexLog);
     }
 }

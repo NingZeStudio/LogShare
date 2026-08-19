@@ -12,7 +12,7 @@ afterEach(function () {
 
 function parseJsonViaContentParser(array $data): string|App\ApiError|array
 {
-    $parser = new App\ContentParser();
+    $parser = new App\ContentParser(Mockery::mock(\Hyperf\HttpServer\Contract\RequestInterface::class));
     $ref = new ReflectionClass(App\ContentParser::class);
     $method = $ref->getMethod('parseJsonData');
     return $method->invoke($parser, $data);
