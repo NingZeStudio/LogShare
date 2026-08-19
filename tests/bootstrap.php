@@ -11,23 +11,10 @@ if (!file_exists(__DIR__ . '/../Config.inc.php')) {
 
 // Load mock classes before aliasing (they are outside the src/ autoloader)
 require_once __DIR__ . '/Mocks/RedisMock.php';
-require_once __DIR__ . '/Mocks/MongoDBMock.php';
 
-// Mock Redis/Mongo for unit tests
+// Mock Redis for unit tests
 if (!extension_loaded('redis')) {
     class_alias('Tests\Mocks\RedisMock', 'Redis');
-}
-
-if (!extension_loaded('mongodb')) {
-    class_alias('Tests\Mocks\MongoDBMock', 'MongoDB\Driver\Manager');
-    class_alias('Tests\Mocks\MongoDBMock', 'MongoDB\Driver\BulkWrite');
-    class_alias('Tests\Mocks\MongoDBMock', 'MongoDB\Driver\Query');
-    class_alias('Tests\Mocks\MongoDBMock', 'MongoDB\Driver\Command');
-    class_alias('Tests\Mocks\MongoDBMock', 'MongoDB\Driver\Cursor');
-    class_alias('Tests\Mocks\MongoDBMock', 'MongoDB\Driver\WriteConcern');
-    class_alias('Tests\Mocks\MongoDBMock', 'MongoDB\Driver\ReadPreference');
-    class_alias('Tests\Mocks\MongoDBMock', 'MongoDB\BSON\UTCDateTime');
-    class_alias('Tests\Mocks\MongoDBMock', 'MongoDB\BSON\ObjectId');
 }
 
 // Helper functions for tests

@@ -79,7 +79,7 @@ class Log
         }
 
         if ($result === null) {
-            error_log("[Redis] 缓存未命中，回退到 MongoDB: " . $this->id->getRaw());
+            error_log("[Redis] 缓存未命中，回退到 MariaDB: " . $this->id->getRaw());
 
             /**
              * @var StorageInterface $storage
@@ -108,13 +108,7 @@ class Log
         $this->metadata = MetadataEntry::allFromArray($result['metadata'] ?? []);
         $this->source = $result['source'] ?? null;
         $createdValue = $result['created'] ?? null;
-        if ($createdValue instanceof \MongoDB\BSON\UTCDateTime) {
-            $this->created = $createdValue->toDateTime()->getTimestamp();
-        } elseif (is_numeric($createdValue)) {
-            $this->created = (int) $createdValue;
-        } else {
-            $this->created = null;
-        }
+        $this->created = is_numeric($createdValue) ? (int) $createdValue : null;
         $this->expires = $this->created !== null ? $this->created + $config['storageTime'] : null;
         $this->files = $result['files'] ?? [];
         $this->exists = true;
@@ -314,7 +308,7 @@ class Log
                     ]);
                     error_log("[Redis] 缓存写入成功: " . $this->id->getRaw());
                 } catch (\Exception $e) {
-                    error_log("[Redis] 缓存写入失败: " . $e->getMessage() . "，已降级到 MongoDB");
+                    error_log("[Redis] 缓存写入失败: " . $e->getMessage() . "，已降级到 MariaDB");
                 }
             }
         }
@@ -368,7 +362,7 @@ class Log
     }
 
     /**
-     * Delete the log from storage (both Redis cache and MongoDB)
+     * Delete the log from storage (both Redis cache and MariaDB)
      *
      * @return bool Success
      */
@@ -571,7 +565,7 @@ class Log
             'metadata' => $decoded['metadata'] ?? [],
             'source' => $decoded['source'] ?? null,
             'files' => $decoded['files'] ?? [],
-            'created' => isset($decoded['created']) ? new \MongoDB\BSON\UTCDateTime($decoded['created'] * 1000) : null,
+            'created' => $decoded['created'] ?? null,
         ];
     }
 
@@ -612,12 +606,6 @@ class Log
         $config = Config::Get('cache');
 
         $cacheDataArray = $data;
-
-        if (isset($cacheDataArray['created'])) {
-            if ($cacheDataArray['created'] instanceof \MongoDB\BSON\UTCDateTime) {
-                $cacheDataArray['created'] = $cacheDataArray['created']->toDateTime()->getTimestamp();
-            }
-        }
 
         $cacheData = json_encode($cacheDataArray, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
 

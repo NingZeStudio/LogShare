@@ -12,10 +12,10 @@ return [
     /* ─── Storage ─────────────────────────────────────────── */
     'storage' => [
         'storages' => [
-            'm' => ['name' => 'MongoDB',     'class' => '\\App\\Storage\\MongoStorage',       'enabled' => true],
+            's' => ['name' => 'MariaDB',     'class' => '\\App\\Storage\\MariaDbStorage',      'enabled' => true],
             'f' => ['name' => 'Filesystem',  'class' => '\\App\\Storage\\FilesystemStorage',  'enabled' => false],
         ],
-        'storageId' => 'm',
+        'storageId' => 's',
         'storageTime' => 7 * 24 * 60 * 60,
         'maxLength' => 10 * 1024 * 1024,
         'maxLines' => 50_000,
@@ -75,12 +75,6 @@ return [
     /* ─── Filesystem ───────────────────────────────────────── */
     'filesystem' => [
         'path' => '/storage/logs/',
-    ],
-
-    /* ─── MongoDB ──────────────────────────────────────────── */
-    'mongo' => [
-        'url' => 'mongodb://mclogs-mongo/',
-        'database' => 'mclogs',
     ],
 
     /* ─── AI ───────────────────────────────────────────────── */
