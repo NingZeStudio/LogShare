@@ -1,6 +1,6 @@
 <?php
 
-use Client\SpinYarnClient;
+use App\Client\SpinYarnClient;
 
 test('SpinYarnClient reports unavailable when extension is not loaded', function () {
     // 常规测试环境不加载 spinyarn 扩展

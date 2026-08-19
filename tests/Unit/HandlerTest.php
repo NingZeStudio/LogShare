@@ -1,15 +1,15 @@
 <?php
 
-use Handler\LogHandler;
-use Handler\AnalyseHandler;
-use Handler\RawHandler;
-use Handler\LimitsHandler;
-use Handler\FiltersHandler;
-use Handler\RateErrorHandler;
-use Handler\InsightsHandler;
+use App\Handler\LogHandler;
+use App\Handler\AnalyseHandler;
+use App\Handler\RawHandler;
+use App\Handler\LimitsHandler;
+use App\Handler\FiltersHandler;
+use App\Handler\RateErrorHandler;
+use App\Handler\InsightsHandler;
 
 test('LogHandler responds to POST /1/log', function () {
-    // Handler instantiation test
+    // App\Handler instantiation test
     $handler = new LogHandler();
     expect($handler)->toBeInstanceOf(LogHandler::class);
 });

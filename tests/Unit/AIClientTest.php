@@ -1,6 +1,6 @@
 <?php
 
-use Client\AIClient;
+use App\Client\AIClient;
 
 beforeAll(function () {
     $port = 19100 + mt_rand(1, 800);
@@ -31,8 +31,8 @@ beforeAll(function () {
     $GLOBALS['llm_base_url'] = $base;
     $GLOBALS['llm_pid'] = $pid;
 
-    // Inject mock LLM endpoint into Config
-    $configRef = new ReflectionClass(\Config::class);
+    // Inject mock LLM endpoint into App\Config
+    $configRef = new ReflectionClass(\App\Config::class);
     $dataProp = $configRef->getProperty('data');
     $data = $dataProp->getValue();
     $data['ai'] = [
@@ -132,7 +132,7 @@ test('streamChat continues with tool result messages', function () {
 
 test('streamChat throws when all keys fail', function () {
     // Point config at an unreachable host
-    $configRef = new ReflectionClass(\Config::class);
+    $configRef = new ReflectionClass(\App\Config::class);
     $dataProp = $configRef->getProperty('data');
     $data = $dataProp->getValue();
     $data['ai']['baseUrl'] = 'http://127.0.0.1:1/unreachable';

@@ -1,6 +1,6 @@
 <?php
 
-use Client\MCPClient;
+use App\Client\MCPClient;
 
 beforeAll(function () {
     $port = 19000 + mt_rand(1, 1000);

@@ -1,6 +1,6 @@
 <?php
 
-use Agent\LogAgent;
+use App\Agent\LogAgent;
 
 beforeAll(function () {
     // Start mock MCP server
@@ -59,7 +59,7 @@ afterAll(function () {
 });
 
 beforeEach(function () {
-    $configRef = new ReflectionClass(\Config::class);
+    $configRef = new ReflectionClass(\App\Config::class);
     $dataProp = $configRef->getProperty('data');
     $this->origData = $dataProp->getValue();
 
@@ -79,7 +79,7 @@ beforeEach(function () {
 });
 
 afterEach(function () {
-    $configRef = new ReflectionClass(\Config::class);
+    $configRef = new ReflectionClass(\App\Config::class);
     $dataProp = $configRef->getProperty('data');
     $dataProp->setValue(null, $this->origData);
 });
@@ -109,7 +109,7 @@ test('LogAgent runs a full tool loop and streams SSE events', function () {
 });
 
 test('LogAgent streams a plain answer when no tools are configured', function () {
-    $configRef = new ReflectionClass(\Config::class);
+    $configRef = new ReflectionClass(\App\Config::class);
     $dataProp = $configRef->getProperty('data');
     $data = $dataProp->getValue();
     $data['ai']['mcp'] = [];

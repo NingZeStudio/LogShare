@@ -1,21 +1,21 @@
 <?php
 
-use Cache\CacheEntry;
+use App\Cache\CacheEntry;
 
 beforeEach(function () {
-    $configRef = new ReflectionClass(\Config::class);
+    $configRef = new ReflectionClass(\App\Config::class);
     $dataProp = $configRef->getProperty('data');
     $this->origData = $dataProp->getValue();
 
     $data = $this->origData;
-    $data['cache']['cacheId'] = '\\Cache\\RedisCache';
+    $data['cache']['cacheId'] = '\\App\\Cache\\RedisCache';
     $data['cache']['enabled'] = true;
     $data['cache']['redis'] = ['host' => 'localhost', 'port' => 6379];
     $dataProp->setValue(null, $data);
 });
 
 afterEach(function () {
-    $configRef = new ReflectionClass(\Config::class);
+    $configRef = new ReflectionClass(\App\Config::class);
     $dataProp = $configRef->getProperty('data');
     $dataProp->setValue(null, $this->origData);
 });
@@ -36,7 +36,7 @@ test('CacheEntry get returns null for missing keys', function () {
 });
 
 test('CacheEntry without configured backend is a no-op', function () {
-    $configRef = new ReflectionClass(\Config::class);
+    $configRef = new ReflectionClass(\App\Config::class);
     $dataProp = $configRef->getProperty('data');
     $data = $dataProp->getValue();
     $data['cache']['cacheId'] = null;

@@ -31,8 +31,8 @@ if (!extension_loaded('mongodb')) {
 }
 
 // Helper functions for tests
-function createTestLog(string $content = ''): \Log {
-    $log = new \Log();
+function createTestLog(string $content = ''): \App\Log {
+    $log = new \App\Log();
     $log->setData($content ?: <<<'LOG'
 [12:34:56] [Server thread/INFO]: Starting minecraft server version 1.20.1
 [12:34:56] [Server thread/INFO]: Loading properties
@@ -44,8 +44,8 @@ LOG
     return $log;
 }
 
-function createTestToken(): \Data\Token {
-    return new \Data\Token();
+function createTestToken(): \App\Data\Token {
+    return new \App\Data\Token();
 }
 
 function assertFilterRedacts(string $filterClass, string $input, string $expectedNotContains): void {

@@ -1,7 +1,7 @@
 <?php
 
-use Data\MetadataEntry;
-use Data\Token;
+use App\Data\MetadataEntry;
+use App\Data\Token;
 
 test('Token generates a strong random value', function () {
     $a = new Token();

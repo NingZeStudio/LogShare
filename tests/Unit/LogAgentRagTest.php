@@ -1,6 +1,6 @@
 <?php
 
-use Agent\LogAgent;
+use App\Agent\LogAgent;
 
 beforeAll(function () {
     // Build a small index in tmp
@@ -73,7 +73,7 @@ afterAll(function () {
 });
 
 beforeEach(function () {
-    $configRef = new ReflectionClass(\Config::class);
+    $configRef = new ReflectionClass(\App\Config::class);
     $dataProp = $configRef->getProperty('data');
     $this->origData = $dataProp->getValue();
 
@@ -94,7 +94,7 @@ beforeEach(function () {
 });
 
 afterEach(function () {
-    $configRef = new ReflectionClass(\Config::class);
+    $configRef = new ReflectionClass(\App\Config::class);
     $dataProp = $configRef->getProperty('data');
     $dataProp->setValue(null, $this->origData);
 });
@@ -122,13 +122,13 @@ test('LogAgent tool loop calls rag_search against the local RAG server', functio
 });
 
 test('LogAgent fetches knowledge topics and injects them into the system prompt', function () {
-    $configRef = new ReflectionClass(\Config::class);
+    $configRef = new ReflectionClass(\App\Config::class);
     $dataProp = $configRef->getProperty('data');
     $data = $dataProp->getValue();
     $config = $data['ai'];
 
     // fetchTopics returns the RAG topic overview
-    $ref = new ReflectionClass(\Agent\LogAgent::class);
+    $ref = new ReflectionClass(\App\Agent\LogAgent::class);
     $fetch = $ref->getMethod('fetchTopics');
     $topicsText = $fetch->invoke(null, $config);
     expect($topicsText)->toContain('主题目录');

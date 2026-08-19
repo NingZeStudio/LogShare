@@ -1,17 +1,17 @@
 <?php
 
-use Handler\RawHandler;
-use Handler\LogMetaHandler;
+use App\Handler\RawHandler;
+use App\Handler\LogMetaHandler;
 
 beforeEach(function () {
-    $this->configRef = new ReflectionClass(\Config::class);
+    $this->configRef = new ReflectionClass(\App\Config::class);
     $this->dataProp = $this->configRef->getProperty('data');
     $this->origData = $this->dataProp->getValue();
 
     $data = $this->origData;
     $data['storage']['storages']['f'] = [
         'name' => 'Filesystem',
-        'class' => '\\Storage\\FilesystemStorage',
+        'class' => '\\App\\Storage\\FilesystemStorage',
         'enabled' => true,
     ];
     $data['storage']['storageId'] = 'f';
@@ -35,9 +35,9 @@ afterEach(function () {
     }
 });
 
-function createMultiFileLog(): \Log
+function createMultiFileLog(): \App\Log
 {
-    $log = new \Log();
+    $log = new \App\Log();
     $id = $log->put(
         "[12:00] INFO: primary line\n",
         null,
@@ -48,11 +48,11 @@ function createMultiFileLog(): \Log
             ['name' => 'debug.txt', 'data' => "GL: OpenGL 3.2\n"],
         ]
     );
-    return new \Log($id);
+    return new \App\Log($id);
 }
 
 test('Router matches raw id with nested filename', function () {
-    $ref = new ReflectionClass(\Router::class);
+    $ref = new ReflectionClass(\App\Router::class);
     $method = $ref->getMethod('matchPath');
 
     $result = $method->invoke(null, '/v1/raw/{id}/{filename:.+}', '/v1/raw/aB3x9K/crash-reports/crash-01.txt');
@@ -60,7 +60,7 @@ test('Router matches raw id with nested filename', function () {
 });
 
 test('Router raw filename pattern does not match single segment', function () {
-    $ref = new ReflectionClass(\Router::class);
+    $ref = new ReflectionClass(\App\Router::class);
     $method = $ref->getMethod('matchPath');
 
     $result = $method->invoke(null, '/v1/raw/{id}/{filename:.+}', '/v1/raw/aB3x9K');
@@ -68,7 +68,7 @@ test('Router raw filename pattern does not match single segment', function () {
 });
 
 test('Router matches single id raw pattern', function () {
-    $ref = new ReflectionClass(\Router::class);
+    $ref = new ReflectionClass(\App\Router::class);
     $method = $ref->getMethod('matchPath');
 
     $result = $method->invoke(null, '/v1/raw/{id}', '/v1/raw/aB3x9K');

@@ -1,6 +1,6 @@
 <?php
 
-use Client\MCPClient;
+use App\Client\MCPClient;
 
 beforeAll(function () {
     // Build a small index in tmp

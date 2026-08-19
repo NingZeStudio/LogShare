@@ -1,7 +1,7 @@
 <?php
 
 test('route table registers all v1 endpoints', function () {
-    $ref = new ReflectionClass(\Router::class);
+    $ref = new ReflectionClass(\App\Router::class);
     $method = $ref->getMethod('getRoutes');
 
     $routeConfig = $method->invoke(null);
@@ -35,7 +35,7 @@ test('route table registers all v1 endpoints', function () {
 });
 
 test('route table registers all legacy v1 endpoints', function () {
-    $ref = new ReflectionClass(\Router::class);
+    $ref = new ReflectionClass(\App\Router::class);
     $method = $ref->getMethod('getRoutes');
 
     $routeConfig = $method->invoke(null);
@@ -63,7 +63,7 @@ test('route table registers all legacy v1 endpoints', function () {
 });
 
 test('route table handlers resolve to existing classes', function () {
-    $ref = new ReflectionClass(\Router::class);
+    $ref = new ReflectionClass(\App\Router::class);
     $method = $ref->getMethod('getRoutes');
 
     $routeConfig = $method->invoke(null);
@@ -76,7 +76,7 @@ test('route table handlers resolve to existing classes', function () {
 });
 
 test('router disabled list uses valid route identifiers', function () {
-    $ref = new ReflectionClass(\Router::class);
+    $ref = new ReflectionClass(\App\Router::class);
     $method = $ref->getMethod('getRoutes');
 
     $routeConfig = $method->invoke(null);

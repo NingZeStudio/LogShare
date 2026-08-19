@@ -12,8 +12,8 @@ return [
     /* ─── Storage ─────────────────────────────────────────── */
     'storage' => [
         'storages' => [
-            'm' => ['name' => 'MongoDB',     'class' => '\\Storage\\MongoStorage',       'enabled' => true],
-            'f' => ['name' => 'Filesystem',  'class' => '\\Storage\\FilesystemStorage',  'enabled' => false],
+            'm' => ['name' => 'MongoDB',     'class' => '\\App\\Storage\\MongoStorage',       'enabled' => true],
+            'f' => ['name' => 'Filesystem',  'class' => '\\App\\Storage\\FilesystemStorage',  'enabled' => false],
         ],
         'storageId' => 'm',
         'storageTime' => 7 * 24 * 60 * 60,
@@ -27,7 +27,7 @@ return [
 
     /* ─── Cache (Redis) ──────────────────────────────────── */
     'cache' => [
-        'cacheId' => '\\Cache\\RedisCache',
+        'cacheId' => '\\App\\Cache\\RedisCache',
         'enabled' => true,
         'redis' => ['host' => 'mclogs-redis', 'port' => 6379],
         'ttl' => 30 * 60,
@@ -43,19 +43,19 @@ return [
     /* ─── Filter ───────────────────────────────────────────── */
     'filter' => [
         'pre' => [
-            '\\Filter\\TrimFilter',
-            '\\Filter\\LimitBytesFilter',
-            '\\Filter\\LimitLinesFilter',
-            '\\Filter\\IPv4Filter',
-            '\\Filter\\IPv6Filter',
-            '\\Filter\\IPv6ShortFilter',
-            '\\Filter\\UuidFilter',
-            '\\Filter\\XuidFilter',
-            '\\Filter\\SessionTokenFilter',
-            '\\Filter\\ClientIdFilter',
-            '\\Filter\\CoordinateFilter',
-            '\\Filter\\UsernameFilter',
-            '\\Filter\\AccessTokenFilter',
+            '\\App\\Filter\\TrimFilter',
+            '\\App\\Filter\\LimitBytesFilter',
+            '\\App\\Filter\\LimitLinesFilter',
+            '\\App\\Filter\\IPv4Filter',
+            '\\App\\Filter\\IPv6Filter',
+            '\\App\\Filter\\IPv6ShortFilter',
+            '\\App\\Filter\\UuidFilter',
+            '\\App\\Filter\\XuidFilter',
+            '\\App\\Filter\\SessionTokenFilter',
+            '\\App\\Filter\\ClientIdFilter',
+            '\\App\\Filter\\CoordinateFilter',
+            '\\App\\Filter\\UsernameFilter',
+            '\\App\\Filter\\AccessTokenFilter',
         ],
     ],
 
