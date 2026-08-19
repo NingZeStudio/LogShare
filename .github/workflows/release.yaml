@@ -1,0 +1,52 @@
+name: Release
+
+# 当提交信息以 [Build] 开头时（或手动触发），发布 GitHub Release，
+# Release notes 取自 CHANGELOG.md 最新版本条目，tag 取自该条目的版本号。
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  check-commit:
+    runs-on: ubuntu-latest
+    outputs:
+      should_release: ${{ steps.check.outputs.should_release }}
+    steps:
+      - id: check
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "should_release=true" >> "$GITHUB_OUTPUT"
+          elif [[ "${{ github.event.head_commit.message }}" == "[Build]"* ]]; then
+            echo "should_release=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "should_release=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  release:
+    needs: check-commit
+    if: needs.check-commit.outputs.should_release == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Generate release metadata
+        id: meta
+        shell: bash
+        run: |
+          VER=$(grep -m1 '^## ' CHANGELOG.md | sed 's/^## //; s/ .*//')
+          echo "tag=v${VER}" >> "$GITHUB_OUTPUT"
+          awk 'BEGIN{s=0} /^## /{if(s) exit; s=1; next} s{print}' CHANGELOG.md > RELEASE_NOTES.md
+          echo "tag=v${VER}"
+          head -n 5 RELEASE_NOTES.md
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.meta.outputs.tag }}
+          name: LogShare ${{ steps.meta.outputs.tag }}
+          body_path: RELEASE_NOTES.md
