@@ -25,6 +25,8 @@ composer stan                     # PHPStan level 5
 
 CI runs in `.github/workflows/ci.yaml` (tests on PHP 8.4/8.5, PHPStan, architecture tests, docker build). Tests auto-create `Config.inc.php` from `Config.inc.example.php` if missing (`tests/bootstrap.php`).
 
+**Release:** `.github/workflows/release.yaml` publishes a GitHub Release when a commit to `main` starts with `[Build]` (or via manual `workflow_dispatch`). The version + release notes are read from `CHANGELOG.md` — add a new `## x.y.z — date` entry at the top, bump the version in `README.md`/`AGENTS.md`/`MCPClient.php`, then commit with `[Build]` prefix. The tag is `v{x.y.z}`.
+
 > **Termux note:** run `PHPSTAN_TURBO=0 composer stan` — PHPStan's turbo extension is not available on Termux (needs glibc). CI on Ubuntu is unaffected.
 >
 > **Local tests:** `tests/bootstrap.php` class-aliases `Tests\Mocks\RedisMock` / `Tests\Mocks\MongoDBMock` when the `redis`/`mongodb` extensions are absent, so the suite runs without real services (Termux has neither extension). CI instead runs against real `mongo:7` + `redis:7-alpine` services.
