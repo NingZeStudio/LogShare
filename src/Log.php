@@ -3,7 +3,6 @@
 use Aternos\Codex\Analysis\Analysis;
 use Aternos\Codex\Analysis\Information;
 use Aternos\Codex\Log\File\StringLogFile;
-use Aternos\Codex\Log\Level;
 use Aternos\Codex\Minecraft\Analysis\Information\Vanilla\VanillaVersionInformation;
 use Aternos\Codex\Minecraft\Log\Minecraft\Vanilla\Fabric\FabricLog;
 use Aternos\Codex\Minecraft\Log\Minecraft\Vanilla\VanillaClientLog;
@@ -13,7 +12,6 @@ use Aternos\Codex\Minecraft\Log\Minecraft\Vanilla\VanillaServerLog;
 use Data\MetadataEntry;
 use Data\Token;
 use Filter\Filter;
-use Printer\Printer;
 use Storage\StorageInterface;
 
 class Log
@@ -31,20 +29,9 @@ class Log
     protected \Aternos\Codex\Log\Log $log;
 
     /**
-     * 缓存统计
-     */
-    private static int $cacheHits = 0;
-    private static int $cacheMisses = 0;
-
-    /**
      * @var Analysis
      */
     protected Analysis $analysis;
-
-    /**
-     * @var Printer
-     */
-    protected Printer $printer;
 
     /**
      * Log constructor.
@@ -82,7 +69,6 @@ class Log
             try {
                 $result = $this->loadFromRedis();
                 if ($result !== null) {
-                    self::$cacheHits++;
                     error_log("[Redis] 缓存命中: " . $this->id->getRaw());
                 }
             } catch (\Exception $e) {
@@ -91,7 +77,6 @@ class Log
         }
 
         if ($result === null) {
-            self::$cacheMisses++;
             error_log("[Redis] 缓存未命中，回退到 MongoDB: " . $this->id->getRaw());
 
             /**
@@ -133,7 +118,6 @@ class Log
         $this->exists = true;
 
         $this->analyse();
-        $this->printer = (new Printer())->setLog($this->log)->setId($this->id);
     }
 
     /**
@@ -227,24 +211,6 @@ class Log
     }
 
     /**
-     * Get the log analysis
-     *
-     * @return Analysis
-     */
-    public function getAnalysis(): Analysis
-    {
-        return $this->analysis;
-    }
-
-    /**
-     * @return Printer
-     */
-    public function getPrinter(): Printer
-    {
-        return $this->printer;
-    }
-
-    /**
      * Get the amount of lines in this log
      *
      * @return int
@@ -255,25 +221,6 @@ class Log
             $this->lineCount = substr_count($this->data, "\n") + 1;
         }
         return $this->lineCount;
-    }
-
-    /**
-     * Get the amount of error entries in the log
-     *
-     * @return int
-     */
-    public function getErrorCount(): int
-    {
-        $errorCount = 0;
-
-        foreach ($this->log as $entry) {
-            /** @var \Aternos\Codex\Log\Entry $entry */
-            if ($entry->getLevel()->asInt() <= Level::ERROR->asInt()) {
-                $errorCount++;
-            }
-        }
-
-        return $errorCount;
     }
 
     /**
@@ -726,21 +673,4 @@ class Log
         }
     }
 
-    /**
-     * 获取缓存统计信息
-     *
-     * @return array
-     */
-    public static function getCacheStats(): array
-    {
-        $total = self::$cacheHits + self::$cacheMisses;
-        $hitRate = $total > 0 ? round((self::$cacheHits / $total) * 100, 2) : 0;
-
-        return [
-            'hits' => self::$cacheHits,
-            'misses' => self::$cacheMisses,
-            'total' => $total,
-            'hit_rate' => $hitRate . '%'
-        ];
-    }
 }

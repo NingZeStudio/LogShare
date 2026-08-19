@@ -54,11 +54,10 @@ test('all handlers extend base Handler', function () {
 
 test('filters are in Filter namespace', function () {
     $filterFiles = architectureFiles('Filter');
-    $filterFiles = array_merge($filterFiles, glob(__DIR__ . '/../../src/Filter/Pre/*.php') ?: []);
-    
+
     foreach ($filterFiles as $file) {
         $className = basename($file, '.php');
-        if (in_array($className, ['Filter', 'FilterType', 'Pattern', 'PatternWithReplacement', 'PreFilterInterface'])) {
+        if (in_array($className, ['Filter', 'Pattern', 'PatternWithReplacement'])) {
             continue;
         }
         
