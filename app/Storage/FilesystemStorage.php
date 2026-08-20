@@ -51,7 +51,9 @@ class FilesystemStorage implements StorageInterface
             ));
         }
 
-        file_put_contents($basePath . $id->getRaw(), json_encode($document, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
+        if (file_put_contents($basePath . $id->getRaw(), json_encode($document, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)) === false) {
+            throw new \Exception("Failed to write log file.");
+        }
         return $id;
     }
 
@@ -122,7 +124,7 @@ class FilesystemStorage implements StorageInterface
             return false;
         }
 
-        // Reset created to now, mirroring the MongoDB TTL reset behaviour.
+        // Reset created to now, resetting the storage TTL.
         $document['created'] = time();
 
         return file_put_contents($path, json_encode($document, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)) !== false;

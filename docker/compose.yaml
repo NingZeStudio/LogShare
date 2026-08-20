@@ -8,62 +8,60 @@ services:
       - ../:/web/mclogs
       - ./mclogs.conf:/etc/nginx/conf.d/default.conf
     depends_on:
-      - php-fpm
+      - hyperf
     networks:
       - mclogs-network
-    # Upload size is enforced in layers:
-    #   nginx  client_max_body_size 210m (see mclogs.conf) → transport ceiling
-    #   php    post_max_size 16M (see mclogs.ini)          → fastcgi ceiling
-    #   app    storage.maxLength 10MB (Config.inc.php)      → business limit
 
-  php-fpm:
-    container_name: mclogs-php
+  hyperf:
+    container_name: mclogs-hyperf
     build:
       context: .
-      dockerfile: php-fpm.Dockerfile
+      dockerfile: hyperf.Dockerfile
     volumes:
-      - ../:/web/mclogs
-      - ./php-fpm-overrides.conf:/usr/local/etc/php-fpm.d/overrides.conf:ro
+      - ../:/app
       - spinyarn-mappings:/opt/spinyarn/mappings
+    environment:
+      DB_HOST: mariadb
+      DB_PORT: "3306"
+      DB_DATABASE: logshare
+      DB_USERNAME: logshare
+      DB_PASSWORD: logshare
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
     depends_on:
-      - mongo
+      - mariadb
       - redis
-      - rag
     networks:
       - mclogs-network
+    restart: unless-stopped
 
-  rag:
-    # Built-in RAG MCP server (SQLite FTS5). Index is (re)built on every start
-    # from rag/knowledge/; database path comes from ai.mcp.rag.db in Config.inc.php.
-    image: php:8.5-cli
-    container_name: mclogs-rag
-    working_dir: /web/mclogs
+  mariadb:
+    image: mariadb:11
+    container_name: mclogs-mariadb
+    environment:
+      MARIADB_DATABASE: logshare
+      MARIADB_USER: logshare
+      MARIADB_PASSWORD: logshare
+      MARIADB_ROOT_PASSWORD: root
     volumes:
-      - ../:/web/mclogs
-    command: >
-      sh -c "php rag/build_index.php && exec php -S 0.0.0.0:8081 rag/server.php"
+      - mariadb-data:/var/lib/mysql
+      - ./mariadb-init.sql:/docker-entrypoint-initdb.d/init.sql:ro
     networks:
       - mclogs-network
-
-  mongo:
-    image: mongo:latest
-    container_name: mclogs-mongo
-    volumes:
-      - ./mongo-data:/data/db
-    networks:
-      - mclogs-network
+    restart: unless-stopped
 
   redis:
     image: redis:7-alpine
     container_name: mclogs-redis
     volumes:
-      - redis:/data
+      - redis-data:/data
     networks:
       - mclogs-network
     restart: unless-stopped
 
 volumes:
-  redis:
+  redis-data:
+  mariadb-data:
   spinyarn-mappings:
 
 networks:

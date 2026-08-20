@@ -50,7 +50,7 @@ class Id
 
         $rawId = "";
         for ($i = 0; $i < $config['length']; $i++) {
-            $rawId .= $config['characters'][rand(0, strlen($config['characters']) - 1)];
+            $rawId .= $config['characters'][random_int(0, strlen($config['characters']) - 1)];
         }
 
         $this->rawId = $rawId;

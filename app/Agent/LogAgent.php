@@ -4,6 +4,7 @@ namespace App\Agent;
 
 use App\Client\AIClient;
 use App\Client\MCPClient;
+use Hyperf\Context\Context;
 use Hyperf\Engine\Http\EventStream;
 use Hyperf\HttpServer\Response;
 
@@ -20,7 +21,7 @@ class LogAgent
     private const MAX_TOOL_RESULT_BYTES = 12000;
     private const STATUS_SUMMARY_BYTES = 400;
 
-    private static ?EventStream $stream = null;
+    private const SSE_CONTEXT_KEY = 'logshare_sse_stream';
 
     /**
      * Run the agent loop and stream the result as SSE.
@@ -467,12 +468,12 @@ PROMPT;
 
     private static function startSSE(?Response $response): void
     {
-        self::$stream = null;
+        Context::set(self::SSE_CONTEXT_KEY, null);
 
         if ($response !== null) {
             $connection = $response->getConnection();
             if ($connection !== null) {
-                self::$stream = new EventStream($connection, $response);
+                Context::set(self::SSE_CONTEXT_KEY, new EventStream($connection, $response));
                 return;
             }
         }
@@ -492,8 +493,9 @@ PROMPT;
 
     private static function write(string $data): void
     {
-        if (self::$stream !== null) {
-            self::$stream->write($data);
+        $stream = Context::get(self::SSE_CONTEXT_KEY);
+        if ($stream instanceof EventStream) {
+            $stream->write($data);
         } else {
             echo $data;
             flush();
@@ -545,9 +547,10 @@ PROMPT;
 
     private static function end(): void
     {
-        if (self::$stream !== null) {
-            self::$stream->end();
-            self::$stream = null;
+        $stream = Context::get(self::SSE_CONTEXT_KEY);
+        if ($stream instanceof EventStream) {
+            $stream->end();
+            Context::set(self::SSE_CONTEXT_KEY, null);
         }
     }
 

@@ -20,22 +20,31 @@ class RedisClient
      */
     protected static function Connect(): void
     {
-        if (self::$connection === null) {
-            if (!class_exists('Redis')) {
-                // Missing ext-redis (e.g. local dev / Termux). Throw a catchable
-                // Exception instead of letting `new Redis()` raise a fatal Error.
-                throw new \Exception('Redis extension is not installed');
+        if (self::$connection !== null) {
+            try {
+                if (@self::$connection->ping()) {
+                    return;
+                }
+            } catch (\Throwable $e) {
+                // connection lost (e.g. Redis restarted) → fall through to reconnect
             }
+            self::$connection = null;
+        }
 
-            $config = \App\Config::Get('cache');
-            $redisConfig = $config['redis'] ?? ['host' => 'mclogs-redis', 'port' => 6379];
-            $timeout = $redisConfig['timeout'] ?? self::CONNECT_TIMEOUT;
+        if (!class_exists('Redis')) {
+            // Missing ext-redis (e.g. local dev / Termux). Throw a catchable
+            // Exception instead of letting `new Redis()` raise a fatal Error.
+            throw new \Exception('Redis extension is not installed');
+        }
 
-            self::$connection = new Redis();
-            if (!self::$connection->connect($redisConfig['host'], $redisConfig['port'], $timeout)) {
-                self::$connection = null;
-                throw new \Exception('Redis connection failed: ' . $redisConfig['host'] . ':' . $redisConfig['port']);
-            }
+        $config = \App\Config::Get('cache');
+        $redisConfig = $config['redis'] ?? ['host' => 'mclogs-redis', 'port' => 6379];
+        $timeout = $redisConfig['timeout'] ?? self::CONNECT_TIMEOUT;
+
+        self::$connection = new Redis();
+        if (!self::$connection->connect($redisConfig['host'], $redisConfig['port'], $timeout)) {
+            self::$connection = null;
+            throw new \Exception('Redis connection failed: ' . $redisConfig['host'] . ':' . $redisConfig['port']);
         }
     }
 }

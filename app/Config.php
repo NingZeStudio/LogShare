@@ -34,10 +34,6 @@ class Config
      */
     private static function applyEnvironmentOverrides(array &$data): void
     {
-        if ($uri = getenv('MONGODB_URI')) {
-            $data['mongo']['url'] = $uri;
-        }
-
         if ($host = getenv('REDIS_HOST')) {
             $data['cache']['redis']['host'] = $host;
         }

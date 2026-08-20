@@ -5,7 +5,6 @@ namespace App\Controller;
 use App\ApiError;
 use App\ApiResponse;
 use App\ContentParser;
-use Hyperf\Context\Context;
 use Hyperf\Di\Annotation\Inject;
 use Hyperf\HttpServer\Contract\RequestInterface;
 use Hyperf\HttpServer\Response;

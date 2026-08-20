@@ -76,6 +76,15 @@ class LogController extends AbstractController
         ];
 
         foreach ($logIds as $logId) {
+            if (!preg_match('/^[a-zA-Z0-9_-]+$/', $logId)) {
+                $results['failed'][] = [
+                    'id' => $logId,
+                    'message' => "Invalid ID format: {$logId}",
+                    'code' => 400,
+                ];
+                continue;
+            }
+
             $logIdObj = new \App\Id($logId);
             $log = new \App\Log($logIdObj);
 

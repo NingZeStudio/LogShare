@@ -28,12 +28,12 @@ class Log
     private ?int $expires = null;
     private array $files = [];
     private ?int $lineCount = null;
-    protected \Aternos\Codex\Log\Log $log;
+    protected ?\Aternos\Codex\Log\Log $log = null;
 
     /**
-     * @var Analysis
+     * @var Analysis|null
      */
-    protected Analysis $analysis;
+    protected ?Analysis $analysis = null;
 
     /**
      * Log constructor.
@@ -112,8 +112,6 @@ class Log
         $this->expires = $this->created !== null ? $this->created + $config['storageTime'] : null;
         $this->files = $result['files'] ?? [];
         $this->exists = true;
-
-        $this->analyse();
     }
 
     /**
@@ -203,6 +201,9 @@ class Log
      */
     public function get(): \Aternos\Codex\Log\Log
     {
+        if ($this->log === null) {
+            $this->analyse();
+        }
         return $this->log;
     }
 
@@ -330,11 +331,15 @@ class Log
 
         $storage::Renew($this->id);
 
-        if ($this->id->getStorage() === 'f' && mt_rand(1, 100) === 1) {
+        if (mt_rand(1, 100) === 1) {
             try {
-                \App\Storage\FilesystemStorage::CleanupExpired();
+                if ($this->id->getStorage() === 'f') {
+                    \App\Storage\FilesystemStorage::CleanupExpired();
+                } else {
+                    \App\Storage\MariaDbStorage::CleanupExpired();
+                }
             } catch (\Exception $e) {
-                error_log("[Filesystem] 过期日志清理失败: " . $e->getMessage());
+                error_log("[Storage] 过期日志清理失败: " . $e->getMessage());
             }
         }
 

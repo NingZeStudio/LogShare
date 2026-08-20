@@ -132,13 +132,14 @@ class UploadParser
 
         $zip = new \ZipArchive();
         $result = [];
+        $opened = false;
 
         try {
             $openResult = $zip->open($tmpFile);
             if ($openResult !== true) {
-                @unlink($tmpFile);
                 return new ApiError(400, "Invalid ZIP archive: " . htmlspecialchars($zipName));
             }
+            $opened = true;
 
             for ($i = 0; $i < $zip->numFiles; $i++) {
                 $entryName = $zip->getNameIndex($i);
@@ -177,13 +178,14 @@ class UploadParser
                 $remainingSlots--;
             }
 
-            $zip->close();
-            @unlink($tmpFile);
+            return $result;
         } catch (\Throwable $e) {
-            @unlink($tmpFile);
             throw $e;
+        } finally {
+            if ($opened) {
+                $zip->close();
+            }
+            @unlink($tmpFile);
         }
-
-        return $result;
     }
 }
