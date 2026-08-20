@@ -1,5 +1,7 @@
 <?php
 
+namespace App\Rag;
+
 /**
  * RagSearch: local retrieval over a static knowledge base using SQLite FTS5 (BM25).
  *
@@ -22,22 +24,22 @@ class RagSearch
      */
     private const SNIPPET_HALF_WINDOW = 250;
 
-    private PDO $pdo;
+    private \PDO $pdo;
 
     public function __construct(private string $dbPath)
     {
         $dir = dirname($dbPath);
         if (!is_dir($dir)) {
-            throw new RuntimeException("RAG database directory does not exist: {$dir}");
+            throw new \RuntimeException("RAG database directory does not exist: {$dir}");
         }
 
-        $this->pdo = new PDO('sqlite:' . $dbPath);
-        $this->pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
-        $this->pdo->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_ASSOC);
+        $this->pdo = new \PDO('sqlite:' . $dbPath);
+        $this->pdo->setAttribute(\PDO::ATTR_ERRMODE, \PDO::ERRMODE_EXCEPTION);
+        $this->pdo->setAttribute(\PDO::ATTR_DEFAULT_FETCH_MODE, \PDO::FETCH_ASSOC);
         $this->ensureSchema();
     }
 
-    public function getPdo(): PDO
+    public function getPdo(): \PDO
     {
         return $this->pdo;
     }
@@ -52,7 +54,7 @@ class RagSearch
      */
     public static function resolveDbPath(): string
     {
-        $projectRoot = dirname(__DIR__);
+        $projectRoot = dirname(__DIR__, 2);
 
         $env = getenv('RAG_DB_PATH');
         if (is_string($env) && $env !== '') {
@@ -94,7 +96,7 @@ class RagSearch
     public function buildIndex(string $knowledgeDir): array
     {
         if (!is_dir($knowledgeDir)) {
-            throw new RuntimeException("Knowledge directory does not exist: {$knowledgeDir}");
+            throw new \RuntimeException("Knowledge directory does not exist: {$knowledgeDir}");
         }
 
         $this->pdo->exec("DELETE FROM docs");
@@ -103,9 +105,9 @@ class RagSearch
         $chunks = 0;
         $insert = $this->pdo->prepare("INSERT INTO docs(title, body, source) VALUES (?, ?, ?)");
 
-        $iterator = new RecursiveIteratorIterator(new RecursiveDirectoryIterator($knowledgeDir, FilesystemIterator::SKIP_DOTS));
+        $iterator = new \RecursiveIteratorIterator(new \RecursiveDirectoryIterator($knowledgeDir, \FilesystemIterator::SKIP_DOTS));
         foreach ($iterator as $fileInfo) {
-            /** @var SplFileInfo $fileInfo */
+            /** @var \SplFileInfo $fileInfo */
             if (!$fileInfo->isFile() || !in_array(strtolower($fileInfo->getExtension()), ['md', 'txt', 'log'], true)) {
                 continue;
             }
