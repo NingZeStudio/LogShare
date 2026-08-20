@@ -8,7 +8,7 @@ use App\ContentParser;
 use Hyperf\Context\Context;
 use Hyperf\Di\Annotation\Inject;
 use Hyperf\HttpServer\Contract\RequestInterface;
-use Hyperf\HttpServer\Contract\ResponseInterface;
+use Hyperf\HttpServer\Response;
 use Psr\Http\Message\ResponseInterface as PsrResponseInterface;
 
 abstract class AbstractController
@@ -17,7 +17,7 @@ abstract class AbstractController
     protected RequestInterface $request;
 
     #[Inject]
-    protected ResponseInterface $response;
+    protected Response $response;
 
     protected function parseContent(): string|ApiError|array
     {

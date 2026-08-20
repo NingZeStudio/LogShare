@@ -4,6 +4,8 @@ namespace App\Agent;
 
 use App\Client\AIClient;
 use App\Client\MCPClient;
+use Hyperf\Engine\Http\EventStream;
+use Hyperf\HttpServer\Response;
 
 /**
  * LogAgent: model-driven tool loop for log analysis.
@@ -18,6 +20,8 @@ class LogAgent
     private const MAX_TOOL_RESULT_BYTES = 12000;
     private const STATUS_SUMMARY_BYTES = 400;
 
+    private static ?EventStream $stream = null;
+
     /**
      * Run the agent loop and stream the result as SSE.
      *
@@ -28,16 +32,17 @@ class LogAgent
      *                       - logId: string|null (bound log id enabling file tools)
      * @return void
      */
-    public static function analyze(string $content, array $options = []): void
+    public static function analyze(string $content, array $options = [], ?Response $response = null): void
     {
         $cacheKey = $options['cacheKey'] ?? null;
         $cacheTTL = $options['cacheTTL'] ?? 1800;
         $logId = $options['logId'] ?? null;
 
+        self::startSSE($response);
+
         if ($cacheKey !== null) {
             $cached = self::checkCache($cacheKey);
             if ($cached !== null) {
-                self::startSSE();
                 self::emitContent($cached);
                 self::emitDone();
                 return;
@@ -50,8 +55,6 @@ class LogAgent
 
         $tools = self::buildTools($config, $logId);
         $messages = self::buildMessages($content, $logId, $config, self::fetchTopics($config));
-
-        self::startSSE();
 
         $fullAnswer = '';
         $success = false;
@@ -462,8 +465,18 @@ PROMPT;
 
     /* ─── SSE emission ─────────────────────────────────────── */
 
-    private static function startSSE(): void
+    private static function startSSE(?Response $response): void
     {
+        self::$stream = null;
+
+        if ($response !== null) {
+            $connection = $response->getConnection();
+            if ($connection !== null) {
+                self::$stream = new EventStream($connection, $response);
+                return;
+            }
+        }
+
         if (PHP_SAPI !== 'cli') {
             header('Content-Type: text/event-stream');
             header('Cache-Control: no-cache');
@@ -477,52 +490,65 @@ PROMPT;
         flush();
     }
 
+    private static function write(string $data): void
+    {
+        if (self::$stream !== null) {
+            self::$stream->write($data);
+        } else {
+            echo $data;
+            flush();
+        }
+    }
+
     private static function emitContent(string $delta): void
     {
-        echo "data: " . json_encode(['choices' => [['delta' => ['content' => $delta]]]], JSON_UNESCAPED_UNICODE) . "\n\n";
-        flush();
+        self::write("data: " . json_encode(['choices' => [['delta' => ['content' => $delta]]]], JSON_UNESCAPED_UNICODE) . "\n\n");
     }
 
     private static function emitThinking(string $reasoning): void
     {
-        echo "event: status\ndata: " . json_encode(['type' => 'thinking', 'delta' => $reasoning], JSON_UNESCAPED_UNICODE) . "\n\n";
-        flush();
+        self::write("event: status\ndata: " . json_encode(['type' => 'thinking', 'delta' => $reasoning], JSON_UNESCAPED_UNICODE) . "\n\n");
     }
 
     private static function emitTool(string $name, array $arguments): void
     {
-        echo "event: status\ndata: " . json_encode(['type' => 'tool', 'name' => $name, 'arguments' => $arguments], JSON_UNESCAPED_UNICODE) . "\n\n";
-        flush();
+        self::write("event: status\ndata: " . json_encode(['type' => 'tool', 'name' => $name, 'arguments' => $arguments], JSON_UNESCAPED_UNICODE) . "\n\n");
     }
 
     private static function emitToolResult(string $name, string $result): void
     {
         $summary = mb_substr($result, 0, self::STATUS_SUMMARY_BYTES);
-        echo "event: status\ndata: " . json_encode([
+        self::write("event: status\ndata: " . json_encode([
             'type' => 'tool_result',
             'name' => $name,
             'summary' => $summary,
             'truncated' => strlen($result) > self::STATUS_SUMMARY_BYTES,
-        ], JSON_UNESCAPED_UNICODE) . "\n\n";
-        flush();
+        ], JSON_UNESCAPED_UNICODE) . "\n\n");
     }
 
     private static function emitLimit(int $rounds): void
     {
-        echo "event: status\ndata: " . json_encode(['type' => 'limit', 'rounds' => $rounds], JSON_UNESCAPED_UNICODE) . "\n\n";
-        flush();
+        self::write("event: status\ndata: " . json_encode(['type' => 'limit', 'rounds' => $rounds], JSON_UNESCAPED_UNICODE) . "\n\n");
     }
 
     private static function emitDone(): void
     {
-        echo "event: done\ndata: {\"status\":\"completed\"}\n\n";
-        flush();
+        self::write("event: done\ndata: {\"status\":\"completed\"}\n\n");
+        self::end();
     }
 
     private static function emitError(string $message): void
     {
-        echo "event: error\ndata: " . json_encode(['error' => $message], JSON_UNESCAPED_UNICODE) . "\n\n";
-        flush();
+        self::write("event: error\ndata: " . json_encode(['error' => $message], JSON_UNESCAPED_UNICODE) . "\n\n");
+        self::end();
+    }
+
+    private static function end(): void
+    {
+        if (self::$stream !== null) {
+            self::$stream->end();
+            self::$stream = null;
+        }
     }
 
     /* ─── Cache ────────────────────────────────────────────── */

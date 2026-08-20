@@ -2,6 +2,9 @@
 
 namespace App\Client;
 
+use Hyperf\Engine\Http\EventStream;
+use Hyperf\HttpServer\Response;
+
 class AIClient
 {
     private const DEFAULT_BASE_URL = 'https://opencode.ai/zen/v1/chat/completions';
@@ -9,6 +12,8 @@ class AIClient
     private const DEFAULT_TIMEOUT = 120;
     private const DEFAULT_CONNECT_TIMEOUT = 15;
     private const CACHE_TTL = 1800;
+
+    private static ?EventStream $stream = null;
 
     /**
      * Stream a chat completion with optional tools.
@@ -69,7 +74,6 @@ class AIClient
                     $bytesReceived = strlen($data);
                     $buffer .= $data;
 
-                    // Keep a bounded copy of the raw response for error diagnostics
                     if (strlen($responseBody) < 8192) {
                         $responseBody .= $data;
                     }
@@ -181,28 +185,26 @@ class AIClient
      * @param int $cacheTTL
      * @return void
      */
-    public static function analyzeStream(string $content, ?string $cacheKey = null, int $cacheTTL = self::CACHE_TTL): void
+    public static function analyzeStream(string $content, ?string $cacheKey = null, int $cacheTTL = self::CACHE_TTL, ?Response $response = null): void
     {
+        self::startSSE($response);
+
         if ($cacheKey !== null) {
             $cached = self::checkCache($cacheKey);
             if ($cached !== null) {
-                self::startSSE();
-                echo "data: " . json_encode(['choices' => [['delta' => ['content' => $cached]]]], JSON_UNESCAPED_UNICODE) . "\n\n";
-                echo "event: done\ndata: {\"status\":\"completed\"}\n\n";
-                flush();
+                self::write("data: " . json_encode(['choices' => [['delta' => ['content' => $cached]]]], JSON_UNESCAPED_UNICODE) . "\n\n");
+                self::write("event: done\ndata: {\"status\":\"completed\"}\n\n");
+                self::end();
                 return;
             }
         }
-
-        self::startSSE();
 
         try {
             self::streamChat(
                 self::analysisMessages($content),
                 [],
                 function (string $delta) {
-                    echo "data: " . json_encode(['choices' => [['delta' => ['content' => $delta]]]], JSON_UNESCAPED_UNICODE) . "\n\n";
-                    flush();
+                    self::write("data: " . json_encode(['choices' => [['delta' => ['content' => $delta]]]], JSON_UNESCAPED_UNICODE) . "\n\n");
                 },
                 function (string $reasoning) {
                     // Legacy plain analysis does not forward the thinking trace
@@ -214,13 +216,13 @@ class AIClient
                     if ($cacheKey !== null && $fullContent !== '') {
                         self::writeCache($cacheKey, $fullContent, $cacheTTL);
                     }
-                    echo "event: done\ndata: {\"status\":\"completed\"}\n\n";
-                    flush();
+                    self::write("event: done\ndata: {\"status\":\"completed\"}\n\n");
+                    self::end();
                 }
             );
         } catch (\Exception $e) {
-            echo "event: error\ndata: " . json_encode(['error' => $e->getMessage()], JSON_UNESCAPED_UNICODE) . "\n\n";
-            flush();
+            self::write("event: error\ndata: " . json_encode(['error' => $e->getMessage()], JSON_UNESCAPED_UNICODE) . "\n\n");
+            self::end();
         }
     }
 
@@ -237,8 +239,18 @@ class AIClient
         ];
     }
 
-    private static function startSSE(): void
+    private static function startSSE(?Response $response): void
     {
+        self::$stream = null;
+
+        if ($response !== null) {
+            $connection = $response->getConnection();
+            if ($connection !== null) {
+                self::$stream = new EventStream($connection, $response);
+                return;
+            }
+        }
+
         header('Content-Type: text/event-stream');
         header('Cache-Control: no-cache');
         header('Connection: keep-alive');
@@ -248,6 +260,24 @@ class AIClient
             ob_end_flush();
         }
         flush();
+    }
+
+    private static function write(string $data): void
+    {
+        if (self::$stream !== null) {
+            self::$stream->write($data);
+        } else {
+            echo $data;
+            flush();
+        }
+    }
+
+    private static function end(): void
+    {
+        if (self::$stream !== null) {
+            self::$stream->end();
+            self::$stream = null;
+        }
     }
 
     private static function checkCache(string $cacheKey): ?string
