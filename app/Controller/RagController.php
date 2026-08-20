@@ -11,9 +11,9 @@ use Psr\Http\Message\ResponseInterface;
 
 /**
  * RAG MCP server over Streamable HTTP (JSON-RPC 2.0), hosted by Hyperf on the
- * dedicated `rag` server (port 8081). Exposes rag_search / list_topics tools.
+ * main `http` server under the `/rag` prefix. Exposes rag_search / list_topics tools.
  */
-#[Controller(prefix: '/', server: 'rag')]
+#[Controller(prefix: '/rag')]
 class RagController extends AbstractController
 {
     #[RequestMapping(path: '', methods: ['GET', 'POST'])]

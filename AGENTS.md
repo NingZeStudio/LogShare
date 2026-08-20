@@ -18,7 +18,7 @@ composer install                  # vendor/ (gitignored)
 composer test                     # Pest suite (php vendor/bin/pest on Termux)
 composer test:architecture        # Pest architecture rules
 composer stan                     # PHPStan level 5
-php bin/hyperf.php start          # start the Swoole HTTP server (9501 + RAG 8081)
+php bin/hyperf.php start          # start the Swoole HTTP server (9501, RAG served on /rag)
 php bin/hyperf.php rag:build      # (re)build the RAG SQLite FTS5 index
 ```
 
@@ -106,7 +106,7 @@ Applied before storage. Configured in `Config.inc.php` under `filter.pre`:
 When `ai.agent.enabled` is true, `/v1/ai/*` routes run the model-driven tool loop (`App\Agent\LogAgent`):
 
 - `App\Client\MCPClient` — lightweight Streamable-HTTP MCP client (curl + JSON-RPC, zero deps). Used for `web_search_exa` (Exa hosted endpoint) and `rag_search`.
-- `App\Rag\RagSearch` + `App\Controller\RagController` — built-in RAG MCP server (SQLite FTS5 BM25), hosted by Hyperf on the `rag` server (port 8081), MCP JSON-RPC 2.0 protocol. DB path from `ai.mcp.rag.db` (default `rag/index.db`); `RAG_DB_PATH` env overrides. Build index via `php bin/hyperf.php rag:build`.
+- `App\Rag\RagSearch` + `App\Controller\RagController` — built-in RAG MCP server (SQLite FTS5 BM25), hosted by Hyperf on the main `http` server under the `/rag` path, MCP JSON-RPC 2.0 protocol. DB path from `ai.mcp.rag.db` (default `rag/index.db`); `RAG_DB_PATH` env overrides. Build index via `php bin/hyperf.php rag:build`.
 - `App\Client\AIClient::streamChat()` — streaming LLM request via curl (coroutine-hooked by `SWOOLE_HOOK_ALL`), multi-key rotation; parses `content`, `reasoning_content`, `tool_calls` deltas.
 - SSE is written via `Hyperf\Engine\Http\EventStream`; the stream handle is stored in `Hyperf\Context\Context` (coroutine-scoped), **never** in a static property.
 - Session-scoped file tools `list_log_files` / `read_log_file` operate only on the bound log id (`logId`), so the agent cannot read other logs.
@@ -119,7 +119,7 @@ docker compose -f docker/compose.yaml up -d
 ```
 
 - nginx reverse-proxies `9300` → Hyperf `9501` (SSE-friendly: `proxy_buffering off`, `proxy_read_timeout 300s`)
-- `hyperf` service — resident process built by `docker/hyperf.Dockerfile` (Swoole 6.2 + SpinYarn + pdo_mysql + redis); starts RAG on 8081 in-process
+- `hyperf` service — resident process built by `docker/hyperf.Dockerfile` (Swoole 6.2 + SpinYarn + pdo_mysql + redis); serves RAG on the main HTTP server under `/rag`
 - `mariadb:11` (schema auto-created by `docker/mariadb-init.sql`) + `redis:7-alpine`
 - named volumes: `mariadb-data`, `redis-data`, `spinyarn-mappings`
 

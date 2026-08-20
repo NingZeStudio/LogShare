@@ -1,6 +1,6 @@
 # RAG 检索（SQLite FTS5 本地知识库）
 
-LogShare 的内置 RAG 实现：基于 SQLite FTS5（BM25）的纯本地知识库检索，零网络、零 embedding。已整合进 Hyperf 进程，作为 MCP 服务在 8081 端口承载（JSON-RPC 2.0 协议）。
+LogShare 的内置 RAG 实现：基于 SQLite FTS5（BM25）的纯本地知识库检索，零网络、零 embedding。已整合进 Hyperf 进程，作为 MCP 服务在主 server 的 `/rag` 路径承载（JSON-RPC 2.0 协议）。
 
 ## 组成
 
@@ -8,7 +8,7 @@ LogShare 的内置 RAG 实现：基于 SQLite FTS5（BM25）的纯本地知识�
 app/Rag/
 └── RagSearch.php              核心检索类（FTS5 建表 / 切块 / BM25 检索 / LIKE 兜底）
 app/Controller/
-└── RagController.php          Streamable HTTP MCP server（JSON-RPC 2.0，8081 端口 rag server）
+└── RagController.php          Streamable HTTP MCP server（JSON-RPC 2.0，主 server /rag 路径）
 app/Command/
 └── RagBuildCommand.php        建索引命令（php bin/hyperf.php rag:build）
 rag/
@@ -38,7 +38,7 @@ php bin/hyperf.php rag:build
 
 ### 2. 启动 RAG 服务
 
-RAG 已整合进 Hyperf 主进程，随 `php bin/hyperf.php start` 一并启动，监听 8081 端口（`config/autoload/server.php` 中的 `rag` server）。无需单独启动。
+RAG 已整合进 Hyperf 主进程，随 `php bin/hyperf.php start` 一并启动，MCP 端点在主 server 的 `/rag` 路径。无需单独启动。
 
 ### 3. 接入 LogShare
 
@@ -47,7 +47,7 @@ RAG 已整合进 Hyperf 主进程，随 `php bin/hyperf.php start` 一并启动�
     'agent' => ['enabled' => true],
     'mcp' => [
         'rag' => [
-            'url' => 'http://127.0.0.1:8081',
+            'url' => 'http://127.0.0.1:9501/rag',
             'db'  => 'rag/index.db',
         ],
     ],
