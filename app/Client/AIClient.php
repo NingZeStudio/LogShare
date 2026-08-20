@@ -16,6 +16,27 @@ class AIClient
 
     private const SSE_CONTEXT_KEY = 'logshare_sse_stream';
 
+    /** CLI fallback storage (no Swoole coroutine, so a static is safe). */
+    private static ?EventStream $stream = null;
+
+    private static function setStream(?EventStream $stream): void
+    {
+        if (extension_loaded('swoole')) {
+            Context::set(self::SSE_CONTEXT_KEY, $stream);
+        } else {
+            self::$stream = $stream;
+        }
+    }
+
+    private static function getStream(): ?EventStream
+    {
+        if (extension_loaded('swoole')) {
+            $stream = Context::get(self::SSE_CONTEXT_KEY);
+            return $stream instanceof EventStream ? $stream : null;
+        }
+        return self::$stream;
+    }
+
     /**
      * Stream a chat completion with optional tools.
      *
@@ -242,12 +263,12 @@ class AIClient
 
     private static function startSSE(?Response $response): void
     {
-        Context::set(self::SSE_CONTEXT_KEY, null);
+        self::setStream(null);
 
         if ($response !== null) {
             $connection = $response->getConnection();
             if ($connection !== null) {
-                Context::set(self::SSE_CONTEXT_KEY, new EventStream($connection, $response));
+                self::setStream(new EventStream($connection, $response));
                 return;
             }
         }
@@ -265,7 +286,7 @@ class AIClient
 
     private static function write(string $data): void
     {
-        $stream = Context::get(self::SSE_CONTEXT_KEY);
+        $stream = self::getStream();
         if ($stream instanceof EventStream) {
             $stream->write($data);
         } else {
@@ -276,10 +297,10 @@ class AIClient
 
     private static function end(): void
     {
-        $stream = Context::get(self::SSE_CONTEXT_KEY);
+        $stream = self::getStream();
         if ($stream instanceof EventStream) {
             $stream->end();
-            Context::set(self::SSE_CONTEXT_KEY, null);
+            self::setStream(null);
         }
     }
 
