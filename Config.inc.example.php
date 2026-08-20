@@ -65,6 +65,12 @@ return [
         'apiBaseUrl' => 'https://api.logshare.cn',
     ],
 
+    /* ─── Rate limit（Redis INCR 限流，按 IP + method + path）── */
+    'rateLimit' => [
+        'limit' => 36000,
+        'window' => 60,
+    ],
+
     /* ─── Legal ────────────────────────────────────────────── */
     'legal' => [
         'abuseEmail' => 'mengze2@foxmail.com',
