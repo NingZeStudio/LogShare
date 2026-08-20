@@ -4,6 +4,12 @@ declare(strict_types=1);
 
 require_once __DIR__ . '/../core.php';
 
+// hyperf/testing 的属性默认值在类加载（反射）时求值 BASE_PATH，须在此提前定义
+! defined('BASE_PATH') && define('BASE_PATH', dirname(__DIR__));
+
+// 扫描注解（填充 AnnotationCollector，供 DispatcherFactory 注册注解路由）
+\Hyperf\Di\ClassLoader::init();
+
 // Ensure config is loaded for tests
 if (!file_exists(__DIR__ . '/../Config.inc.php')) {
     copy(__DIR__ . '/../Config.inc.example.php', __DIR__ . '/../Config.inc.php');
