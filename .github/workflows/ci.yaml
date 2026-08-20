@@ -42,7 +42,7 @@ jobs:
         uses: shivammathur/setup-php@v2
         with:
           php-version: ${{ matrix.php-version }}
-          extensions: mbstring, json, zlib, pdo_mysql, redis
+          extensions: mbstring, json, zlib, pdo_mysql, redis, pcntl, posix, sockets, swoole
           coverage: pcov
           tools: composer:v2
 
