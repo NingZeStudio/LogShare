@@ -198,13 +198,13 @@ jobs:
       - name: Start Server & Smoke Test
         run: |
           php bin/hyperf.php start > /tmp/hyperf.log 2>&1 &
-          sleep 10
+          sleep 15
           # HTTP + 路由
-          curl -sf http://127.0.0.1:9501/v1/limits | grep -q storageTime
+          curl -sf http://127.0.0.1:9501/v1/limits | grep -q storageTime || { echo '=== hyperf.log ==='; cat /tmp/hyperf.log; exit 1; }
           # MariaDB 存储（POST /v1/log 走 MariaDbStorage）
-          curl -sf http://127.0.0.1:9501/v1/log -H 'Content-Type: application/json' -d '{"content":"[INFO] smoke test"}' | grep -q '"id"'
+          curl -sf http://127.0.0.1:9501/v1/log -H 'Content-Type: application/json' -d '{"content":"[INFO] smoke test"}' | grep -q '"id"' || { echo '=== hyperf.log ==='; cat /tmp/hyperf.log; exit 1; }
           # RAG MCP（8081）
-          curl -sf http://127.0.0.1:8081/ -X POST -H 'Content-Type: application/json' -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}' | grep -q jsonrpc
+          curl -sf http://127.0.0.1:8081/ -X POST -H 'Content-Type: application/json' -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}' | grep -q jsonrpc || { echo '=== hyperf.log ==='; cat /tmp/hyperf.log; exit 1; }
           kill $(cat runtime/hyperf.pid)
         env:
           DB_HOST: 127.0.0.1
