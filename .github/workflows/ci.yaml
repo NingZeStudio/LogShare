@@ -205,6 +205,14 @@ jobs:
           # RAG MCP（8081）
           curl -sf http://127.0.0.1:8081/ -X POST -H 'Content-Type: application/json' -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}' | grep -q jsonrpc
           kill $(cat runtime/hyperf.pid)
+        env:
+          DB_HOST: 127.0.0.1
+          DB_PORT: 3306
+          DB_DATABASE: logshare
+          DB_USERNAME: logshare
+          DB_PASSWORD: logshare
+          REDIS_HOST: 127.0.0.1
+          REDIS_PORT: 6379
 
   docker:
     name: Docker Build
