@@ -1,0 +1,44 @@
+<?php
+
+namespace App\Controller;
+
+use Hyperf\HttpServer\Annotation\Controller;
+use Hyperf\HttpServer\Annotation\GetMapping;
+use Psr\Http\Message\ResponseInterface;
+
+#[Controller]
+class IndexController extends AbstractController
+{
+    #[GetMapping(path: '/')]
+    public function index(): ResponseInterface
+    {
+        $endpoints = [
+            'POST /1/log',
+            'DELETE /1/log/{id}',
+            'POST /1/analyse',
+            'GET /1/errors/rate',
+            'GET /1/limits',
+            'GET /1/filters',
+            'GET /1/raw/{id}',
+            'GET /1/raw/{id}/{filename:.+}',
+            'GET /1/log/{id}',
+            'GET /1/insights/{id}',
+            'GET /1/ai/{id}',
+            'POST /1/ai/analyse',
+            'POST /v1/log',
+            'DELETE /v1/log/{id}',
+            'POST /v1/analyse',
+            'GET /v1/errors/rate',
+            'GET /v1/limits',
+            'GET /v1/filters',
+            'GET /v1/raw/{id}',
+            'GET /v1/raw/{id}/{filename:.+}',
+            'GET /v1/log/{id}',
+            'GET /v1/insights/{id}',
+            'GET /v1/ai/{id}',
+            'POST /v1/ai/analyse',
+        ];
+
+        return \App\ApiResponse::success(['endpoints' => $endpoints], 'LogShare API');
+    }
+}

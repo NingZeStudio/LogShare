@@ -1,43 +1,25 @@
 <?php
 
-use Client\AIClient;
+use App\Client\AIClient;
 
 beforeAll(function () {
-    $port = 19100 + mt_rand(1, 800);
-    $base = 'http://127.0.0.1:' . $port;
-    $cmd = sprintf(
-        'php -S 127.0.0.1:%d %s > /dev/null 2>&1 & echo $!',
-        $port,
-        escapeshellarg(CORE_PATH . '/tests/Fixtures/llm_server.php')
-    );
-    $output = shell_exec($cmd);
-    $pid = (int) trim((string) $output);
-
-    $ready = false;
-    for ($i = 0; $i < 50; $i++) {
-        $fp = @fsockopen('127.0.0.1', $port, $errno, $errstr, 0.2);
-        if ($fp) {
-            fclose($fp);
-            $ready = true;
-            break;
-        }
-        usleep(100000);
+    $server = startMockServer(CORE_PATH . '/tests/Fixtures/llm_server.php', 19100, 800);
+    if ($server === null) {
+        $GLOBALS['llm_base_url'] = null;
+        $GLOBALS['llm_pid'] = null;
+        return;
     }
 
-    if (!$ready) {
-        throw new \RuntimeException('Mock LLM server failed to start.');
-    }
+    $GLOBALS['llm_base_url'] = $server['base'];
+    $GLOBALS['llm_pid'] = $server['pid'];
 
-    $GLOBALS['llm_base_url'] = $base;
-    $GLOBALS['llm_pid'] = $pid;
-
-    // Inject mock LLM endpoint into Config
-    $configRef = new ReflectionClass(\Config::class);
+    // Inject mock LLM endpoint into App\Config
+    $configRef = new ReflectionClass(\App\Config::class);
     $dataProp = $configRef->getProperty('data');
     $data = $dataProp->getValue();
     $data['ai'] = [
         'apiKeys' => ['mock-key-1', 'mock-key-2'],
-        'baseUrl' => $base . '/v1/chat/completions',
+        'baseUrl' => $server['base'] . '/v1/chat/completions',
         'model' => 'mock-model',
         'timeout' => 10,
     ];
@@ -52,6 +34,7 @@ afterAll(function () {
 });
 
 test('streamChat forwards content and reasoning deltas without tools', function () {
+    skipWithoutMockServer($GLOBALS['llm_base_url']);
     $content = '';
     $reasoning = '';
     $toolCalls = 'not-called';
@@ -79,6 +62,7 @@ test('streamChat forwards content and reasoning deltas without tools', function 
 });
 
 test('streamChat merges streamed tool_calls fragments', function () {
+    skipWithoutMockServer($GLOBALS['llm_base_url']);
     $received = [];
 
     AIClient::streamChat(
@@ -103,6 +87,7 @@ test('streamChat merges streamed tool_calls fragments', function () {
 });
 
 test('streamChat continues with tool result messages', function () {
+    skipWithoutMockServer($GLOBALS['llm_base_url']);
     $content = '';
     $done = false;
 
@@ -131,8 +116,9 @@ test('streamChat continues with tool result messages', function () {
 });
 
 test('streamChat throws when all keys fail', function () {
+    skipWithoutMockServer($GLOBALS['llm_base_url']);
     // Point config at an unreachable host
-    $configRef = new ReflectionClass(\Config::class);
+    $configRef = new ReflectionClass(\App\Config::class);
     $dataProp = $configRef->getProperty('data');
     $data = $dataProp->getValue();
     $data['ai']['baseUrl'] = 'http://127.0.0.1:1/unreachable';

@@ -4,16 +4,18 @@ includes:
 parameters:
   level: 5
   paths:
-    - src
-    - rag
+    - app
   excludePaths:
-    - src/Printer/*
-    - src/Data/*
-    - src/Cache/*
-    - src/Client/*
-    - src/Storage/*
+    - app/Data/*
+    - app/Cache/*
+    - app/Client/*
+    - app/Storage/*
   ignoreErrors:
     # Aternos Codex type hierarchy: analyse() lives on AnalysableLogInterface,
     # while detect() returns the base LogInterface. Runtime classes implement both.
     - message: '#Call to an undefined method Aternos\\Codex\\Log\\Log::analyse#'
-      path: src/Log.php
+      path: app/Log.php
+    # Hyperf\Response::getConnection() is dispatched via __call to the underlying
+    # Swoole response; the concrete method lives on the wrapped response.
+    - message: '#Call to an undefined method Hyperf\\HttpServer\\Response::getConnection#'
+      path: app/Agent/LogAgent.php

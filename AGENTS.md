@@ -2,79 +2,101 @@
 
 ## Overview
 
-Minecraft / Hytale log analysis and sharing platform (v1.6.0). Monolithic PHP 8.4+ app with `index.php` entrypoint, `src/` classes, and `Config.inc.php` at root.
+Minecraft / Hytale log analysis and sharing platform (v1.7.0-beta.1). Hyperf 3.2 (Swoole 6.2 resident + coroutine) app with `bin/hyperf.php` entrypoint, `app/` classes under the `App\` namespace, and `Config.inc.php` (business config) + `config/autoload/` (framework config) at root.
 
 ## Entrypoint & routing
 
-`index.php` → `core.php` bootstrap → `Router::dispatch()`.  
-Routes live in `src/Router.php::getRoutes()` as `[METHOD, path, HandlerClass, [rate_limit, window]]`.  
-Register new endpoints by adding a route row and creating a `src/Handler/` class.
+`bin/hyperf.php` → Hyperf `Application` → annotation-based routing.  
+Routes are declared on `App\Controller\*` classes via `#[Controller(prefix: ...)]` + `#[GetMapping]/#[PostMapping]/#[DeleteMapping]/#[RequestMapping]`. Register a new endpoint by adding a method to a Controller.
 
-Both `/1/` (deprecated) and `/v1/` paths coexist. `LogHandler` detects the request prefix to return the correct `raw` URL.
+Both `/1/` (deprecated) and `/v1/` paths share one Controller via the `/{version:v?1}` prefix regex; `AbstractController::apiPrefix()` reads the request path to return the matching `raw` URL.
 
 ## Commands
 
 ```bash
 composer install                  # vendor/ (gitignored)
-composer test                     # Pest suite
+composer test                     # Pest suite (php vendor/bin/pest on Termux)
 composer test:architecture        # Pest architecture rules
 composer stan                     # PHPStan level 5
+php bin/hyperf.php start          # start the Swoole HTTP server (9501, RAG served on /rag)
+php bin/hyperf.php rag:build      # (re)build the RAG SQLite FTS5 index
 ```
 
-`composer stan` runs `phpstan analyse src --level=5`, which **overrides** `phpstan.neon`'s `rag` path — `rag/` is only analysed by running `vendor/bin/phpstan` directly. `composer cs-fix` is defined but references `php-cs-fixer`, which is not installed and has no config; there is no enforced formatter.
+`composer stan` runs `phpstan analyse app --level=5`. `composer cs-fix` references `php-cs-fixer`, which is not installed and has no config; there is no enforced formatter.
 
-CI runs in `.github/workflows/ci.yaml` (tests on PHP 8.4/8.5, PHPStan, architecture tests, docker build). Tests auto-create `Config.inc.php` from `Config.inc.example.php` if missing (`tests/bootstrap.php`).
+`phpstan.neon` (and Pest coverage) **exclude** `app/Data/*`, `app/Cache/*`, `app/Client/*`, `app/Storage/*` — those dirs are not type-checked or coverage-measured. `composer test:coverage` writes `coverage/clover.xml`.
+
+CI runs in `.github/workflows/ci.yaml`. Tests auto-create `Config.inc.php` from `Config.inc.example.php` if missing (`tests/bootstrap.php`).
 
 **Release:** `.github/workflows/release.yaml` publishes a GitHub Release when a commit to `main` starts with `[Build]` (or via manual `workflow_dispatch`). The version + release notes are read from `CHANGELOG.md` — add a new `## x.y.z — date` entry at the top, bump the version in `README.md`/`AGENTS.md`/`MCPClient.php`, then commit with `[Build]` prefix. The tag is `v{x.y.z}`.
 
 > **Termux note:** run `PHPSTAN_TURBO=0 composer stan` — PHPStan's turbo extension is not available on Termux (needs glibc). CI on Ubuntu is unaffected.
 >
-> **Local tests:** `tests/bootstrap.php` class-aliases `Tests\Mocks\RedisMock` / `Tests\Mocks\MongoDBMock` when the `redis`/`mongodb` extensions are absent, so the suite runs without real services (Termux has neither extension). CI instead runs against real `mongo:7` + `redis:7-alpine` services.
+> **Local runtime:** Swoole is compiled locally (`extension=swoole.so` in `conf.d/swoole.ini`, patched with `patchelf --add-needed libc++_shared.so`). No ext-redis on Termux — Redis degrades gracefully (`class_exists` pre-check). MariaDB runs via `mariadbd`.
 
 ## Config
 
-`Config::Get('name')` auto-loads `Config.inc.php` on first call. The file returns a single array keyed by section. No `.env`, no framework config.
+Two layers:
 
-Environment overrides applied in `Config::load()` (see `src/Config.php`): `MONGODB_URI`, `REDIS_HOST`, `REDIS_PORT`, `REDIS_TIMEOUT`, `AI_API_KEYS` (comma-separated), `AI_BASE_URL`, `AI_MODEL`.
+- **Business config** — `Config.inc.php` (gitignored, copy `Config.inc.example.php`), read by `App\Config::Get('section')`. Auto-loaded on first call via `core.php`.
+- **Framework config** — `config/autoload/*.php` (Hyperf): `server.php` (ports), `databases.php` (MariaDB), `exceptions.php`, `middlewares.php`, `annotations.php`, etc.
 
-`Config.inc.php` is gitignored. Copy `Config.inc.example.php` to create it.
+Environment overrides in `App\Config::applyEnvironmentOverrides()`: `REDIS_HOST`, `REDIS_PORT`, `REDIS_TIMEOUT`, `AI_API_KEYS` (comma-separated), `AI_BASE_URL`, `AI_MODEL`. MariaDB connection is overridden via `DB_*` envs in `databases.php`.
 
 **Do not change `id.characters`** — it will break all existing log IDs.
 
 ## Storage & cache
 
-- MongoDB (`m` prefix) ↔ Filesystem (`f` prefix), selected via `storage.storageId`.
+- MariaDB (`s` prefix, `App\Storage\MariaDbStorage` via `hyperf/database`) ↔ Filesystem (`f` prefix), selected via `storage.storageId`.
+- MariaDB schema: `logs` / `log_files` / `log_metadata` (see `docker/mariadb-init.sql`). `Get()` uses `includeContent` projection to skip large file bodies.
 - A log id may hold multiple files: primary content in `data` plus additional files in `files: [{name, data, size}]`.
-- Multi-file upload via `POST /v1/log` JSON `files` array; `.zip` entries are expanded (`UploadParser`, path-traversal protected). Limits under `storage.uploadFiles` (200 files / 12MB total).
+- Multi-file upload via `POST /v1/log` JSON `files` array; `.zip` entries are expanded (`UploadParser`, path-traversal + zip-bomb protected). Limits under `storage.uploadFiles` (200 files / 12MB total).
 - Redis is an optional cache layer (`cache.enabled`), with TTL and maxSize config. Multi-file logs exceeding `cache.maxSize` are skipped.
-- MongoDB TTL index on `created`, `expireAfterSeconds` = `storageTime` (default 7 days). `renew()` resets TTL.
-- Filesystem storage (`f`) has no TTL index; `FilesystemStorage::Renew()` updates the stored `created` field, and `CleanupExpired()` deletes expired files. `Log::renew()` triggers a probabilistic (1%) cleanup sweep.
+- TTL cleanup: both storages implement `CleanupExpired()`; `Log::renew()` triggers a probabilistic (1%) cleanup sweep.
 
 ## Deobfuscation (SpinYarn)
 
-- Log deobfuscation uses the **SpinYarn PHP extension** (`Client\SpinYarnClient`), replacing the retired `aternos/sherlock` dependency.
+- Log deobfuscation uses the **SpinYarn PHP extension** (`App\Client\SpinYarnClient`), replacing the retired `aternos/sherlock` dependency.
 - `Log::deobfuscateContent()` detects the log type (Vanilla → `vanilla`, Fabric → `yarn`) and version, then calls `SpinYarnClient::deobfuscate()`. When the extension is not loaded, it degrades to null and the log passes through unchanged.
-- Config under `spinyarn` (see `Config.inc.example.php`): `mappings_dir`, `auto_download`, `cache_max_entries/high_watermark/low_watermark`.
-- The extension is built in `docker/php-fpm.Dockerfile` (multi-stage: Rust C ABI lib + phpize-built `spinyarn.so`); mappings live in `/opt/spinyarn/mappings` (named volume `spinyarn-mappings`), backfilled on demand by `auto_download`.
+- The extension handle is process-level (`static`), reused across requests — this is the whole point of the resident-process migration (avoids ~110ms mapping reload per request).
+- Config under `spinyarn` (see `Config.inc.example.php`): `mappings_dir` (relative `mappings` = `./mappings`), `auto_download`, `cache_max_entries/high_watermark/low_watermark`.
+- The extension is built in `docker/hyperf.Dockerfile` (multi-stage: Rust C ABI lib + phpize-built `spinyarn.so`); mappings live in `./mappings` (Yarn `*.tiny.gz` + `vanilla/*.txt`, gitignored). Local dev pre-downloads via `scripts/download_mappings.sh` + `scripts/download_vanilla_mappings.py`; Docker mounts the `spinyarn-mappings` named volume at `/app/mappings` and `auto_download` backfills on demand.
 
 ## Namespaces
 
-Source classes use **legacy global namespaces**, not `LogShare\` (despite `composer.json` mapping both `LogShare\` and `""` to `src/`). Subdirectory classes declare `namespace Handler;`, `namespace Storage;`, `namespace Filter;`, `namespace Data;`, `namespace Client;`, `namespace Agent;`, `namespace Cache;`. Top-level classes (`Config`, `Log`, `Router`, `Id`, `Handler`, `RequestValidator`, `ApiResponse`, …) declare no namespace. Reference classes as `\Handler\Foo` / `\Log`; do not prefix `LogShare\`.
+All source classes live under `App\` PSR-4 (`composer.json` maps `App\` → `app/`):
+
+- `App\Controller\*` — HTTP controllers (extend `AbstractController`)
+- `App\Storage\*` — `MariaDbStorage` / `FilesystemStorage`
+- `App\Filter\*` — pre-filter redaction chain
+- `App\Data\*` — `Token`, `MetadataEntry`
+- `App\Client\*` — `AIClient`, `MCPClient`, `RedisClient`, `SpinYarnClient`
+- `App\Agent\*` — `LogAgent` (tool loop)
+- `App\Rag\*` — `RagSearch` (SQLite FTS5)
+- `App\Cache\*` — `RedisCache` (optional cache layer) + `CacheInterface`
+- `App\Command\*` — `RagBuildCommand` (`rag:build` Hyperf command)
+- `App\Middleware\*` — `CorsMiddleware`, `RateLimitMiddleware` (global HTTP middleware)
+- `App\Exception\Handler\*` — exception handlers
+- Top-level `App\`: `Config`, `Log`, `Id`, `ApiError`, `ApiResponse`, `ContentParser`, `UploadParser`, `Detective`
+
+Reference classes as `\App\Foo` / `App\Sub\Foo`; never prefix `LogShare\`.
 
 ## ID format
 
-7 characters: 1 storage-prefix char (checksum-encoded) + 6 random chars from `id.characters`. See `src/Id.php:97` for encoding.
+7 characters: 1 storage-prefix char (checksum-encoded, `s`=MariaDB / `f`=Filesystem) + 6 random chars from `id.characters`. See `app/Id.php` for encoding.
 
 ## Request handling conventions
 
-Handlers extend `\Handler` base class, which provides:
-- `validateMethod()`, `extractId()`, `extractIds()`
+Controllers extend `App\Controller\AbstractController`, which provides:
 - `parseContent()`, `validateContentExists()`
-- `respondSuccess()`, `respondJson()`, `respondError()`, `respondText()`
+- `respondSuccess()`, `respondJson()`, `respondError()`, `respondText()` (return PSR-7 responses)
+- `apiPrefix()`, `authorizationHeader()`
 
-**Handlers must not access `$_SERVER`, `$_GET`, or `$_POST` directly** (enforced by architecture test). Use the base class helpers and `ContentParser` instead.
+**Controllers must not access `$_SERVER`, `$_GET`, or `$_POST` directly** (enforced by architecture test). Use `RequestInterface` (injected) and `ContentParser`.
 
-`RequestValidator` is a global utility that does use `$_SERVER` — this is allowed.
+`ApiError` is thrown for expected errors; `App\Exception\Handler\ApiExceptionHandler` renders it as JSON with the correct status code.
+
+Global HTTP middleware (`config/autoload/middlewares.php`): `CorsMiddleware` then `RateLimitMiddleware`. Rate limiting is Redis `INCR`+`EXPIRE` keyed by `IP + method + path` (config `rateLimit`, default 36000/60s) and **fails open** when Redis is unavailable.
 
 ## Pre-filters
 
@@ -88,11 +110,12 @@ Applied before storage. Configured in `Config.inc.php` under `filter.pre`:
 
 ## AI / LogAgent
 
-When `ai.agent.enabled` is true, `/v1/ai/*` routes run the model-driven tool loop (`Agent\LogAgent`):
+When `ai.agent.enabled` is true, `/v1/ai/*` routes run the model-driven tool loop (`App\Agent\LogAgent`):
 
-- `Client\MCPClient` — lightweight Streamable-HTTP MCP client (curl + JSON-RPC, zero deps). Used for `web_search_exa` (Exa hosted endpoint) and `rag_search`.
-- `rag/` — built-in RAG MCP server (`server.php`), pure local SQLite FTS5 (BM25) retrieval over static knowledge docs (`rag/knowledge/`). DB path comes from `ai.mcp.rag.db` (default `rag/index.db`); `RAG_DB_PATH` env overrides for dev/tests. Build index via `php rag/build_index.php`. Docker Compose starts it automatically (re-indexes on boot), reachable at `http://rag:8081`.
-- `Client\AIClient::streamChat()` — low-level streaming LLM request with multi-key rotation; parses `content`, `reasoning_content` and `tool_calls` from stream deltas.
+- `App\Client\MCPClient` — lightweight Streamable-HTTP MCP client (curl + JSON-RPC, zero deps). Used for `web_search_exa` (Exa hosted endpoint) and `rag_search`.
+- `App\Rag\RagSearch` + `App\Controller\RagController` — built-in RAG MCP server (SQLite FTS5 BM25), hosted by Hyperf on the main `http` server under the `/rag` path, MCP JSON-RPC 2.0 protocol. DB path from `ai.mcp.rag.db` (default `rag/index.db`); `RAG_DB_PATH` env overrides. Build index via `php bin/hyperf.php rag:build`.
+- `App\Client\AIClient::streamChat()` — streaming LLM request via curl (coroutine-hooked by `SWOOLE_HOOK_ALL`), multi-key rotation; parses `content`, `reasoning_content`, `tool_calls` deltas.
+- SSE is written via `Hyperf\Engine\Http\EventStream`; the stream handle is stored in `Hyperf\Context\Context` (coroutine-scoped), **never** in a static property.
 - Session-scoped file tools `list_log_files` / `read_log_file` operate only on the bound log id (`logId`), so the agent cannot read other logs.
 - SSE contract: `event: status` with `type` = thinking / tool / tool_result / limit, plus legacy `data:` content deltas and `event: done`. See `API.md`.
 
@@ -102,13 +125,13 @@ When `ai.agent.enabled` is true, `/v1/ai/*` routes run the model-driven tool loo
 docker compose -f docker/compose.yaml up -d
 ```
 
-- nginx listens on `9300`, root at `/web/mclogs`, `client_max_body_size 210m`
-- php-fpm 8.5 with `post_max_size = 16M`, built by `docker/php-fpm.Dockerfile` (mongodb, redis, spinyarn extensions)
-- mongo:latest, redis:7-alpine
-- rag (SQLite FTS5) + spinyarn-mappings named volumes
+- nginx reverse-proxies `9300` → Hyperf `9501` (SSE-friendly: `proxy_buffering off`, `proxy_read_timeout 300s`)
+- `hyperf` service — resident process built by `docker/hyperf.Dockerfile` (Swoole 6.2 + SpinYarn + pdo_mysql + redis); serves RAG on the main HTTP server under `/rag`
+- `mariadb:11` (schema auto-created by `docker/mariadb-init.sql`) + `redis:7-alpine`
+- named volumes: `mariadb-data`, `redis-data`, `spinyarn-mappings`
 
 ## Constraints
 
-- Requires PHP 8.4+, ext-json, ext-zlib, ext-mbstring, mongodb, redis. SpinYarn deobfuscation requires the optional `spinyarn` extension (degrades gracefully when absent).
-- MongoDB + Redis hostnames set in `Config.inc.php`.
-- Max upload: nginx 210MB, PHP 16MB, app 10MB (`maxLength`).
+- Requires PHP 8.4+, ext-json, ext-zlib, ext-mbstring, ext-pdo_mysql; Swoole 6.2 (resident server). SpinYarn deobfuscation requires the optional `spinyarn` extension (degrades gracefully when absent).
+- MariaDB + Redis hostnames come from `DB_*` / `REDIS_*` env (framework config) — see `config/autoload/databases.php`.
+- Max upload: nginx 210MB, app 10MB (`maxLength`).

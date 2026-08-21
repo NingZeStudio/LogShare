@@ -1,19 +1,19 @@
 <?php
 
-use Filter\IPv4Filter;
-use Filter\IPv6Filter;
-use Filter\IPv6ShortFilter;
-use Filter\UuidFilter;
-use Filter\XuidFilter;
-use Filter\SessionTokenFilter;
-use Filter\ClientIdFilter;
-use Filter\CoordinateFilter;
-use Filter\UsernameFilter;
-use Filter\AccessTokenFilter;
+use App\Filter\IPv4Filter;
+use App\Filter\IPv6Filter;
+use App\Filter\IPv6ShortFilter;
+use App\Filter\UuidFilter;
+use App\Filter\XuidFilter;
+use App\Filter\SessionTokenFilter;
+use App\Filter\ClientIdFilter;
+use App\Filter\CoordinateFilter;
+use App\Filter\UsernameFilter;
+use App\Filter\AccessTokenFilter;
 
 function applyPreFilters(string $input): string
 {
-    foreach (\Config::Get('filter')['pre'] as $class) {
+    foreach (\App\Config::Get('filter')['pre'] as $class) {
         $input = $class::filter($input);
     }
     return $input;
@@ -449,7 +449,7 @@ test('Filter chain masks sensitive data in Bukkit/Spigot/Paper plugin logs', fun
 [13:09:01] [Server thread/INFO]: Multiverse: Created world world_the_end
 [13:09:02] [Server thread/INFO]: Multiverse: Teleported Notch to world world_nether at (50.5, 60.0, -100.25)
 
-=== Plugin Config/Data Paths ===
+=== Plugin App\Config/Data Paths ===
 [13:10:00] [Server thread/INFO]: Loading config from plugins/Essentials/config.yml
 [13:10:01] [Server thread/INFO]: Loading config from plugins/WorldEdit/schematics/castest.schem
 [13:10:02] [Server thread/INFO]: Loading config from plugins/CoreProtect/database.db

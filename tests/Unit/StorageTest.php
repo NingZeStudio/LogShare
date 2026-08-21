@@ -1,9 +1,9 @@
 <?php
 
-use Storage\FilesystemStorage;
+use App\Storage\FilesystemStorage;
 
 beforeEach(function () {
-    $this->configRef = new ReflectionClass(\Config::class);
+    $this->configRef = new ReflectionClass(\App\Config::class);
     $this->dataProp = $this->configRef->getProperty('data');
     $this->origData = $this->dataProp->getValue();
     $this->tmpDir = CORE_PATH . '/tmp/logshare_test_' . uniqid();
@@ -38,7 +38,7 @@ test('FilesystemStorage persists additional files under the same id', function (
         ['name' => 'debug.txt', 'data' => $debug],
     ]);
 
-    expect($id)->toBeInstanceOf(\Id::class);
+    expect($id)->toBeInstanceOf(\App\Id::class);
 
     $result = FilesystemStorage::Get($id);
     expect($result['data'])->toBe($main);
@@ -76,8 +76,8 @@ test('FilesystemStorage Get omits file content when includeContent is false and 
 });
 
 test('Log exposes additional file accessors', function () {
-    $log = new \Log();
-    $ref = new ReflectionClass(\Log::class);
+    $log = new \App\Log();
+    $ref = new ReflectionClass(\App\Log::class);
     $prop = $ref->getProperty('files');
     $prop->setValue($log, [
         ['name' => 'a.log', 'data' => "line1\nline2\nline3", 'size' => 17],
@@ -104,7 +104,7 @@ test('Log put applies pre filters to additional files', function () {
     $data = $this->dataProp->getValue();
     $data['storage']['storages']['f'] = [
         'name' => 'Filesystem',
-        'class' => '\\Storage\\FilesystemStorage',
+        'class' => '\\App\\Storage\\FilesystemStorage',
         'enabled' => true,
     ];
     $data['storage']['storageId'] = 'f';
@@ -113,13 +113,13 @@ test('Log put applies pre filters to additional files', function () {
     $this->dataProp->setValue(null, $data);
 
     $ip = 'AccessToken: 550e8400-e29b-41d4-a716-446655440000';
-    $log = new \Log();
+    $log = new \App\Log();
     $id = $log->put('main line ' . $ip, null, [], 's', [
         ['name' => 'extra.log', 'data' => 'extra ' . $ip],
     ]);
 
     expect($id)->not->toBeNull();
-    $loaded = new \Log($id);
+    $loaded = new \App\Log($id);
     expect($loaded->exists())->toBeTrue();
     expect($loaded->getContent())->not->toContain('550e8400');
     expect($loaded->getFile('extra.log'))->not->toContain('550e8400');

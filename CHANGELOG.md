@@ -1,5 +1,39 @@
 # Changelog
 
+## 1.7.0-beta.1 — 2026-08-21
+
+### ✨ 新功能
+
+- **Hyperf 3.2 + Swoole 6.2 常驻进程运行时** — 从传统 PHP CLI/FPM 架构迁移至 Hyperf 常驻协程进程（`bin/hyperf.php` 入口），全链路协程化，移除 `index.php`/`Router.php` 请求分发模型
+- **SpinYarn 反混淆扩展** — 以自研 SpinYarn PHP 扩展取代已退役的 `aternos/sherlock`；日志写库前反混淆（DB 存反混淆后内容，读取时不再重复反混淆），映射句柄为进程级缓存（避免每次请求 ~110ms 重载）
+- **RAG 整合进 Hyperf 进程** — 内置 RAG MCP server 由独立进程整合到主 server 的 `/rag` 路径（JSON-RPC 2.0），新增 `rag:build` 命令构建/重建索引
+- **CORS 与限流中间件** — 全局 HTTP 中间件链（Cors → RateLimit），Redis `INCR`+`EXPIRE` 按 IP+method+path 限流，Redis 不可用时 fail-open
+
+### 🔧 改进
+
+- **存储层迁移**：MongoDB → MariaDB（`hyperf/database`），表结构 `logs` / `log_files` / `log_metadata`，`Get()` 以 `includeContent` 投影跳过超大文件体
+- **代码迁移**：`src/` → `app/`，统一 `App\` PSR-4 命名空间（`composer.json` autoload）
+- **路由改造**：`Router.php` 集中路由表 → Hyperf 注解路由（`#[Controller]` + `#[GetMapping]`/`#[PostMapping]`/`#[DeleteMapping]`）
+- **AI 流式改造**：Swoole 协程 SSE 输出，流句柄存于协程 `Context`（避免跨请求串扰）
+- 数据库连接改由 `DB_*` 环境变量（`config/autoload/databases.php`），替换原 `MONGODB_URI`
+
+### 🐛 修复
+
+- 修复 CRCLASH 第四轮审查问题（协程串扰、部署、资源泄漏等）
+- RAG 改走主 server 的 `/rag` 路径，规避 Hyperf 多 HTTP server 单例冲突
+- SSE 存储检测 Swoole（无则 static），修复 CLI 测试环境
+- 修复 CRCLASH 第五轮审查问题：Redis 连接改为协程级隔离（Context）避免跨协程共享单连接串扰、`POST /v1/ai/analyse` 的 `id` 字段绑定失效、`Limit*` 过滤器异常契约、缓存热路径日志噪音等
+
+### ⚠️ 配置变更
+
+- 移除 `mongo` 配置段；数据库连接由 `DB_*` 环境变量提供
+- 新增 `spinyarn` 配置段（`mappings_dir` / `auto_download` / 缓存水位）
+- 存储后端改为 MariaDB（`s`，默认）↔ 文件系统（`f`）
+
+### 🧪 测试
+
+- 引入 `hyperf/testing` 编写 Controller 集成测试（HTTP 级）
+
 ## 1.6.0 — 2026-08-15
 
 ### ✨ 新功能

@@ -55,9 +55,9 @@ POST /v1/log
 {
     "success": true,
     "message": "Log submitted successfully",
-    "id": "mAbCdE",
-    "url": "https://logshare.cn/mAbCdE",
-    "raw": "https://api.logshare.cn/1/raw/mAbCdE",
+    "id": "sAbCdEf",
+    "url": "https://logshare.cn/sAbCdEf",
+    "raw": "https://api.logshare.cn/1/raw/sAbCdEf",
     "token": "f3a2b1c4d5e6..."
 }
 ```
@@ -84,7 +84,7 @@ DELETE /v1/log/{id}
 {
     "success": true,
     "message": "Log deletion completed",
-    "deleted": ["mAbCdE"],
+    "deleted": ["sAbCdEf"],
     "failed": [],
     "total": 1,
     "deletedCount": 1,
@@ -117,7 +117,7 @@ GET /v1/raw/{id}/{filename}
 `{filename}` 支持子路径，需 URL 编码：
 
 ```
-GET /v1/raw/mAbCdE/crash-reports/crash-01.txt
+GET /v1/raw/sAbCdEf/crash-reports/crash-01.txt
 ```
 
 返回该文件原文（`text/plain`）。文件不存在返回 404。路径会做遍历防护（拒绝 `../`、绝对路径）。
@@ -135,7 +135,7 @@ GET /v1/log/{id}
 {
     "success": true,
     "message": "Log metadata retrieved successfully",
-    "id": "mAbCdE",
+    "id": "sAbCdEf",
     "size": 4096,
     "lines": 120,
     "created": 1755200000,
@@ -145,7 +145,7 @@ GET /v1/log/{id}
     "files": [
         { "name": "crash-reports/crash-01.txt", "size": 2048 }
     ],
-    "raw": "https://api.logshare.cn/v1/raw/mAbCdE"
+    "raw": "https://api.logshare.cn/v1/raw/sAbCdEf"
 }
 ```
 
@@ -202,7 +202,7 @@ POST /v1/ai/analyse
 ```json
 {
     "content": "可选，附加分析内容",
-    "id": "mAbCdE"
+    "id": "sAbCdEf"
 }
 ```
 
@@ -228,7 +228,7 @@ LogAgent 模式（`ai.agent.enabled`）会输出额外的 `event: status` 事件
 | `list_log_files` | 列出当前会话日志的文件 | 请求绑定日志 ID |
 | `read_log_file` | 读取文件指定行区间 | 请求绑定日志 ID |
 
-> RAG 为内置服务（`rag/` 目录），SQLite FTS5 纯本地检索。构建索引 `php rag/build_index.php`；Docker Compose 已含 `rag` 容器（启动自动重建索引），默认 `ai.mcp.rag.url = http://rag:8081`，数据库路径由 `ai.mcp.rag.db` 指定。
+> RAG 为内置服务（`rag/` 目录），SQLite FTS5 纯本地检索。构建索引 `php bin/hyperf.php rag:build`；RAG MCP server 整合进 Hyperf 主进程的 `/rag` 路径，默认 `ai.mcp.rag.url = http://127.0.0.1:9501/rag`，数据库路径由 `ai.mcp.rag.db` 指定。
 
 ---
 
@@ -245,8 +245,6 @@ GET /v1/limits
 
 ```json
 {
-    "success": true,
-    "message": "OK",
     "maxLength": 10485760,
     "maxLines": 50000,
     "storageTime": 604800
@@ -265,21 +263,21 @@ GET /v1/filters
 ```json
 {
     "success": true,
-    "message": "OK",
     "filters": [
-        "\\Filter\\TrimFilter",
-        "\\Filter\\LimitBytesFilter",
-        "\\Filter\\LimitLinesFilter",
-        "\\Filter\\IPv4Filter",
-        "\\Filter\\IPv6Filter",
-        "\\Filter\\IPv6ShortFilter",
-        "\\Filter\\UuidFilter",
-        "\\Filter\\XuidFilter",
-        "\\Filter\\SessionTokenFilter",
-        "\\Filter\\ClientIdFilter",
-        "\\Filter\\CoordinateFilter",
-        "\\Filter\\UsernameFilter",
-        "\\Filter\\AccessTokenFilter"
+        { "type": "trim", "data": null },
+        { "type": "limit-bytes", "data": { "limit": 10485760 } },
+        { "type": "limit-lines", "data": { "limit": 50000 } },
+        {
+            "type": "regex",
+            "data": {
+                "patterns": [
+                    { "pattern": "IPv4", "replacement": "**.**.**.**" },
+                    { "pattern": "IPv6", "replacement": "****:****:****:****:****:****:****:****" },
+                    { "pattern": "Username", "replacement": "********" },
+                    { "pattern": "AccessToken", "replacement": "********" }
+                ]
+            }
+        }
     ]
 }
 ```

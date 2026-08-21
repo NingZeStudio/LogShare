@@ -9,12 +9,21 @@
     ],
     "require": {
         "php": ">=8.4",
-        "mongodb/mongodb": "2.1.2",
         "ext-json": "*",
         "aternos/codex-minecraft": "^5.1.0",
         "ext-zlib": "*",
         "ext-mbstring": "*",
-        "aternos/codex-hytale": "^2.0.0"
+        "aternos/codex-hytale": "^2.0.0",
+        "hyperf/framework": "~3.2.0",
+        "hyperf/engine": "^2.0",
+        "hyperf/http-server": "~3.2.0",
+        "hyperf/config": "~3.2.0",
+        "hyperf/di": "~3.2.0",
+        "hyperf/dispatcher": "~3.2.0",
+        "hyperf/exception-handler": "~3.2.0",
+        "hyperf/command": "~3.2.0",
+        "hyperf/database": "~3.2.0",
+        "hyperf/db-connection": "~3.2.0"
     },
     "require-dev": {
         "pestphp/pest": "^3.0",
@@ -22,7 +31,7 @@
         "mockery/mockery": "^1.6",
         "phpstan/phpstan": "^2.0",
         "phpstan/phpstan-phpunit": "^2.0",
-        "malith124/stubs-mongodb-11": "^1.0"
+        "hyperf/testing": "~3.2.0"
     },
     "config": {
         "allow-plugins": {
@@ -31,8 +40,7 @@
     },
     "autoload": {
         "psr-4": {
-            "LogShare\\": "src/",
-            "": "src/"
+            "App\\": "app/"
         },
         "files": [
             "core.php"
@@ -46,8 +54,8 @@
     "scripts": {
         "test": "pest",
         "test:coverage": "pest --coverage",
-        "test:architecture": "pest --plugin=pestphp/pest-plugin-arch",
-        "stan": "phpstan analyse src --level=5",
+        "test:architecture": "pest --group=architecture",
+        "stan": "phpstan analyse app --level=5",
         "cs-fix": "php-cs-fixer fix"
     }
 }

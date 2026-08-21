@@ -4,6 +4,9 @@
 /backup/
 /Config.inc.php
 /tmp/
+/runtime/
+/.phpunit.cache/
 /rag/index.db
 /rag/public/
+/mappings/
 /spinyarn/mappings/
