@@ -1,14 +1,14 @@
-# CRCLASH — LogShare 全面代码审查报告（第四轮 · Hyperf 迁移后）
+# CRCLASH — LogShare 全面代码审查报告（第五轮 · v1.7.0 发布前）
 
-- **审查日期：** 2026-08-20
-- **审查范围：** 项目全部源码（`app/`、`config/`、`bin/`、`tests/`、`core.php`、`pest.php`、`phpstan.neon`、`docker/`、`rag/README.md`），排除 `vendor/`、`.git/`、`runtime/`、`tmp/`、`rag/knowledge/`
-- **技术栈：** PHP 8.5 · Hyperf 3.2（Swoole 6.2 常驻 + 协程）· MariaDB（`hyperf/database` + `hyperf/db-connection`）· Redis（可选，自研 `RedisClient`）· SpinYarn PHP 扩展 · SQLite FTS5（RAG）· Aternos Codex · Pest + PHPStan
-- **文件统计：** 核心 PHP 文件约 75 个（`app/` 55 + `config/` 12 + `bin/` 1 + `tests/` 20 + 根级 2），代码约 7,900 行
-- **背景：** 本轮审查针对 Hyperf 迁移（阶段 0-5）完成后的代码，即「自研 Router + PHP-FPM」→「Hyperf 注解路由 + Swoole 协程 + MariaDB」的迁移结果。阶段 6（部署）、阶段 7（测试迁移）尚未完成。
+- **审查日期：** 2026-08-21
+- **审查范围：** 项目全部源码（`app/` 56、`config/` 11、`bin/` 1、`core.php`、`pest.php`、`phpstan.neon`、`tests/`、`docker/`、`scripts/`），排除 `vendor/`、`.git/`、`runtime/`、`tmp/`、`rag/knowledge/`、`mappings/`
+- **技术栈：** PHP 8.4+ · Hyperf 3.2（Swoole 6.2 常驻 + 协程）· MariaDB（`hyperf/database`）· Redis（可选，自研 `RedisClient` + ext-redis）· SpinYarn PHP 扩展 · SQLite FTS5（RAG）· Aternos Codex · Pest 3 + PHPStan level 5
+- **文件/代码规模：** 核心 PHP 文件约 68 个，`app/` 约 5,400 行；测试 142 项（本地含 spinyarn 扩展时 3 项 SpinYarn 降级测试失败，CI 无扩展则全通过）
+- **背景：** 本轮针对第四轮审查之后到 v1.7.0 发布前（18 个提交）的代码。第四轮的三处严重问题中 S1（SSE 协程串扰）、S3（Docker 部署脱节）已修复；S2（Redis 连接）仅部分缓解。本轮聚焦发布前的收尾与遗留隐患。
 
 ## 整体评价
 
-迁移骨架已基本成型，核心链路（上传→存储→读取→AI 流式→RAG）已全部切换到 Hyperf/Swoole 运行模型，PHPStan level 5 零错误、104 项非 mock 测试通过。但存在**三处严重问题**（协程状态串扰、Redis 连接、部署脱节）和一批迁移遗留的收尾项，尚未达到「可生产」状态。
+Hyperf/Swoole 迁移已基本收敛，核心链路（上传→脱敏→反混淆→MariaDB→读取→AI 流式→RAG）可运行，PHPStan level 5 零错误，架构测试 + Controller 集成测试 + 单元测试齐备。第四轮多数问题已修复。但**仍有一处协程模型层面的隐患（ext-redis 同步阻塞）**、一处**文档承诺的功能失效（AI 分析 id 绑定）**，以及一批日志噪音、测试盲区等收尾项。整体已达到可发布状态，但建议将「严重」项纳入发布后首个迭代。
 
 ---
 
@@ -16,111 +16,87 @@
 
 ### 🔴 严重
 
-#### S1. SSE 输出用 `static $stream` 导致协程串扰 — `app/Client/AIClient.php:16`、`app/Agent/LogAgent.php:23`
-- **问题：** 阶段 4 改造时，SSE 输出器被存为**进程级静态属性** `private static ?EventStream $stream`。Hyperf 是协程并发模型，两个 AI 分析请求同时进行时，`startSSE()` 会互相覆盖 `self::$stream`，导致请求 A 的 `emitContent()` 把数据写到请求 B 的连接上。
-- **影响：** 并发 AI 分析（`GET /v1/ai/{id}`、`POST /v1/ai/analyse`）时 SSE 输出错乱、串流。这是协程环境下最典型的状态泄漏。
-- **修复：** 将 `$stream` 存入 `Hyperf\Context\Context`（协程级上下文，随协程自动隔离），或把 stream 作为参数一路传入 `write()/emit*()`，禁止用 `static` 保存请求级状态。
-
-#### S2. Redis 静态连接在常驻进程/协程下不安全 — `app/Client/RedisClient.php:14`
-- **问题：** `protected static ?Redis $connection` 进程级单例，两个隐患：
-  1. ext-redis 的 `Redis` 对象是**阻塞 + 非协程安全**的，多个协程共享同一连接并发调用会串扰；
-  2. Redis 服务重启后连接失效（broken pipe），但 `static $connection` 仅在 `null` 时才重连，不会自动恢复。
-- **影响：** 缓存/限流在协程并发或 Redis 抖动时出错。
-- **修复：** 迁移到 `hyperf/redis` 连接池（生产环境，Docker 已有 ext-redis），或至少在 `Connect()` 中加 `ping()` 检测失效重连。Termux 本地无 ext-redis，靠 `class_exists('Redis')` 降级，逻辑可保留为 fallback。
-
-#### S3. Docker 部署配置与架构完全脱节 — `docker/compose.yaml`、`docker/php-fpm.Dockerfile`
-- **问题：** 阶段 6 未做。部署配置仍是旧架构：
-  - `compose.yaml` 仍起 `php-fpm`（非 Hyperf 常驻进程）、`mongo`（已换 MariaDB）、独立 `rag` 服务（已整合进 Hyperf）；
-  - `php-fpm.Dockerfile` 仍 `install-php-extensions mongodb redis`（MongoDB 已删），无 Swoole、无 MariaDB。
-- **影响：** 当前 Docker 配置部署即崩溃，与代码完全不符。
-- **修复：** 阶段 6 重写：Hyperf 常驻进程镜像（Swoole 6.2 + SpinYarn + pdo_mysql + redis）、`mariadb` 服务替换 `mongo`、删除独立 `rag` 服务（由 Hyperf 8081 承载）、nginx 反代 9501/8081、启动时执行建表 migration + `rag:build`。
+#### S1. ext-redis 同步阻塞 + 静态单例破坏协程模型 — `app/Client/RedisClient.php`、`app/Cache/RedisCache.php`、`app/Middleware/RateLimitMiddleware.php`
+- **问题：** `RedisClient::$connection` 是进程级静态单例，且底层用 ext-redis（同步阻塞 IO）。在 Swoole 协程模型下：
+  1. ext-redis 的 `connect/incr/get/setEx` 均为**同步阻塞调用**，一个协程执行 Redis 时会阻塞整个 worker 的事件循环，其它请求无法被调度，吞吐量被单点串行化；
+  2. 静态单例在多个协程间共享同一连接，并发调用存在串扰风险。
+- **影响：** `RateLimitMiddleware` 是全局中间件，**每个请求都会触发一次 `INCR`+`EXPIRE`**（`app/Middleware/RateLimitMiddleware.php:31-34`），意味着生产环境（Docker 有 ext-redis）下所有请求都被同步阻塞一次 Redis 往返；缓存读写同理。第四轮 S2 仅通过 `ping()` 补了「失效重连」（`RedisClient.php:24-31`），但协程阻塞/串扰这一根本问题未解决。
+- **修复：** 迁移到 `hyperf/redis`（Swoole 协程 Redis 连接池，非阻塞），保留 `class_exists('Redis')` 的本地降级分支；限流与缓存共用连接池。至少应让限流中间件走协程客户端。
 
 ### 🟠 一般
 
-#### M1. Config 环境变量覆盖残留 MONGODB_URI 死代码 — `app/Config.php:37-39`
-- MongoDB 已替换为 MariaDB，`MONGODB_URI → mongo.url` 覆盖已无对应配置段。应删除；MariaDB 连接参数已由 `config/autoload/databases.php` 的 `env()` 处理，无需在此补。
+#### M1. `POST /v1/ai/analyse` 的 `id` 字段功能失效 — `app/Controller/AIAnalyseController.php:19`、`app/ContentParser.php`
+- **问题：** 控制器从解析结果读取 `$contentResult['id']`，但 `ContentParser::parseJsonData()` 只透传 `content` / `metadata` / `source` / `files`，**从不解析 `id`**。因此 `$logId` 恒为 `null`，`{"id":"xxx"}` 被静默忽略，AI 走 `ai:analysis:hash:<sha256>` 缓存路径，LogAgent 也不会绑定日志文件工具。
+- **影响：** API.md 与 AGENTS.md 承诺的「传入已有日志 ID 时，Agent 获得该日志文件访问权（会话作用域）、可用于多文件对比」功能完全不可用。`GET /v1/ai/{id}` 不受影响（id 走 URL path）。
+- **修复：** 在 `ContentParser::parseJsonData()` 中解析并校验 `id`（`is_string` + 非空），放入返回数组；或将 `id` 单独从 `RequestInterface` 读取。
 
-#### M2. MariaDbStorage::CleanupExpired 未接入定时清理 — `app/Storage/MariaDbStorage.php:145`
-- MongoDB 时代靠 TTL 索引自动过期，MariaDB 无此机制。`CleanupExpired()` 已实现但**无任何调用点**；`Log::renew()`（`app/Log.php:333`）只在 `storage === 'f'`（Filesystem）时概率触发清理，MariaDB（`s`）侧完全无清理。
-- **修复：** 用 Hyperf Crontab（或 Process）定时调用 `MariaDbStorage::CleanupExpired()`。
+#### M2. 缓存/存储热路径的 `error_log` 噪音 — `app/Log.php`（多处）
+- **问题：** `load()` / `put()` / `renew()` / `delete()` 在每次 Redis 缓存命中、未命中、写入、续期、删除时都 `error_log` 中文调试信息（如 `[Redis] 缓存命中: xxx`、`[Redis] 缓存未命中，回退到 MariaDB`）。这些是 debug 级信息，却走默认日志级别。
+- **影响：** 生产环境每个读取请求至少产生 1-2 条日志，日志被刷屏、存储膨胀，且泄露日志 `rawId`（虽非高度敏感，但属不必要的暴露）。同时真实错误被淹没在噪音中。
+- **修复：** 改用 Hyperf 日志组件 + 分级（缓存命中/未命中降为 `debug`，仅异常走 `warning/error`）；或加开关统一关闭缓存命中日志。
 
-#### M3. UploadParser::expandZip 资源泄漏 — `app/UploadParser.php:143-178`
-- `for` 循环内 `validateFileName` 失败、声明 size 超限、slots 不足时直接 `return new ApiError(...)`，跳过 `$zip->close()` 与 `@unlink($tmpFile)`，导致临时 zip 文件残留、ZipArchive 句柄未释放。
-- **修复：** 将清理逻辑放入 `try-finally`，所有 `return` 路径统一走 finally 清理。
-
-#### M4. AppExceptionHandler 兜底返回纯文本 500 — `app/Exception/Handler/AppExceptionHandler.php:24-27`
-- 未捕获异常返回 `Internal Server Error.`（纯文本），与 API 统一 JSON 格式（`{success, error, code}`）不一致，前端解析会失败。
-- **修复：** 返回 JSON（如 `{"success":false,"error":"Internal Server Error.","code":500}`），并区分 `app_env` 是否透出错误详情。
-
-#### M5. 静态接口设计未迁移（去 static 未完成）— `app/Cache/CacheInterface.php`、`app/Storage/StorageInterface.php`、`app/Filter/Filter.php`
-- Cache/Storage/Filter 仍是 `static` 方法接口 + 静态调用链（`$storage::Put()`、`Filter::filter()`、`RedisCache::Get()`）。PLAN 阶段 2 规划了「去 static → 服务类 + DI」，但未落地。静态方法在 Hyperf 下难以走 DI/连接池，也加剧了 S1/S2 的状态问题。
-- **修复：** 阶段 7 一并重构为实例方法 + 依赖注入。
-
-#### M6. AGENTS.md 完全过时 — `AGENTS.md:5`
-- 顶部仍写 *"Monolithic PHP 8.4+ app with `index.php` entrypoint, `src/` classes"*，与实际（Hyperf + Swoole 常驻 + `app/` + `bin/hyperf.php` 入口 + MariaDB）完全不符。`index.php`、`src/` 均已删除。全文多处描述旧架构（Commands、Entrypoint、Storage 等）。
-- **修复：** 阶段 7 全面重写 AGENTS.md。
-
-#### M7. 部署/文档/配置三处漂移
-- `rag/README.md` 仍描述 `build_index.php`、`server.php`、`php -S 127.0.0.1:8081 rag/server.php`（均已删除/迁移为 `App\Command\RagBuildCommand` 与 `App\Controller\RagController`）。
-- `phpstan.neon` 的 `paths` 仍含 `rag`（该目录已无 PHP 文件，只剩 `knowledge/` 文档）。
-- 根目录残留空 `src/` 目录（`git mv` 后未清理）。
+#### M3. `Limit*Filter` 抛裸 `\Exception`，依赖调用方兜底 — `app/Filter/LimitBytesFilter.php:13`、`app/Filter/LimitLinesFilter.php:14`
+- **问题：** 超限时抛 `\Exception`（而非 `ApiError`）。当前靠 `LogController::create()` 与 `AnalyseController::analyse()` 的 `try-catch` 转成 `ApiError(400)` 才正确返回 400，`preFilter()` 本身（`Log::put/setData` 内）未做转换。
+- **影响：** 契约脆弱——任何新增调用点若忘记 catch，超限将落入 `AppExceptionHandler` 兜底成 500，与「超限拒绝返回 400」的设计相悖。
+- **修复：** 直接抛 `new ApiError(400, ...)`，由 `ApiExceptionHandler` 统一转 JSON；删除控制器层冗余的 `try-catch` 包装。
 
 ### 🟡 建议
 
-#### R1. CacheEntry 死代码 — `app/Cache/CacheEntry.php`
-- 生产代码无任何引用（仅 `CacheEntryTest` 使用）。且其 `new $config['cacheId']()` + 静态调用的写法本身怪异。建议删除或随 M5 一并重构。
+#### R1. `MariaDbStorage::Put` 唯一性检查开销过大 — `app/Storage/MariaDbStorage.php:20-22`
+- `do { $id->regenerate(); } while (self::Get($id) !== null);` 用完整 `Get()`（含 `log_files`/`log_metadata` 关联查询）仅为了判断 ID 是否存在。应改为轻量 `Db::table('logs')->where('id', ...)->exists()`。
 
-#### R2. AbstractController 残留未使用 import — `app/Controller/AbstractController.php:8`
-- `use Hyperf\Context\Context;` 在 `apiPrefix()` 改用 `request path` 判断后不再使用。
+#### R2. `MariaDbStorage` 无单元测试覆盖 — `tests/Unit/StorageTest.php`
+- 默认存储（`storageId = 's'`）只覆盖 `FilesystemStorage`，`MariaDbStorage` 的 `Put/Get/Renew/CleanupExpired/Delete`（含事务、`includeContent` 投影、过期清理）无任何测试。CI 的 `hyperf-boot` 虽起 MariaDB，但仅做冒烟，未跑断言。
+- **修复：** 参照 `StorageTest` 写 `MariaDbStorageTest`，用 CI 已有的 MariaDB 服务。
 
-#### R3. Filter 抛通用 `\Exception` — `app/Filter/LimitBytesFilter.php:13`、`LimitLinesFilter.php:14`
-- 超限拒绝抛裸 `\Exception`，语义不清晰。建议抛专用异常（如 `ApiError`），由 `ApiExceptionHandler` 统一转 JSON 400。
+#### R3. `RagController` 每请求新建 `RagSearch`/PDO，且版本号硬编码 — `app/Controller/RagController.php:23,56`
+- 每个 MCP 请求都 `new RagSearch(...)` 重新打开 SQLite 连接并 `CREATE TABLE IF NOT EXISTS`，Agent 每轮工具调用都会触发，无连接复用；`serverInfo.version` 硬编码 `'1.0.0'`，与项目版本脱节。建议单例/注入复用 `RagSearch`，版本号从配置或常量取。
 
-#### R4. FilesystemStorage 注释过时 + 写入未校验 — `app/Storage/FilesystemStorage.php:54,125`
-- `Renew()` 注释仍写 *"MongoDB TTL reset behaviour"*；
-- `Put()` 的 `file_put_contents(...)` 返回值未检查，写入失败时静默返回 `$id`。
+#### R4. `ApiExceptionHandler::handle` 冗余分支 — `app/Exception/Handler/ApiExceptionHandler.php:19-26`
+- `isValid()` 已保证仅 `ApiError` 进入，`handle()` 内的 `if ($throwable instanceof ApiError)` 恒真，`else return $response` 是死代码。可简化。
 
-#### R5. LogController::delete 丢失 ID 格式校验 — `app/Controller/LogController.php:57`
-- 原 `RequestValidator::extractIds` 会校验 ID 格式（返回 400），迁移后直接 `explode(',', $id)`，非法 ID 退化为 404（`Id::decode` 失败 → not found）。行为变化，建议补显式校验。
+#### R5. `RagSearch::buildIndex` 未用事务 — `app/Rag/RagSearch.php:102-123`
+- 逐条 `INSERT` 未包裹事务，重建中途失败会留下半成品索引（虽下次重建可覆盖），且 SQLite 逐条提交性能差。建议 `beginTransaction()` + 批量提交。
 
-#### R6. Id 用 `rand()` 生成 — `app/Id.php:53`
-- `rand()` 非密码学安全。日志 ID 虽非安全敏感，但建议 `random_int` 以免可预测。
+#### R6. 生产配置项未就绪 — `config/config.php`、`bin/hyperf.php`
+- `scan_cacheable` 默认 `false`（生产应 `true` 以缓存注解扫描）；`log_level` 包含 `DEBUG`；`bin/hyperf.php` 硬编码 `display_errors = on`（生产可能泄露路径/错误细节）。建议按 `app_env` 区分。
 
-#### R7. Log 每次 load 都完整 analyse（性能）— `app/Log.php:116`
-- `load()` 末尾无条件 `$this->analyse()`（Detective 检测 + Codex parse + SpinYarn 反混淆 ~110ms）。但 `GET /raw`、`GET /log/{id}` 只需原文/元信息，并不需要分析结果。每次读取都付出分析 + 反混淆成本。
-- **修复：** 将 `analyse()` 改为懒加载（仅在 `InsightsHandler` 等需要 `getAnalysis()` 时触发）。
+#### R7. `MetadataEntry::getDisplayValue(): string` 类型不匹配 — `app/Data/MetadataEntry.php:136-139`
+- `$value` 可为 `int/float/bool/null`（`setValue()` 允许），但 `getDisplayValue()` 声明返回 `string`，非字符串值时将抛 `TypeError`。当前仅测试以字符串调用，属半死代码。建议改为 `mixed` 或返回字符串化结果，并补齐边界测试。
 
-#### R8. ApiExceptionHandler 冗余判断 — `app/Exception/Handler/ApiExceptionHandler.php:19`
-- `handle()` 内 `if ($throwable instanceof ApiError)` 与 `isValid()` 的判断重复（`isValid` 已保证仅 ApiError 进入）。`stopPropagation()` 也可移到 `isValid` 通过后的首行即可。
+#### R8. AI/RAG 测试依赖 `php -S` 后台 mock 服务器 — `tests/Fixtures/llm_server.php`、`tests/Unit/AIClientTest.php` 等
+- `AIClientTest`/`MCPClientTest`/`LogAgentTest`/`LogAgentLoopTest` 依赖后台进程 mock，环境敏感、易 flaky。建议迁移到 `hyperf/testing` 协程内测试或进程内 HTTP mock，消除外部进程依赖。
 
-#### R9. 测试框架未迁移（阶段 7）
-- 仍是 Pest + mock。AI/RAG 相关测试（`AIClientTest`、`MCPClientTest`、`LogAgentLoopTest`、`LogAgentTest`）依赖 `php -S` 后台 mock 服务器；`RagServerTest`、`LogAgentRagTest` 已因 `rag/server.php` 删除而移除。建议迁移到 `hyperf/testing`，用协程内测试替代后台进程 mock。
+#### R9. `SpinYarnClient` 静态 handle 的协程并发安全性需确认 — `app/Client/SpinYarnClient.php:70-91`
+- `static $handle` 为进程级复用（有意为之，避免 ~110ms 重载）。若 SpinYarn C 扩展的句柄非协程/线程安全，并发反混淆可能串扰。建议在扩展文档中确认，或对 `deobfuscate()` 加互斥。
+
+#### R10. `Config.php` 注释漂移 — `app/Config.php:24`
+- `applyEnvironmentOverrides()` 的 docblock 仍列 `MONGODB_URI → mongo.url`，但代码中已无该处理。应删除该行注释。
 
 ---
 
 ## 改进建议（按优先级）
 
-1. **修 S1（协程串扰）**：`$stream` 改 `Context` 或参数传递 —— 这是并发正确性问题，最高优先级。
-2. **修 S3（部署脱节）**：重写 Docker（阶段 6），否则无法部署。
-3. **修 S2（Redis 连接）**：接入 `hyperf/redis` 连接池或加失效重连。
-4. **修 M3（资源泄漏）**：`expandZip` 改 try-finally。
-5. **修 M2（TTL 清理）**：接入 Crontab 定时清理 MariaDB。
-6. **收尾 M1/M4/M6/M7**：删死代码、统一 JSON 兜底、重写 AGENTS.md、清理漂移。
-7. **阶段 7**：测试迁移 + R4-R9 各项。
+1. **修 S1（ext-redis 阻塞）**：接入 `hyperf/redis` 协程连接池，限流与缓存共用；保留本地无 ext-redis 的降级分支。这是协程模型的正确性问题，最高优先级。
+2. **修 M1（id 绑定失效）**：`ContentParser` 解析并校验 `id`，恢复 `POST /v1/ai/analyse` 的会话文件访问能力。
+3. **修 M2（日志噪音）**：缓存热路径 debug 日志降级 + 去 `rawId` 暴露。
+4. **修 M3（异常契约）**：`Limit*Filter` 抛 `ApiError`，删控制器冗余 catch。
+5. **收尾 R1-R10**：MariaDB 唯一性查询、MariaDB 测试覆盖、RAG 连接复用、生产配置、类型安全等，按排期推进。
 
 ---
 
 ## 正面亮点
 
-- **迁移架构清晰**：`app/` 命名空间统一（全局类 + 子命名空间 → `App\` PSR-4），Controller/Storage/Client/Agent/Rag 分层明确；注解路由 + 依赖注入已落地。
-- **双前缀路由优雅**：`/{version:v?1}` 正则段 + `apiPrefix()` 从 path 判断，`/1/` 与 `/v1/` 共享一套 Controller，无重复代码。
-- **异常处理链路完整**：`ApiError` → `ApiExceptionHandler`（stopPropagation）→ JSON；兜底 `AppExceptionHandler`；架构测试约束 Controller 不直接访问超全局。
-- **存储迁移干净**：`MariaDbStorage` 用关联表（logs/log_files/log_metadata）+ 事务保证原子性，`Get` 的 `includeContent` 投影避免不必要的大字段读取。
-- **安全防护到位**：`UploadParser` 路径遍历防护 + zip 炸弹双重校验；Filter 链脱敏（IPv4/IPv6/UUID/XUID/Token 等）；删除走 Bearer Token + `hash_equals`。
-- **反混淆优雅降级**：`SpinYarnClient` 扩展缺失时透传，`static $handle` 进程级复用（这正是迁移要解决的 CRCLASH #1）。
-- **RAG 整合干净**：`RagController` 承载 MCP JSON-RPC 协议不变，`RagSearch` 检索逻辑（BM25 + LIKE 兜底 + snippet 按句边界）与 `RagBuildCommand` 建索引分工明确。
-- **质量门槛持续有效**：PHPStan level 5 零错误、架构测试、104 项测试通过，且迁移过程中多次通过测试发现并修复回归（如 `App\App` 双前缀、内置类缺 `\`、`@throws` 类型）。
+- **SSE 协程隔离正确落地**：`LogAgent`/`AIClient` 的 SSE 流句柄存入 `Hyperf\Context\Context`（协程级），CLI 无 Swoole 时回退 static，彻底修复第四轮 S1 的串扰问题。
+- **上传安全防护到位**：`UploadParser` 路径遍历防护 + zip 炸弹双重校验（声明 size + 解压后 size），`expandZip` 已改 try-finally 清理临时文件（第四轮 M3 已修复）；`ContentParser` 限制解压输出长度防多层 gzip 炸弹。
+- **认证安全良好**：删除走 Bearer Token + `hash_equals` 时序安全比较；Token 用 `random_bytes(32)` 生成；`Id` 已从 `rand()` 改为 `random_int`（第四轮 R6 已修复）。
+- **存储层原子性**：`MariaDbStorage` 用事务保证 `logs`/`log_files`/`log_metadata` 三表一致性，`Get` 的 `includeContent` 投影避免不必要的大字段读取。
+- **反混淆设计合理**：`deobfuscateForStorage()` 在写库前完成反混淆，读取零开销；`SpinYarnClient` 扩展缺失时优雅降级为原样透传。
+- **AI 客户端健壮**：`AIClient` 多 Key 轮换 + 429 自动切 Key + 已 emit 内容不重试避免重复输出；错误响应体提取诊断详情。
+- **RAG 检索质量高**：SQLite FTS5 BM25（标题权重 10）+ 中文 LIKE 兜底 + 句边界 snippet，参数化查询防注入。
+- **质量门槛持续有效**：PHPStan level 5 零错误、架构测试 7 项约束（Controller 不访问超全局/不写裸 SQL/继承基类）、`hyperf/testing` Controller 集成测试、`UploadParser`/`Storage` 边界测试覆盖充分。
+- **双前缀路由优雅**：`/{version:v?1}` 正则段 + `apiPrefix()` 从 path 判断，`/1/`（已弃用）与 `/v1/` 共享一套 Controller，无重复代码。
 
 ---
 
-*第四轮审查：Hyperf 迁移（阶段 0-5）后，三处严重问题（协程状态串扰、Redis 连接、部署脱节）需优先处理；其余为迁移遗留收尾（死代码、文档漂移、测试迁移），建议按阶段 6-7 排期。*
+*第五轮审查：v1.7.0 发布前。第四轮 S1/S3 已修复、S2 部分缓解；本轮发现一处协程阻塞隐患（ext-redis）、一处文档承诺功能失效（AI 分析 id 绑定），其余为日志噪音、测试盲区、配置收尾等。建议发布后首个迭代优先处理 S1 与 M1。*

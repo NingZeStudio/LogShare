@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: LogShare API
-  version: 1.5.5
+  version: 1.7.0
   description: |
     Minecraft / Hytale log analysis and sharing platform.
     
@@ -31,7 +31,7 @@ servers:
   - url: https://api.logshare.cn
     description: Production API
   - url: http://localhost:9300
-    description: Local Docker (nginx on 9300, PHP-FPM internal)
+    description: Local Docker (nginx on 9300 → Hyperf on 9501)
 tags:
   - name: Logs
     description: Log submission, retrieval, deletion
@@ -962,8 +962,6 @@ paths:
               schema:
                 $ref: '#/components/schemas/LimitsResponse'
               example:
-                success: true
-                message: "OK"
                 maxLength: 10485760
                 maxLines: 50000
                 storageTime: 604800
@@ -984,8 +982,6 @@ paths:
               schema:
                 $ref: '#/components/schemas/LimitsResponse'
               example:
-                success: true
-                message: "OK"
                 maxLength: 10485760
                 maxLines: 50000
                 storageTime: 604800
@@ -996,7 +992,7 @@ paths:
       tags: [Meta]
       summary: List active pre-filters
       description: |
-        Returns the ordered list of filter classes applied to incoming logs
+        Returns the ordered list of active pre-filters (type + config)
         
         (Deprecated; use /v1/filters instead)
       operationId: getFilters
@@ -1010,21 +1006,26 @@ paths:
                 $ref: '#/components/schemas/FiltersResponse'
               example:
                 success: true
-                message: "OK"
                 filters:
-                  - "\\Filter\\TrimFilter"
-                  - "\\Filter\\LimitBytesFilter"
-                  - "\\Filter\\LimitLinesFilter"
-                  - "\\Filter\\IPv4Filter"
-                  - "\\Filter\\IPv6Filter"
-                  - "\\Filter\\IPv6ShortFilter"
-                  - "\\Filter\\UuidFilter"
-                  - "\\Filter\\XuidFilter"
-                  - "\\Filter\\SessionTokenFilter"
-                  - "\\Filter\\ClientIdFilter"
-                  - "\\Filter\\CoordinateFilter"
-                  - "\\Filter\\UsernameFilter"
-                  - "\\Filter\\AccessTokenFilter"
+                  - type: trim
+                    data: null
+                  - type: limit-bytes
+                    data:
+                      limit: 10485760
+                  - type: limit-lines
+                    data:
+                      limit: 50000
+                  - type: regex
+                    data:
+                      patterns:
+                        - pattern: IPv4
+                          replacement: "**.**.**.**"
+                        - pattern: IPv6
+                          replacement: "****:****:****:****:****:****:****:****"
+                        - pattern: Username
+                          replacement: "********"
+                        - pattern: AccessToken
+                          replacement: "********"
         '429':
           $ref: '#/components/responses/RateLimited'
   /v1/filters:
@@ -1032,7 +1033,7 @@ paths:
       tags: [Meta]
       summary: List active pre-filters
       description: |
-        Returns the ordered list of filter classes applied to incoming logs
+        Returns the ordered list of active pre-filters (type + config)
       operationId: getFiltersV1
       responses:
         '200':
@@ -1043,21 +1044,26 @@ paths:
                 $ref: '#/components/schemas/FiltersResponse'
               example:
                 success: true
-                message: "OK"
                 filters:
-                  - "\\Filter\\TrimFilter"
-                  - "\\Filter\\LimitBytesFilter"
-                  - "\\Filter\\LimitLinesFilter"
-                  - "\\Filter\\IPv4Filter"
-                  - "\\Filter\\IPv6Filter"
-                  - "\\Filter\\IPv6ShortFilter"
-                  - "\\Filter\\UuidFilter"
-                  - "\\Filter\\XuidFilter"
-                  - "\\Filter\\SessionTokenFilter"
-                  - "\\Filter\\ClientIdFilter"
-                  - "\\Filter\\CoordinateFilter"
-                  - "\\Filter\\UsernameFilter"
-                  - "\\Filter\\AccessTokenFilter"
+                  - type: trim
+                    data: null
+                  - type: limit-bytes
+                    data:
+                      limit: 10485760
+                  - type: limit-lines
+                    data:
+                      limit: 50000
+                  - type: regex
+                    data:
+                      patterns:
+                        - pattern: IPv4
+                          replacement: "**.**.**.**"
+                        - pattern: IPv6
+                          replacement: "****:****:****:****:****:****:****:****"
+                        - pattern: Username
+                          replacement: "********"
+                        - pattern: AccessToken
+                          replacement: "********"
         '429':
           $ref: '#/components/responses/RateLimited'
   /1/errors/rate:
@@ -1225,12 +1231,8 @@ components:
                 type: object
     LimitsResponse:
       type: object
-      required: [success, message, maxLength, maxLines, storageTime]
+      required: [maxLength, maxLines, storageTime]
       properties:
-        success:
-          type: boolean
-        message:
-          type: string
         maxLength:
           type: integer
           description: Max upload bytes
@@ -1244,16 +1246,20 @@ components:
           example: 604800
     FiltersResponse:
       type: object
-      required: [success, message, filters]
+      required: [success, filters]
       properties:
         success:
           type: boolean
-        message:
-          type: string
         filters:
           type: array
           items:
-            type: string
+            type: object
+            required: [type, data]
+            properties:
+              type:
+                type: string
+              data:
+                nullable: true
     RateLimitResponse:
       type: object
       required: [success, message, limits]

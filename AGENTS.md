@@ -2,7 +2,7 @@
 
 ## Overview
 
-Minecraft / Hytale log analysis and sharing platform (v1.6.0). Hyperf 3.2 (Swoole 6.2 resident + coroutine) app with `bin/hyperf.php` entrypoint, `app/` classes under the `App\` namespace, and `Config.inc.php` (business config) + `config/autoload/` (framework config) at root.
+Minecraft / Hytale log analysis and sharing platform (v1.7.0). Hyperf 3.2 (Swoole 6.2 resident + coroutine) app with `bin/hyperf.php` entrypoint, `app/` classes under the `App\` namespace, and `Config.inc.php` (business config) + `config/autoload/` (framework config) at root.
 
 ## Entrypoint & routing
 
@@ -24,13 +24,15 @@ php bin/hyperf.php rag:build      # (re)build the RAG SQLite FTS5 index
 
 `composer stan` runs `phpstan analyse app --level=5`. `composer cs-fix` references `php-cs-fixer`, which is not installed and has no config; there is no enforced formatter.
 
+`phpstan.neon` (and Pest coverage) **exclude** `app/Data/*`, `app/Cache/*`, `app/Client/*`, `app/Storage/*` — those dirs are not type-checked or coverage-measured. `composer test:coverage` writes `coverage/clover.xml`.
+
 CI runs in `.github/workflows/ci.yaml`. Tests auto-create `Config.inc.php` from `Config.inc.example.php` if missing (`tests/bootstrap.php`).
 
 **Release:** `.github/workflows/release.yaml` publishes a GitHub Release when a commit to `main` starts with `[Build]` (or via manual `workflow_dispatch`). The version + release notes are read from `CHANGELOG.md` — add a new `## x.y.z — date` entry at the top, bump the version in `README.md`/`AGENTS.md`/`MCPClient.php`, then commit with `[Build]` prefix. The tag is `v{x.y.z}`.
 
 > **Termux note:** run `PHPSTAN_TURBO=0 composer stan` — PHPStan's turbo extension is not available on Termux (needs glibc). CI on Ubuntu is unaffected.
 >
-> **Local runtime:** Swoole is compiled locally (`extension=swoole.so` in `conf.d/swoole.ini`, patched with `patchelf --add-needed libc++_shared.so`). No ext-redis/ext-mongodb on Termux — Redis/mongodb degrade gracefully (`class_exists` pre-check). MariaDB runs via `mariadbd`.
+> **Local runtime:** Swoole is compiled locally (`extension=swoole.so` in `conf.d/swoole.ini`, patched with `patchelf --add-needed libc++_shared.so`). No ext-redis on Termux — Redis degrades gracefully (`class_exists` pre-check). MariaDB runs via `mariadbd`.
 
 ## Config
 
@@ -71,6 +73,9 @@ All source classes live under `App\` PSR-4 (`composer.json` maps `App\` → `app
 - `App\Client\*` — `AIClient`, `MCPClient`, `RedisClient`, `SpinYarnClient`
 - `App\Agent\*` — `LogAgent` (tool loop)
 - `App\Rag\*` — `RagSearch` (SQLite FTS5)
+- `App\Cache\*` — `RedisCache` (optional cache layer) + `CacheInterface`
+- `App\Command\*` — `RagBuildCommand` (`rag:build` Hyperf command)
+- `App\Middleware\*` — `CorsMiddleware`, `RateLimitMiddleware` (global HTTP middleware)
 - `App\Exception\Handler\*` — exception handlers
 - Top-level `App\`: `Config`, `Log`, `Id`, `ApiError`, `ApiResponse`, `ContentParser`, `UploadParser`, `Detective`
 
@@ -90,6 +95,8 @@ Controllers extend `App\Controller\AbstractController`, which provides:
 **Controllers must not access `$_SERVER`, `$_GET`, or `$_POST` directly** (enforced by architecture test). Use `RequestInterface` (injected) and `ContentParser`.
 
 `ApiError` is thrown for expected errors; `App\Exception\Handler\ApiExceptionHandler` renders it as JSON with the correct status code.
+
+Global HTTP middleware (`config/autoload/middlewares.php`): `CorsMiddleware` then `RateLimitMiddleware`. Rate limiting is Redis `INCR`+`EXPIRE` keyed by `IP + method + path` (config `rateLimit`, default 36000/60s) and **fails open** when Redis is unavailable.
 
 ## Pre-filters
 
