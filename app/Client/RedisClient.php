@@ -3,17 +3,18 @@
 namespace App\Client;
 
 /**
- * Redis connection facade with coroutine-aware connection handling.
+ * Redis connection facade with coroutine-safe connection handling.
  *
- * Under Swoole coroutines the ext-redis `Redis` object would perform
- * synchronous, worker-blocking IO. Instead we use `Swoole\Coroutine\Redis`
- * (non-blocking) and store the connection in the coroutine-scoped Hyperf
- * Context, so each request gets its own connection that is released when the
- * coroutine ends.
+ * Swoole 5+/6+ hooks ext-redis via SWOOLE_HOOK_ALL, so ext-redis is already
+ * coroutine-aware (non-blocking). The remaining hazard is sharing a single
+ * process-level connection across concurrent coroutines, which can interleave
+ * request/response frames. We therefore store the connection in the
+ * coroutine-scoped Hyperf Context so each request gets its own connection that
+ * is released when the coroutine ends.
  *
- * Outside coroutines (CLI / tests) we fall back to a process-level ext-redis
- * singleton with ping-based reconnection, and throw a catchable Exception when
- * neither ext-redis nor Swoole is available so callers can degrade gracefully.
+ * Outside coroutines (CLI / tests) we fall back to a process-level singleton
+ * with ping-based reconnection, and throw a catchable Exception when ext-redis
+ * is unavailable so callers can degrade gracefully.
  */
 class RedisClient
 {
@@ -37,10 +38,10 @@ class RedisClient
     /**
      * Return a usable Redis connection for the current context.
      *
-     * @return \Redis|\Swoole\Coroutine\Redis
+     * @return \Redis
      * @throws \Exception When Redis is unreachable or unavailable
      */
-    protected static function connection()
+    protected static function connection(): \Redis
     {
         $config = \App\Config::Get('cache');
         $redisConfig = $config['redis'] ?? ['host' => 'mclogs-redis', 'port' => 6379];
@@ -50,14 +51,11 @@ class RedisClient
 
         if (self::inCoroutine()) {
             $conn = \Hyperf\Context\Context::get(self::CONTEXT_CONN_KEY);
-            if ($conn instanceof \Swoole\Coroutine\Redis && $conn->connected) {
+            if ($conn instanceof \Redis && $conn->isConnected()) {
                 return $conn;
             }
 
-            $conn = new \Swoole\Coroutine\Redis();
-            if (!$conn->connect($host, $port, $timeout)) {
-                throw new \Exception('Redis connection failed: ' . $host . ':' . $port);
-            }
+            $conn = self::createConnection($host, $port, $timeout);
             \Hyperf\Context\Context::set(self::CONTEXT_CONN_KEY, $conn);
             return $conn;
         }
@@ -73,30 +71,33 @@ class RedisClient
             self::$connection = null;
         }
 
+        self::$connection = self::createConnection($host, $port, $timeout);
+        return self::$connection;
+    }
+
+    private static function createConnection(string $host, int $port, float $timeout): \Redis
+    {
         if (!class_exists('Redis')) {
             // 缺少 ext-redis（如本地开发 / Termux）。抛出可捕获的异常，
             // 避免 `new Redis()` 触发致命 Error。
             throw new \Exception('Redis extension is not installed');
         }
 
-        self::$connection = new \Redis();
-        if (!self::$connection->connect($host, $port, $timeout)) {
-            self::$connection = null;
+        $conn = new \Redis();
+        if (!$conn->connect($host, $port, $timeout)) {
             throw new \Exception('Redis connection failed: ' . $host . ':' . $port);
         }
-        return self::$connection;
+        return $conn;
     }
 
     /**
-     * 统一操作封装，屏蔽 Swoole\Coroutine\Redis 与 ext-redis 的 API 差异。
+     * 统一操作封装。
      */
 
     protected static function opSet(string $key, string $value, ?int $ttl = null): void
     {
         $conn = self::connection();
-        if ($conn instanceof \Swoole\Coroutine\Redis) {
-            $conn->set($key, $value, $ttl ?? 0);
-        } elseif ($ttl) {
+        if ($ttl) {
             $conn->setEx($key, $ttl, $value);
         } else {
             $conn->set($key, $value);
@@ -105,32 +106,27 @@ class RedisClient
 
     protected static function opGet(string $key): ?string
     {
-        $conn = self::connection();
-        $value = $conn->get($key);
+        $value = self::connection()->get($key);
         return $value === false ? null : $value;
     }
 
     protected static function opExists(string $key): bool
     {
-        $conn = self::connection();
-        return (bool) $conn->exists($key);
+        return (bool) self::connection()->exists($key);
     }
 
     protected static function opDel(string $key): bool
     {
-        $conn = self::connection();
-        return (bool) $conn->del($key);
+        return (bool) self::connection()->del($key);
     }
 
     protected static function opIncr(string $key): int
     {
-        $conn = self::connection();
-        return (int) $conn->incr($key);
+        return (int) self::connection()->incr($key);
     }
 
     protected static function opExpire(string $key, int $seconds): bool
     {
-        $conn = self::connection();
-        return (bool) $conn->expire($key, $seconds);
+        return (bool) self::connection()->expire($key, $seconds);
     }
 }

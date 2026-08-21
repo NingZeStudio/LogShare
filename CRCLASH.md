@@ -8,7 +8,7 @@
 
 ## 整体评价
 
-Hyperf/Swoole 迁移已基本收敛，核心链路（上传→脱敏→反混淆→MariaDB→读取→AI 流式→RAG）可运行，PHPStan level 5 零错误，架构测试 + Controller 集成测试 + 单元测试齐备。第四轮多数问题已修复。但**仍有一处协程模型层面的隐患（ext-redis 同步阻塞）**、一处**文档承诺的功能失效（AI 分析 id 绑定）**，以及一批日志噪音、测试盲区等收尾项。整体已达到可发布状态，但建议将「严重」项纳入发布后首个迭代。
+Hyperf/Swoole 迁移已基本收敛，核心链路（上传→脱敏→反混淆→MariaDB→读取→AI 流式→RAG）可运行，PHPStan level 5 零错误，架构测试 + Controller 集成测试 + 单元测试齐备。第四轮多数问题已修复。但**仍有一处协程模型层面的隐患（Redis 跨协程共享单连接串扰）**、一处**文档承诺的功能失效（AI 分析 id 绑定）**，以及一批日志噪音、测试盲区等收尾项。整体已达到可发布状态，但建议将「严重」项纳入发布后首个迭代。
 
 ---
 
@@ -16,12 +16,9 @@ Hyperf/Swoole 迁移已基本收敛，核心链路（上传→脱敏→反混淆
 
 ### 🔴 严重
 
-#### S1. ext-redis 同步阻塞 + 静态单例破坏协程模型 — `app/Client/RedisClient.php`、`app/Cache/RedisCache.php`、`app/Middleware/RateLimitMiddleware.php`
-- **问题：** `RedisClient::$connection` 是进程级静态单例，且底层用 ext-redis（同步阻塞 IO）。在 Swoole 协程模型下：
-  1. ext-redis 的 `connect/incr/get/setEx` 均为**同步阻塞调用**，一个协程执行 Redis 时会阻塞整个 worker 的事件循环，其它请求无法被调度，吞吐量被单点串行化；
-  2. 静态单例在多个协程间共享同一连接，并发调用存在串扰风险。
-- **影响：** `RateLimitMiddleware` 是全局中间件，**每个请求都会触发一次 `INCR`+`EXPIRE`**（`app/Middleware/RateLimitMiddleware.php:31-34`），意味着生产环境（Docker 有 ext-redis）下所有请求都被同步阻塞一次 Redis 往返；缓存读写同理。第四轮 S2 仅通过 `ping()` 补了「失效重连」（`RedisClient.php:24-31`），但协程阻塞/串扰这一根本问题未解决。
-- **修复：** 迁移到 `hyperf/redis`（Swoole 协程 Redis 连接池，非阻塞），保留 `class_exists('Redis')` 的本地降级分支；限流与缓存共用连接池。至少应让限流中间件走协程客户端。
+#### S1. Redis 进程级静态单例跨协程共享连接串扰 — `app/Client/RedisClient.php`、`app/Cache/RedisCache.php`、`app/Middleware/RateLimitMiddleware.php`
+- **问题：** `RedisClient::$connection` 是进程级静态单例，多个协程共享同一 ext-redis 连接。ext-redis 在 Swoole 5+/6+ 下虽经 `SWOOLE_HOOK_ALL` 协程化（非阻塞），但**共享同一连接**时，两个协程并发发出的请求-响应帧仍会交错串扰。`RateLimitMiddleware` 是全局中间件，每个请求都触发 `INCR`+`EXPIRE`，共享连接串扰风险面大。
+- **修复：** 将连接存入协程级 `Hyperf\Context\Context`（每请求独立连接，随协程销毁自动释放），非协程环境（CLI/测试）保留进程级单例 + `ping` 失效重连。注意 Swoole 5+ 已移除 `Swoole\Coroutine\Redis`，须用 ext-redis + hook 而非协程 Redis 客户端。
 
 ### 🟠 一般
 
@@ -77,7 +74,7 @@ Hyperf/Swoole 迁移已基本收敛，核心链路（上传→脱敏→反混淆
 
 ## 改进建议（按优先级）
 
-1. **修 S1（ext-redis 阻塞）**：接入 `hyperf/redis` 协程连接池，限流与缓存共用；保留本地无 ext-redis 的降级分支。这是协程模型的正确性问题，最高优先级。
+1. **修 S1（Redis 跨协程串扰）**：将连接存入协程级 `Context` 做连接隔离，限流与缓存共用；保留本地无 ext-redis 的降级分支。这是协程模型的正确性问题，最高优先级。
 2. **修 M1（id 绑定失效）**：`ContentParser` 解析并校验 `id`，恢复 `POST /v1/ai/analyse` 的会话文件访问能力。
 3. **修 M2（日志噪音）**：缓存热路径 debug 日志降级 + 去 `rawId` 暴露。
 4. **修 M3（异常契约）**：`Limit*Filter` 抛 `ApiError`，删控制器冗余 catch。
@@ -99,4 +96,4 @@ Hyperf/Swoole 迁移已基本收敛，核心链路（上传→脱敏→反混淆
 
 ---
 
-*第五轮审查：v1.7.0 发布前。第四轮 S1/S3 已修复、S2 部分缓解；本轮发现一处协程阻塞隐患（ext-redis）、一处文档承诺功能失效（AI 分析 id 绑定），其余为日志噪音、测试盲区、配置收尾等。建议发布后首个迭代优先处理 S1 与 M1。*
+*第五轮审查：v1.7.0 发布前。第四轮 S1/S3 已修复、S2 部分缓解；本轮发现一处协程连接串扰隐患（Redis 跨协程共享单连接）、一处文档承诺功能失效（AI 分析 id 绑定），其余为日志噪音、测试盲区、配置收尾等。建议发布后首个迭代优先处理 S1 与 M1。*

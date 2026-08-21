@@ -22,7 +22,7 @@
 - 修复 CRCLASH 第四轮审查问题（协程串扰、部署、资源泄漏等）
 - RAG 改走主 server 的 `/rag` 路径，规避 Hyperf 多 HTTP server 单例冲突
 - SSE 存储检测 Swoole（无则 static），修复 CLI 测试环境
-- 修复 CRCLASH 第五轮审查问题：ext-redis 同步阻塞改为 Swoole 协程 Redis（非阻塞）、`POST /v1/ai/analyse` 的 `id` 字段绑定失效、`Limit*` 过滤器异常契约、缓存热路径日志噪音等
+- 修复 CRCLASH 第五轮审查问题：Redis 连接改为协程级隔离（Context）避免跨协程共享单连接串扰、`POST /v1/ai/analyse` 的 `id` 字段绑定失效、`Limit*` 过滤器异常契约、缓存热路径日志噪音等
 
 ### ⚠️ 配置变更
 
