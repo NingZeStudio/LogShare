@@ -125,7 +125,6 @@ class Log
         $this->log = $detected;
         $this->log->parse();
         $this->analysis = $this->log->analyse();
-        $this->deobfuscateContent();
         return $this->analysis;
     }
 
@@ -153,11 +152,23 @@ class Log
     }
 
     /**
-     * deobfuscate the content of this log via the SpinYarn PHP extension
+     * Deobfuscate the log content before it is stored, so the database holds
+     * deobfuscated text and reads need no further deobfuscation.
+     *
+     * Detects the log type and version, then calls the SpinYarn extension.
+     * When the extension is absent or the log needs no deobfuscation, the
+     * data passes through unchanged.
+     *
      * @return void
      */
-    protected function deobfuscateContent()
+    protected function deobfuscateForStorage(): void
     {
+        $detected = (new Detective())->setLogFile(new StringLogFile($this->data))->detect();
+        /** @var \Aternos\Codex\Log\Log $detected */
+        $this->log = $detected;
+        $this->log->parse();
+        $this->analysis = $this->log->analyse();
+
         $mappingType = $this->getMappingType();
         if ($mappingType === null) {
             return;
@@ -178,6 +189,8 @@ class Log
         }
 
         $this->data = $content;
+        $this->lineCount = null;
+
         $detected = (new Detective())->setLogFile(new StringLogFile($this->data))->detect();
         /** @var \Aternos\Codex\Log\Log $detected */
         $this->log = $detected;
@@ -241,6 +254,7 @@ class Log
         $this->data = $data;
         $this->lineCount = null;
         $this->preFilter();
+        $this->deobfuscateForStorage();
         return $this;
     }
 
@@ -259,6 +273,7 @@ class Log
         $this->data = $data;
         $this->lineCount = null;
         $this->preFilter();
+        $this->deobfuscateForStorage();
         $this->token = $token ?? new Token();
         $this->metadata = $metadata;
         $this->source = $source;
