@@ -1,4 +1,4 @@
-# LogShare v1.7.0
+# LogShare v1.7.0-beta.1
 
 Minecraft / Hytale 日志分析与分享平台。基于 Aternos Codex 与 SpinYarn 构建，提供日志上传、自动诊断、敏感信息脱敏、多文件日志和大模型 AI 智能体（LogAgent）辅助分析能力。
 

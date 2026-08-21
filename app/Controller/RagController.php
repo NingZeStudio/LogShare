@@ -16,7 +16,7 @@ use Psr\Http\Message\ResponseInterface;
 #[Controller(prefix: '/rag')]
 class RagController extends AbstractController
 {
-    private const SERVER_VERSION = '1.7.0';
+    private const SERVER_VERSION = '1.7.0-beta.1';
 
     private static ?RagSearch $search = null;
 

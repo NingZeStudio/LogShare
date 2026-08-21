@@ -38,7 +38,7 @@ class MCPClient
         $result = $this->request('initialize', [
             'protocolVersion' => '2025-03-26',
             'capabilities' => new \stdClass(),
-            'clientInfo' => ['name' => 'logshare', 'version' => '1.7.0'],
+            'clientInfo' => ['name' => 'logshare', 'version' => '1.7.0-beta.1'],
         ]);
         $this->initialized = true;
         $this->protocolVersion = $result['protocolVersion'] ?? '2025-03-26';
