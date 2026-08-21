@@ -19,7 +19,7 @@ class MariaDbStorage implements StorageInterface
 
         do {
             $id->regenerate();
-        } while (self::Get($id) !== null);
+        } while (self::idExists($id->getRaw()));
 
         Db::transaction(function () use ($id, $data, $token, $metadata, $source, $files) {
             $document = [
@@ -76,9 +76,19 @@ class MariaDbStorage implements StorageInterface
         return $id;
     }
 
-    public static function Get(\App\Id $id, bool $includeContent = true): ?array
+    /**
+     * 轻量存在性检查（仅查 logs 表主键，避免 Get() 连带拉取 files/metadata）。
+     *
+     * @param string $rawId
+     * @return bool
+     */
+    private static function idExists(string $rawId): bool
     {
-        $log = Db::table(self::TABLE_LOGS)->where('id', $id->getRaw())->first();
+        return Db::table(self::TABLE_LOGS)->where('id', $rawId)->exists();
+    }
+
+    public static function Get(\App\Id $id, bool $includeContent = true): ?array
+    {        $log = Db::table(self::TABLE_LOGS)->where('id', $id->getRaw())->first();
         if ($log === null) {
             return null;
         }

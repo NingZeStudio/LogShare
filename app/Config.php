@@ -21,7 +21,6 @@ class Config
      * Allow environment variables to override configuration values.
      *
      * Supported variables:
-     *  - MONGODB_URI        → mongo.url
      *  - REDIS_HOST         → cache.redis.host
      *  - REDIS_PORT         → cache.redis.port
      *  - REDIS_TIMEOUT      → cache.redis.timeout

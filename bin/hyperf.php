@@ -3,8 +3,9 @@
 
 declare(strict_types=1);
 
-ini_set('display_errors', 'on');
-ini_set('display_startup_errors', 'on');
+$isProduction = getenv('APP_ENV') === 'prod';
+ini_set('display_errors', $isProduction ? 'off' : 'on');
+ini_set('display_startup_errors', $isProduction ? 'off' : 'on');
 ini_set('memory_limit', '1G');
 
 error_reporting(E_ALL);

@@ -2,7 +2,6 @@
 
 namespace App\Controller;
 
-use App\ApiError;
 use Hyperf\HttpServer\Annotation\Controller;
 use Hyperf\HttpServer\Annotation\PostMapping;
 use Psr\Http\Message\ResponseInterface;
@@ -20,11 +19,7 @@ class AnalyseController extends AbstractController
 
         $log = new \App\Log();
 
-        try {
-            $log->setData($content);
-        } catch (\Exception $e) {
-            throw new ApiError(400, $e->getMessage());
-        }
+        $log->setData($content);
 
         $log->analyse();
 

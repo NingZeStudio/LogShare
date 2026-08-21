@@ -16,11 +16,26 @@ use Psr\Http\Message\ResponseInterface;
 #[Controller(prefix: '/rag')]
 class RagController extends AbstractController
 {
+    private const SERVER_VERSION = '1.7.0';
+
+    private static ?RagSearch $search = null;
+
+    /**
+     * 进程级复用 RagSearch（含 SQLite PDO 连接），避免每个 MCP 请求重建连接。
+     */
+    private function getSearch(): RagSearch
+    {
+        if (self::$search === null) {
+            self::$search = new RagSearch(RagSearch::resolveDbPath());
+        }
+        return self::$search;
+    }
+
     #[RequestMapping(path: '', methods: ['GET', 'POST'])]
     public function mcp(): ResponseInterface
     {
         try {
-            $rag = new RagSearch(RagSearch::resolveDbPath());
+            $rag = $this->getSearch();
         } catch (\Throwable $e) {
             error_log("[RAG] 数据库不可用: " . $e->getMessage());
             return $this->respondJson([
@@ -53,7 +68,7 @@ class RagController extends AbstractController
                     $response['result'] = [
                         'protocolVersion' => '2025-03-26',
                         'capabilities' => ['tools' => ['listChanged' => false]],
-                        'serverInfo' => ['name' => 'logshare-rag', 'version' => '1.0.0'],
+                        'serverInfo' => ['name' => 'logshare-rag', 'version' => self::SERVER_VERSION],
                     ];
                     break;
 

@@ -21,6 +21,8 @@ services:
       - ../:/app
       - spinyarn-mappings:/app/mappings
     environment:
+      APP_ENV: prod
+      SCAN_CACHEABLE: "true"
       DB_HOST: mariadb
       DB_PORT: "3306"
       DB_DATABASE: logshare

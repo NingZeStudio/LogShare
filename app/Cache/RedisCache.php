@@ -12,13 +12,7 @@ class RedisCache extends RedisClient implements CacheInterface
      */
     public static function Set(string $key, string $value, ?int $duration = null)
     {
-        self::Connect();
-        if ($duration) {
-            self::$connection->setEx($key, $duration, $value);
-        }
-        else {
-            self::$connection->set($key, $value);
-        }
+        self::opSet($key, $value, $duration);
     }
 
     /**
@@ -26,9 +20,7 @@ class RedisCache extends RedisClient implements CacheInterface
      */
     public static function Get(string $key): ?string
     {
-        self::Connect();
-        $value = self::$connection->get($key);
-        return $value === false ? null : $value;
+        return self::opGet($key);
     }
 
     /**
@@ -36,8 +28,7 @@ class RedisCache extends RedisClient implements CacheInterface
      */
     public static function Exists(string $key): bool
     {
-        self::Connect();
-        return (bool)self::$connection->exists($key);
+        return self::opExists($key);
     }
 
     /**
@@ -45,8 +36,7 @@ class RedisCache extends RedisClient implements CacheInterface
      */
     public static function Delete(string $key): bool
     {
-        self::Connect();
-        return (bool)self::$connection->del($key);
+        return self::opDel($key);
     }
 
     /**
@@ -57,8 +47,7 @@ class RedisCache extends RedisClient implements CacheInterface
      */
     public static function Incr(string $key): int
     {
-        self::Connect();
-        return (int)self::$connection->incr($key);
+        return self::opIncr($key);
     }
 
     /**
@@ -70,7 +59,6 @@ class RedisCache extends RedisClient implements CacheInterface
      */
     public static function Expire(string $key, int $seconds): bool
     {
-        self::Connect();
-        return (bool)self::$connection->expire($key, $seconds);
+        return self::opExpire($key, $seconds);
     }
 }

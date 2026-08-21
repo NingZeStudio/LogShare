@@ -135,7 +135,16 @@ class MetadataEntry implements \JsonSerializable
 
     public function getDisplayValue(): string
     {
-        return $this->value;
+        if ($this->value === null) {
+            return '';
+        }
+        if (is_string($this->value)) {
+            return $this->value;
+        }
+        if (is_bool($this->value)) {
+            return $this->value ? 'true' : 'false';
+        }
+        return (string) $this->value;
     }
 
     public function setLabel(?string $label): static

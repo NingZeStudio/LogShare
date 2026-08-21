@@ -99,27 +99,36 @@ class RagSearch
             throw new \RuntimeException("Knowledge directory does not exist: {$knowledgeDir}");
         }
 
-        $this->pdo->exec("DELETE FROM docs");
+        $this->pdo->beginTransaction();
 
-        $files = 0;
-        $chunks = 0;
-        $insert = $this->pdo->prepare("INSERT INTO docs(title, body, source) VALUES (?, ?, ?)");
+        try {
+            $this->pdo->exec("DELETE FROM docs");
 
-        $iterator = new \RecursiveIteratorIterator(new \RecursiveDirectoryIterator($knowledgeDir, \FilesystemIterator::SKIP_DOTS));
-        foreach ($iterator as $fileInfo) {
-            /** @var \SplFileInfo $fileInfo */
-            if (!$fileInfo->isFile() || !in_array(strtolower($fileInfo->getExtension()), ['md', 'txt', 'log'], true)) {
-                continue;
+            $files = 0;
+            $chunks = 0;
+            $insert = $this->pdo->prepare("INSERT INTO docs(title, body, source) VALUES (?, ?, ?)");
+
+            $iterator = new \RecursiveIteratorIterator(new \RecursiveDirectoryIterator($knowledgeDir, \FilesystemIterator::SKIP_DOTS));
+            foreach ($iterator as $fileInfo) {
+                /** @var \SplFileInfo $fileInfo */
+                if (!$fileInfo->isFile() || !in_array(strtolower($fileInfo->getExtension()), ['md', 'txt', 'log'], true)) {
+                    continue;
+                }
+
+                $content = (string) file_get_contents($fileInfo->getPathname());
+                $relative = ltrim(substr($fileInfo->getPathname(), strlen(rtrim($knowledgeDir, '/'))), '/');
+
+                foreach (self::chunkMarkdown($relative, $content) as $chunk) {
+                    $insert->execute([$chunk['title'], $chunk['body'], $relative]);
+                    $chunks++;
+                }
+                $files++;
             }
 
-            $content = (string) file_get_contents($fileInfo->getPathname());
-            $relative = ltrim(substr($fileInfo->getPathname(), strlen(rtrim($knowledgeDir, '/'))), '/');
-
-            foreach (self::chunkMarkdown($relative, $content) as $chunk) {
-                $insert->execute([$chunk['title'], $chunk['body'], $relative]);
-                $chunks++;
-            }
-            $files++;
+            $this->pdo->commit();
+        } catch (\Throwable $e) {
+            $this->pdo->rollBack();
+            throw $e;
         }
 
         return ['files' => $files, 'chunks' => $chunks];

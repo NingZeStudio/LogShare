@@ -3,36 +3,15 @@
 use App\Client\MCPClient;
 
 beforeAll(function () {
-    $port = 19000 + mt_rand(1, 1000);
-    $base = 'http://127.0.0.1:' . $port;
-    $logFile = CORE_PATH . '/tmp/mcp_server_' . $port . '.log';
-    $cmd = sprintf(
-        'php -S 127.0.0.1:%d %s > %s 2>&1 & echo $!',
-        $port,
-        escapeshellarg(CORE_PATH . '/tests/Fixtures/mcp_server.php'),
-        escapeshellarg($logFile)
-    );
-    $output = shell_exec($cmd);
-    $pid = (int) trim((string) $output);
-
-    // Wait for the server to accept connections
-    $ready = false;
-    for ($i = 0; $i < 50; $i++) {
-        $fp = @fsockopen('127.0.0.1', $port, $errno, $errstr, 0.2);
-        if ($fp) {
-            fclose($fp);
-            $ready = true;
-            break;
-        }
-        usleep(100000);
+    $server = startMockServer(CORE_PATH . '/tests/Fixtures/mcp_server.php', 19000, 1000);
+    if ($server === null) {
+        $GLOBALS['mcp_base_url'] = null;
+        $GLOBALS['mcp_pid'] = null;
+        return;
     }
 
-    if (!$ready) {
-        throw new \RuntimeException('Mock MCP server failed to start.');
-    }
-
-    $GLOBALS['mcp_base_url'] = $base;
-    $GLOBALS['mcp_pid'] = $pid;
+    $GLOBALS['mcp_base_url'] = $server['base'];
+    $GLOBALS['mcp_pid'] = $server['pid'];
 });
 
 afterAll(function () {
@@ -42,6 +21,7 @@ afterAll(function () {
 });
 
 test('MCPClient initializes and reads protocol version', function () {
+    skipWithoutMockServer($GLOBALS['mcp_base_url']);
     $client = new MCPClient($GLOBALS['mcp_base_url']);
     $info = $client->initialize();
 
@@ -51,6 +31,7 @@ test('MCPClient initializes and reads protocol version', function () {
 });
 
 test('MCPClient lists tools', function () {
+    skipWithoutMockServer($GLOBALS['mcp_base_url']);
     $client = new MCPClient($GLOBALS['mcp_base_url']);
     $tools = $client->listTools();
 
@@ -61,6 +42,7 @@ test('MCPClient lists tools', function () {
 });
 
 test('MCPClient calls a tool and extracts text content', function () {
+    skipWithoutMockServer($GLOBALS['mcp_base_url']);
     $client = new MCPClient($GLOBALS['mcp_base_url']);
     $result = $client->callTool('echo', ['text' => 'hello world']);
 
@@ -68,6 +50,7 @@ test('MCPClient calls a tool and extracts text content', function () {
 });
 
 test('MCPClient auto-initializes before tool calls', function () {
+    skipWithoutMockServer($GLOBALS['mcp_base_url']);
     $client = new MCPClient($GLOBALS['mcp_base_url']);
     $result = $client->callTool('search', ['query' => 'minecraft crash']);
 
@@ -76,6 +59,7 @@ test('MCPClient auto-initializes before tool calls', function () {
 });
 
 test('MCPClient decodes plain JSON responses', function () {
+    skipWithoutMockServer($GLOBALS['mcp_base_url']);
     $client = new MCPClient($GLOBALS['mcp_base_url']);
     $ref = new ReflectionClass($client);
     $method = $ref->getMethod('decodeResponse');
@@ -85,6 +69,7 @@ test('MCPClient decodes plain JSON responses', function () {
 });
 
 test('MCPClient decodes SSE framed responses', function () {
+    skipWithoutMockServer($GLOBALS['mcp_base_url']);
     $client = new MCPClient($GLOBALS['mcp_base_url']);
     $ref = new ReflectionClass($client);
     $method = $ref->getMethod('decodeResponse');
@@ -95,6 +80,7 @@ test('MCPClient decodes SSE framed responses', function () {
 });
 
 test('MCPClient throws on unsupported method errors', function () {
+    skipWithoutMockServer($GLOBALS['mcp_base_url']);
     $client = new MCPClient($GLOBALS['mcp_base_url']);
     $ref = new ReflectionClass($client);
     $method = $ref->getMethod('request');

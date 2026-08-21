@@ -34,11 +34,7 @@ class LogController extends AbstractController
         $log = new \App\Log();
         $token = new Token();
 
-        try {
-            $id = $log->put($content, $token, $metadata, $source, $files);
-        } catch (\Exception $e) {
-            throw new ApiError(400, $e->getMessage());
-        }
+        $id = $log->put($content, $token, $metadata, $source, $files);
 
         $urls = \App\Config::Get('urls');
         $apiPrefix = $this->apiPrefix();

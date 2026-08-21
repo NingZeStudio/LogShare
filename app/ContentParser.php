@@ -138,6 +138,11 @@ class ContentParser
             $result['source'] = substr($data['source'], 0, 64);
         }
 
+        // Parse optional log id (used by AI analyse to bind session file access)
+        if (isset($data['id']) && is_string($data['id'])) {
+            $result['id'] = substr($data['id'], 0, 64);
+        }
+
         // Parse additional files (multi-file uploads)
         if (isset($data['files']) && is_array($data['files'])) {
             $files = UploadParser::parseFiles($data['files']);

@@ -16,14 +16,15 @@ class ApiExceptionHandler extends ExceptionHandler
     {
         $this->stopPropagation();
 
-        if ($throwable instanceof ApiError) {
-            return $response
-                ->withStatus($throwable->getHttpCode())
-                ->withHeader('Content-Type', 'application/json; charset=utf-8')
-                ->withBody(new SwooleStream(json_encode($throwable->jsonSerialize(), JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)));
+        // isValid() 已保证仅 ApiError 进入，此处兜底防御
+        if (!$throwable instanceof ApiError) {
+            return $response;
         }
 
-        return $response;
+        return $response
+            ->withStatus($throwable->getHttpCode())
+            ->withHeader('Content-Type', 'application/json; charset=utf-8')
+            ->withBody(new SwooleStream(json_encode($throwable->jsonSerialize(), JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)));
     }
 
     public function isValid(Throwable $throwable): bool

@@ -70,17 +70,12 @@ class Log
         if ($this->isCacheEnabled()) {
             try {
                 $result = $this->loadFromRedis();
-                if ($result !== null) {
-                    error_log("[Redis] 缓存命中: " . $this->id->getRaw());
-                }
             } catch (\Exception $e) {
                 error_log("[Redis] 缓存读取失败: " . $e->getMessage());
             }
         }
 
         if ($result === null) {
-            error_log("[Redis] 缓存未命中，回退到 MariaDB: " . $this->id->getRaw());
-
             /**
              * @var StorageInterface $storage
              */
@@ -322,7 +317,6 @@ class Log
                         'created' => time(),
                         'files' => $this->files,
                     ]);
-                    error_log("[Redis] 缓存写入成功: " . $this->id->getRaw());
                 } catch (\Exception $e) {
                     error_log("[Redis] 缓存写入失败: " . $e->getMessage() . "，已降级到 MariaDB");
                 }
@@ -361,7 +355,6 @@ class Log
         if ($this->isCacheEnabled()) {
             try {
                 $this->renewRedisCache();
-                error_log("[Redis] 缓存 TTL 续期成功: " . $this->id->getRaw());
             } catch (\Exception $e) {
                 error_log("[Redis] 缓存 TTL 续期失败: " . $e->getMessage());
             }
@@ -417,7 +410,6 @@ class Log
         if ($this->isCacheEnabled()) {
             try {
                 $this->deleteFromRedisCache();
-                error_log("[Redis] 缓存删除成功: " . $this->id->getRaw());
             } catch (\Exception $e) {
                 error_log("[Redis] 缓存删除失败: " . $e->getMessage());
             }

@@ -65,6 +65,10 @@ class SpinYarnClient
     /**
      * Lazily create (and reuse) the extension handle for this request.
      *
+     * 协程安全性说明：Swoole 协程为单线程模型，`spinyarn_deobfuscate` 是同步
+     * CPU 操作（期间不发生 IO yield），因此进程级 `static $handle` 复用不会
+     * 产生并发串扰——同一时刻只会有一个协程真正执行到扩展调用。
+     *
      * @return mixed resource handle, or false on failure
      */
     private static function getHandle()
