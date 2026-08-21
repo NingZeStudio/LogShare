@@ -230,6 +230,19 @@ jobs:
       - name: Test Image Starts
         run: |
           docker compose -f docker/compose.yaml up -d
-          sleep 15
-          curl -f http://localhost:9300/v1/limits || exit 1
+          ready=0
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:9300/v1/limits > /dev/null; then
+              ready=1
+              break
+            fi
+            sleep 3
+          done
+          if [ "$ready" != "1" ]; then
+            echo "=== hyperf 日志 ==="
+            docker compose -f docker/compose.yaml logs hyperf
+            docker compose -f docker/compose.yaml down
+            exit 1
+          fi
+          echo "smoke test 通过"
           docker compose -f docker/compose.yaml down
