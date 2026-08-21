@@ -32,11 +32,9 @@ RUN cd /spinyarn/crates/php \
 COPY --from=spinyarn-capi /spinyarn/target/release/libspinyarn_capi.so /usr/local/lib/libspinyarn_capi.so
 RUN echo '/usr/local/lib' > /etc/ld.so.conf.d/spinyarn.conf && ldconfig
 
-# 映射目录：首次反混淆时由 auto_download 按需补全
-RUN mkdir -p /opt/spinyarn/mappings
-ENV SPINYARN_MAPPINGS_DIR=/opt/spinyarn/mappings
-
 WORKDIR /app
+
+# 映射目录：/app/mappings（compose 挂载命名卷 spinyarn-mappings），首次反混淆时由 auto_download 按需补全
 
 # 启动前建表 + 构建 RAG 索引（幂等），随后常驻
 CMD ["sh", "-c", "php bin/hyperf.php migrate 2>/dev/null || true; php bin/hyperf.php rag:build; php bin/hyperf.php start"]

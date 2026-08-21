@@ -19,7 +19,7 @@ services:
       dockerfile: hyperf.Dockerfile
     volumes:
       - ../:/app
-      - spinyarn-mappings:/opt/spinyarn/mappings
+      - spinyarn-mappings:/app/mappings
     environment:
       DB_HOST: mariadb
       DB_PORT: "3306"

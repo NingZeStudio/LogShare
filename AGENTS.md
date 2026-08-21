@@ -57,8 +57,8 @@ Environment overrides in `App\Config::applyEnvironmentOverrides()`: `REDIS_HOST`
 - Log deobfuscation uses the **SpinYarn PHP extension** (`App\Client\SpinYarnClient`), replacing the retired `aternos/sherlock` dependency.
 - `Log::deobfuscateContent()` detects the log type (Vanilla → `vanilla`, Fabric → `yarn`) and version, then calls `SpinYarnClient::deobfuscate()`. When the extension is not loaded, it degrades to null and the log passes through unchanged.
 - The extension handle is process-level (`static`), reused across requests — this is the whole point of the resident-process migration (avoids ~110ms mapping reload per request).
-- Config under `spinyarn` (see `Config.inc.example.php`): `mappings_dir`, `auto_download`, `cache_max_entries/high_watermark/low_watermark`.
-- The extension is built in `docker/hyperf.Dockerfile` (multi-stage: Rust C ABI lib + phpize-built `spinyarn.so`); mappings live in `/opt/spinyarn/mappings` (named volume `spinyarn-mappings`), backfilled on demand by `auto_download`.
+- Config under `spinyarn` (see `Config.inc.example.php`): `mappings_dir` (relative `mappings` = `./mappings`), `auto_download`, `cache_max_entries/high_watermark/low_watermark`.
+- The extension is built in `docker/hyperf.Dockerfile` (multi-stage: Rust C ABI lib + phpize-built `spinyarn.so`); mappings live in `./mappings` (Yarn `*.tiny.gz` + `vanilla/*.txt`, gitignored). Local dev pre-downloads via `scripts/download_mappings.sh` + `scripts/download_vanilla_mappings.py`; Docker mounts the `spinyarn-mappings` named volume at `/app/mappings` and `auto_download` backfills on demand.
 
 ## Namespaces
 

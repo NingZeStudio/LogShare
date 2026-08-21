@@ -8,4 +8,5 @@
 /.phpunit.cache/
 /rag/index.db
 /rag/public/
+/mappings/
 /spinyarn/mappings/
