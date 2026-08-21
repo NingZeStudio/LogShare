@@ -1,7 +1,7 @@
 <?php
 
 beforeEach(function () {
-    $this->configRef = new ReflectionClass(\Config::class);
+    $this->configRef = new ReflectionClass(\App\Config::class);
     $this->dataProp = $this->configRef->getProperty('data');
     $this->origData = $this->dataProp->getValue();
 });
@@ -10,10 +10,10 @@ afterEach(function () {
     $this->dataProp->setValue(null, $this->origData);
 });
 
-function parseJsonViaContentParser(array $data): string|ApiError|array
+function parseJsonViaContentParser(array $data): string|App\ApiError|array
 {
-    $parser = new ContentParser();
-    $ref = new ReflectionClass(ContentParser::class);
+    $parser = new App\ContentParser(Mockery::mock(\Hyperf\HttpServer\Contract\RequestInterface::class));
+    $ref = new ReflectionClass(App\ContentParser::class);
     $method = $ref->getMethod('parseJsonData');
     return $method->invoke($parser, $data);
 }
@@ -33,14 +33,14 @@ test('parseJsonData extracts content, metadata and source', function () {
 
 test('parseJsonData requires content', function () {
     $result = parseJsonViaContentParser([]);
-    expect($result)->toBeInstanceOf(ApiError::class);
+    expect($result)->toBeInstanceOf(App\ApiError::class);
     expect($result->getHttpCode())->toBe(400);
 
     $result = parseJsonViaContentParser(['content' => '']);
-    expect($result)->toBeInstanceOf(ApiError::class);
+    expect($result)->toBeInstanceOf(App\ApiError::class);
 
     $result = parseJsonViaContentParser(['content' => 123]);
-    expect($result)->toBeInstanceOf(ApiError::class);
+    expect($result)->toBeInstanceOf(App\ApiError::class);
 });
 
 test('parseJsonData allows omitted content when files are provided', function () {
@@ -55,7 +55,7 @@ test('parseJsonData allows omitted content when files are provided', function ()
     expect($result['files'])->toHaveCount(1);
 });
 
-test('parseJsonData parses files array via UploadParser', function () {
+test('parseJsonData parses files array via App\UploadParser', function () {
     $result = parseJsonViaContentParser([
         'content' => 'main',
         'files' => [
@@ -69,7 +69,7 @@ test('parseJsonData parses files array via UploadParser', function () {
     expect($result['files'][0])->toMatchArray(['name' => 'a.log', 'data' => 'aaa']);
 });
 
-test('parseJsonData rejects invalid files via UploadParser', function () {
+test('parseJsonData rejects invalid files via App\UploadParser', function () {
     $result = parseJsonViaContentParser([
         'content' => 'main',
         'files' => [
@@ -77,7 +77,7 @@ test('parseJsonData rejects invalid files via UploadParser', function () {
         ],
     ]);
 
-    expect($result)->toBeInstanceOf(ApiError::class);
+    expect($result)->toBeInstanceOf(App\ApiError::class);
     expect($result->getHttpCode())->toBe(400);
 });
 

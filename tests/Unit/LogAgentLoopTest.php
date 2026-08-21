@@ -1,52 +1,29 @@
 <?php
 
-use Agent\LogAgent;
+use App\Agent\LogAgent;
 
 beforeAll(function () {
-    // Start mock MCP server
-    $mcpPort = 19200 + mt_rand(1, 500);
-    $mcpCmd = sprintf(
-        'php -S 127.0.0.1:%d %s > /dev/null 2>&1 & echo $!',
-        $mcpPort,
-        escapeshellarg(CORE_PATH . '/tests/Fixtures/mcp_server.php')
-    );
-    $mcpPid = (int) trim((string) shell_exec($mcpCmd));
+    $mcp = startMockServer(CORE_PATH . '/tests/Fixtures/mcp_server.php', 19200, 500);
+    $llm = startMockServer(CORE_PATH . '/tests/Fixtures/llm_server.php', 19700, 500);
 
-    $llmPort = 19700 + mt_rand(1, 500);
-    $llmCmd = sprintf(
-        'php -S 127.0.0.1:%d %s > /dev/null 2>&1 & echo $!',
-        $llmPort,
-        escapeshellarg(CORE_PATH . '/tests/Fixtures/llm_server.php')
-    );
-    $llmPid = (int) trim((string) shell_exec($llmCmd));
-
-    $ready = false;
-    for ($i = 0; $i < 50; $i++) {
-        $fp = @fsockopen('127.0.0.1', $mcpPort, $errno, $errstr, 0.2);
-        $fp2 = @fsockopen('127.0.0.1', $llmPort, $errno2, $errstr2, 0.2);
-        if ($fp && $fp2) {
-            fclose($fp);
-            fclose($fp2);
-            $ready = true;
-            break;
+    if ($mcp === null || $llm === null) {
+        if ($mcp !== null) {
+            @posix_kill($mcp['pid'], 15);
         }
-        if ($fp) {
-            fclose($fp);
+        if ($llm !== null) {
+            @posix_kill($llm['pid'], 15);
         }
-        if ($fp2) {
-            fclose($fp2);
-        }
-        usleep(100000);
+        $GLOBALS['mcp_url'] = null;
+        $GLOBALS['llm_url'] = null;
+        $GLOBALS['mcp_pid'] = null;
+        $GLOBALS['llm_pid'] = null;
+        return;
     }
 
-    if (!$ready) {
-        throw new \RuntimeException('Mock servers failed to start.');
-    }
-
-    $GLOBALS['mcp_pid'] = $mcpPid;
-    $GLOBALS['llm_pid'] = $llmPid;
-    $GLOBALS['mcp_url'] = 'http://127.0.0.1:' . $mcpPort;
-    $GLOBALS['llm_url'] = 'http://127.0.0.1:' . $llmPort;
+    $GLOBALS['mcp_pid'] = $mcp['pid'];
+    $GLOBALS['llm_pid'] = $llm['pid'];
+    $GLOBALS['mcp_url'] = $mcp['base'];
+    $GLOBALS['llm_url'] = $llm['base'];
 });
 
 afterAll(function () {
@@ -59,18 +36,18 @@ afterAll(function () {
 });
 
 beforeEach(function () {
-    $configRef = new ReflectionClass(\Config::class);
+    $configRef = new ReflectionClass(\App\Config::class);
     $dataProp = $configRef->getProperty('data');
     $this->origData = $dataProp->getValue();
 
     $data = $this->origData;
     $data['ai'] = [
         'apiKeys' => ['mock-key-1'],
-        'baseUrl' => $GLOBALS['llm_url'] . '/v1/chat/completions',
+        'baseUrl' => ($GLOBALS['llm_url'] ?? 'http://127.0.0.1:1') . '/v1/chat/completions',
         'model' => 'mock-model',
         'timeout' => 10,
         'mcp' => [
-            'webSearch' => ['url' => $GLOBALS['mcp_url']],
+            'webSearch' => ['url' => $GLOBALS['mcp_url'] ?? 'http://127.0.0.1:1'],
             'rag' => [],
         ],
     ];
@@ -79,12 +56,13 @@ beforeEach(function () {
 });
 
 afterEach(function () {
-    $configRef = new ReflectionClass(\Config::class);
+    $configRef = new ReflectionClass(\App\Config::class);
     $dataProp = $configRef->getProperty('data');
     $dataProp->setValue(null, $this->origData);
 });
 
 test('LogAgent runs a full tool loop and streams SSE events', function () {
+    skipWithoutMockServer($GLOBALS['llm_url'] ?? null);
     ob_start();
     ob_start();
     LogAgent::analyze('some minecraft crash log', ['logId' => 'aB3x9K']);
@@ -109,7 +87,8 @@ test('LogAgent runs a full tool loop and streams SSE events', function () {
 });
 
 test('LogAgent streams a plain answer when no tools are configured', function () {
-    $configRef = new ReflectionClass(\Config::class);
+    skipWithoutMockServer($GLOBALS['llm_url'] ?? null);
+    $configRef = new ReflectionClass(\App\Config::class);
     $dataProp = $configRef->getProperty('data');
     $data = $dataProp->getValue();
     $data['ai']['mcp'] = [];

@@ -3,21 +3,21 @@
 declare(strict_types=1);
 
 use Pest\TestCase;
-use Data\Token;
-use Filter\Filter;
-use Filter\UuidFilter;
-use Filter\XuidFilter;
-use Filter\SessionTokenFilter;
-use Filter\ClientIdFilter;
-use Filter\CoordinateFilter;
-use Filter\IPv4Filter;
-use Filter\IPv6Filter;
-use Filter\IPv6ShortFilter;
-use Filter\UsernameFilter;
-use Filter\AccessTokenFilter;
-use Filter\TrimFilter;
-use Filter\LimitBytesFilter;
-use Filter\LimitLinesFilter;
+use App\Data\Token;
+use App\Filter\Filter;
+use App\Filter\UuidFilter;
+use App\Filter\XuidFilter;
+use App\Filter\SessionTokenFilter;
+use App\Filter\ClientIdFilter;
+use App\Filter\CoordinateFilter;
+use App\Filter\IPv4Filter;
+use App\Filter\IPv6Filter;
+use App\Filter\IPv6ShortFilter;
+use App\Filter\UsernameFilter;
+use App\Filter\AccessTokenFilter;
+use App\Filter\TrimFilter;
+use App\Filter\LimitBytesFilter;
+use App\Filter\LimitLinesFilter;
 
 return [
     'test_case' => TestCase::class,
@@ -26,17 +26,17 @@ return [
     ],
     'coverage' => [
         'include' => [
-            'src/*',
+            'app/*',
         ],
         'exclude' => [
-            'src/Data/*',
-            'src/Cache/*',
-            'src/Client/*',
-            'src/Storage/*',
+            'app/Data/*',
+            'app/Cache/*',
+            'app/Client/*',
+            'app/Storage/*',
         ],
     ],
     'architectural' => [
-        'namespace' => 'LogShare',
+        'namespace' => 'App',
         'rules' => [
             'no direct use of \$_SERVER in handlers',
             'no direct use of \$_GET/\$_POST in handlers',

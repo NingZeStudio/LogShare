@@ -1,6 +1,6 @@
 <?php
 
-require_once __DIR__ . '/../../rag/RagSearch.php';
+use App\Rag\RagSearch;
 
 beforeEach(function () {
     $this->dbPath = CORE_PATH . '/tmp/rag_test_' . uniqid() . '.db';

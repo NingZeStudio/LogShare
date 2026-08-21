@@ -18,9 +18,10 @@
 | 4 | 本地运行 | Swoole 6.2.x 官方支持 Termux（6.1.3 changelog「Added Android Platform Support … Termux」；6.2.0 加 PHP 8.5） |
 | 5 | 迁移载体 | 当前仓库新建分支 `feat/hyperf-migration` 原地改造 |
 | 6 | 双前缀 | 保留 `/1/` 与 `/v1/` |
-| 7 | MongoDB | 进程级单例 Client（低并发接受阻塞，后续可选 Swoole 6.2 `RemoteObject\Server`） |
+| 7 | 主存储 | **MariaDB**（替代 MongoDB），用 `hyperf/database`（Eloquent）+ `hyperf/db-connection`（连接池）；Redis 缓存与 Filesystem 存储不变 |
+| 8 | 存储 ID 前缀 | `s`（SQL，替代 `m`）；旧 MongoDB 数据**全新开始丢弃**；表结构用**关联表**（logs / log_files / log_metadata） |
 
-**技术栈**：Hyperf 3.2 · Swoole 6.2.x · PHP 8.5 · mongodb/mongodb 2.1.2 · hyperf/redis · hyperf/guzzle · hyperf/testing
+**技术栈**：Hyperf 3.2 · Swoole 6.2.x · PHP 8.5 · MariaDB（`hyperf/database`）· hyperf/redis（延后到有 ext-redis 环境）· hyperf/guzzle · hyperf/testing
 
 ## 类迁移映射（关键）
 
@@ -47,13 +48,14 @@
 ### 阶段 1 — Hyperf 骨架 + 基础设施
 1. 引入 Hyperf 3.2 依赖，生成 `bin/hyperf.php`、`config/`、`storage/`
 2. `src/` → `app/`，`composer.json` 只保留 `App\` PSR-4；删 `core.php` 自定义 autoloader 与 `index.php` 的 `set_exception_handler`
-3. `Config.inc.php` 拆为 `config/autoload/{mongo,cache,storage,filter,ai,spinyarn,urls,id}.php`，环境变量覆盖迁入 ConfigProvider
+3. `Config.inc.php` 拆为 `config/autoload/{database,cache,storage,filter,ai,spinyarn,urls,id}.php`，环境变量覆盖迁入 ConfigProvider
 4. `ApiResponse` → 返回 PSR-7（保住 `{success,message,code,error}` JSON 结构）；`ApiError` → `ApiException` + `ExceptionHandler`
 5. CORS/OPTIONS → 全局中间件；限流（Redis INCR）→ 中间件
-6. Redis → `hyperf/redis` 连接池；MongoDB → 进程级单例 Client
+6. Redis → `hyperf/redis` 连接池（延后）；MariaDB → `hyperf/database` + `hyperf/db-connection`（连接池）
 
 ### 阶段 2 — 领域层迁移（纯逻辑）
 - `Id`/`Filter/*`/`UploadParser`/`Detective`/`Data/*`/`Cache/*`/`Storage/*` 去 `static` → 服务类 + DI
+- `MongoStorage` → `MariaDbStorage`（Eloquent 模型 + 表结构重设计：logs / log_files / log_metadata；TTL 清理改定时任务）
 - `SpinYarnClient::$handle` → 进程级单例，`WorkerStart` 预热 `spinyarn_init`（根治 CRCLASH #1）
 
 ### 阶段 3 — Controller / 路由
@@ -68,7 +70,7 @@
 - `RagSearch` → DI 服务；`rag/server.php` 由 Hyperf 协程 HTTP server 承载（8081，MCP JSON-RPC 协议不变）；`build_index.php` → Hyperf Command
 
 ### 阶段 6 — 部署 + CI
-- Dockerfile：常驻进程镜像（Swoole 6.2 + SpinYarn + mongodb + redis），nginx 反代 9300；更新 CI；本地 Termux 编译 Swoole 6.2
+- Dockerfile：常驻进程镜像（Swoole 6.2 + SpinYarn + MariaDB + redis），nginx 反代 9300；更新 CI；本地 Termux 编译 Swoole 6.2
 
 ### 阶段 7 — 测试迁移 + 文档
 - 166 用例 Pest → `hyperf/testing`；PHPStan level 5 适配 `App\`；更新 AGENTS.md / API.md / README / openapi.yaml
@@ -79,6 +81,6 @@
 |---|---|
 | R1 SSE 协程重写行为漂移 | 阶段 4 独立隔离，SSE 协议冻结，用 `scripts/ai.sh` 回归 |
 | R2 `static` 状态常驻残留 | 阶段 2 逐类审计去 static，请求级实例化 |
-| R3 MongoDB 阻塞 worker | 低并发接受；预留 `RemoteObject\Server` 升级点 |
+| R3 存储迁移 MongoDB→MariaDB | 表结构重设计（logs/log_files/log_metadata），旧数据按需迁移或放弃；TTL 改定时清理 |
 | R4 多 worker 资源预热 | `WorkerStart` 回调统一预热 SpinYarn/连接 |
 | R5 分支改造中途无法回退 | 每阶段独立 commit，阶段 0-3 可独立验证 |

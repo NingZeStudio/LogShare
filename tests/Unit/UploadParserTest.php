@@ -1,7 +1,7 @@
 <?php
 
 beforeEach(function () {
-    $this->configRef = new ReflectionClass(\Config::class);
+    $this->configRef = new ReflectionClass(\App\Config::class);
     $this->dataProp = $this->configRef->getProperty('data');
     $this->origData = $this->dataProp->getValue();
 });
@@ -11,7 +11,7 @@ afterEach(function () {
 });
 
 test('parseFiles normalizes plain text entries', function () {
-    $result = UploadParser::parseFiles([
+    $result = App\UploadParser::parseFiles([
         ['name' => 'latest.log', 'content' => "line1\nline2"],
         ['name' => 'debug.txt', 'content' => 'debug'],
     ]);
@@ -23,8 +23,8 @@ test('parseFiles normalizes plain text entries', function () {
 });
 
 test('parseFiles returns empty array for null or empty input', function () {
-    expect(UploadParser::parseFiles(null))->toBe([]);
-    expect(UploadParser::parseFiles([]))->toBe([]);
+    expect(App\UploadParser::parseFiles(null))->toBe([]);
+    expect(App\UploadParser::parseFiles([]))->toBe([]);
 });
 
 test('parseFiles expands zip archives into entries', function () {
@@ -34,7 +34,7 @@ test('parseFiles expands zip archives into entries', function () {
         'empty-dir/' => '',
     ]);
 
-    $result = UploadParser::parseFiles([
+    $result = App\UploadParser::parseFiles([
         ['name' => 'server-logs.zip', 'content' => $zipData],
     ]);
 
@@ -49,7 +49,7 @@ test('parseFiles mixes plain text and zip entries', function () {
         'b.txt' => 'bbb',
     ]);
 
-    $result = UploadParser::parseFiles([
+    $result = App\UploadParser::parseFiles([
         ['name' => 'main.log', 'content' => 'main'],
         ['name' => 'extra.zip', 'content' => $zipData],
     ]);
@@ -61,11 +61,11 @@ test('parseFiles mixes plain text and zip entries', function () {
 });
 
 test('parseFiles rejects invalid zip data', function () {
-    $result = UploadParser::parseFiles([
+    $result = App\UploadParser::parseFiles([
         ['name' => 'bad.zip', 'content' => 'this is not a zip file at all'],
     ]);
 
-    expect($result)->toBeInstanceOf(ApiError::class);
+    expect($result)->toBeInstanceOf(App\ApiError::class);
     expect($result->getHttpCode())->toBe(400);
 });
 
@@ -74,13 +74,13 @@ test('parseFiles enforces max file count', function () {
     $data['storage']['uploadFiles'] = ['maxFiles' => 2, 'maxTotalBytes' => 1024 * 1024];
     $this->dataProp->setValue(null, $data);
 
-    $result = UploadParser::parseFiles([
+    $result = App\UploadParser::parseFiles([
         ['name' => 'a.log', 'content' => 'a'],
         ['name' => 'b.log', 'content' => 'b'],
         ['name' => 'c.log', 'content' => 'c'],
     ]);
 
-    expect($result)->toBeInstanceOf(ApiError::class);
+    expect($result)->toBeInstanceOf(App\ApiError::class);
     expect($result->getHttpCode())->toBe(413);
 });
 
@@ -89,21 +89,21 @@ test('parseFiles enforces max total size', function () {
     $data['storage']['uploadFiles'] = ['maxFiles' => 10, 'maxTotalBytes' => 10];
     $this->dataProp->setValue(null, $data);
 
-    $result = UploadParser::parseFiles([
+    $result = App\UploadParser::parseFiles([
         ['name' => 'a.log', 'content' => str_repeat('x', 6)],
         ['name' => 'b.log', 'content' => str_repeat('y', 6)],
     ]);
 
-    expect($result)->toBeInstanceOf(ApiError::class);
+    expect($result)->toBeInstanceOf(App\ApiError::class);
     expect($result->getHttpCode())->toBe(413);
 });
 
 test('parseFiles rejects path traversal names', function () {
     foreach (['../evil.log', '/absolute/path.log', 'a/b/../../c.log', '..\\win.log', ''] as $badName) {
-        $result = UploadParser::parseFiles([
+        $result = App\UploadParser::parseFiles([
             ['name' => $badName, 'content' => 'x'],
         ]);
-        expect($result)->toBeInstanceOf(ApiError::class, "name should be rejected: {$badName}");
+        expect($result)->toBeInstanceOf(App\ApiError::class, "name should be rejected: {$badName}");
         expect($result->getHttpCode())->toBe(400);
     }
 });
@@ -117,24 +117,24 @@ test('parseFiles rejects path traversal inside zip archives', function () {
         'ok.log' => 'fine',
     ]);
 
-    $result = UploadParser::parseFiles([
+    $result = App\UploadParser::parseFiles([
         ['name' => 'x.zip', 'content' => $zipData],
     ]);
 
-    expect($result)->toBeInstanceOf(ApiError::class);
+    expect($result)->toBeInstanceOf(App\ApiError::class);
     expect($result->getHttpCode())->toBe(400);
 });
 
 test('validateFileName accepts safe relative paths', function () {
-    expect(UploadParser::validateFileName('latest.log'))->toBeTrue();
-    expect(UploadParser::validateFileName('crash-reports/crash-1.txt'))->toBeTrue();
-    expect(UploadParser::validateFileName('sub/dir/file.log'))->toBeTrue();
+    expect(App\UploadParser::validateFileName('latest.log'))->toBeTrue();
+    expect(App\UploadParser::validateFileName('crash-reports/crash-1.txt'))->toBeTrue();
+    expect(App\UploadParser::validateFileName('sub/dir/file.log'))->toBeTrue();
 });
 
 test('validateFileName rejects unsafe names', function () {
-    expect(UploadParser::validateFileName('../x'))->toBeFalse();
-    expect(UploadParser::validateFileName('/abs/x'))->toBeFalse();
-    expect(UploadParser::validateFileName('a/../../b'))->toBeFalse();
-    expect(UploadParser::validateFileName(''))->toBeFalse();
-    expect(UploadParser::validateFileName("nul\x00byte"))->toBeFalse();
+    expect(App\UploadParser::validateFileName('../x'))->toBeFalse();
+    expect(App\UploadParser::validateFileName('/abs/x'))->toBeFalse();
+    expect(App\UploadParser::validateFileName('a/../../b'))->toBeFalse();
+    expect(App\UploadParser::validateFileName(''))->toBeFalse();
+    expect(App\UploadParser::validateFileName("nul\x00byte"))->toBeFalse();
 });

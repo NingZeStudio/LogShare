@@ -1,16 +1,16 @@
 <?php
 
-use Agent\LogAgent;
+use App\Agent\LogAgent;
 
 beforeEach(function () {
-    $this->configRef = new ReflectionClass(\Config::class);
+    $this->configRef = new ReflectionClass(\App\Config::class);
     $this->dataProp = $this->configRef->getProperty('data');
     $this->origData = $this->dataProp->getValue();
 
     $data = $this->origData;
     $data['storage']['storages']['f'] = [
         'name' => 'Filesystem',
-        'class' => '\\Storage\\FilesystemStorage',
+        'class' => '\\App\\Storage\\FilesystemStorage',
         'enabled' => true,
     ];
     $data['storage']['storageId'] = 'f';
@@ -120,7 +120,7 @@ test('file tools return not-bound message without a log id', function () {
 });
 
 test('list_log_files lists session files with metadata', function () {
-    $log = new \Log();
+    $log = new \App\Log();
     $id = $log->put(
         "main line 1\nmain line 2\n",
         null,
@@ -140,7 +140,7 @@ test('list_log_files lists session files with metadata', function () {
 });
 
 test('read_log_file reads main file with default range', function () {
-    $log = new \Log();
+    $log = new \App\Log();
     $id = $log->put("line1\nline2\nline3\n", null, [], null, null);
     $rawId = $id->get();
 
@@ -151,7 +151,7 @@ test('read_log_file reads main file with default range', function () {
 });
 
 test('read_log_file supports line ranges', function () {
-    $log = new \Log();
+    $log = new \App\Log();
     $id = $log->put(implode("\n", array_map(fn($i) => "line{$i}", range(1, 10))), null, [], null, null);
     $rawId = $id->get();
 
@@ -165,7 +165,7 @@ test('read_log_file supports line ranges', function () {
 });
 
 test('read_log_file returns not found for missing files', function () {
-    $log = new \Log();
+    $log = new \App\Log();
     $id = $log->put("main\n", null, [], null, null);
     $rawId = $id->get();
 
@@ -174,10 +174,10 @@ test('read_log_file returns not found for missing files', function () {
 });
 
 test('read_log_file does not leak other logs', function () {
-    $logA = new \Log();
+    $logA = new \App\Log();
     $idA = $logA->put("secret from A\n", null, [], null, null)->get();
 
-    $logB = new \Log();
+    $logB = new \App\Log();
     $idB = $logB->put("public from B\n", null, [], null, null)->get();
 
     // Reading "main" under id B must not return A's content

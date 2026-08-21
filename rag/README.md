@@ -1,22 +1,25 @@
-# RAG MCP Server（SQLite FTS5 本地检索）
+# RAG 检索（SQLite FTS5 本地知识库）
 
-LogShare 的内置 RAG 实现：基于 SQLite FTS5（BM25）的纯本地知识库检索，零网络、零 embedding。
+LogShare 的内置 RAG 实现：基于 SQLite FTS5（BM25）的纯本地知识库检索，零网络、零 embedding。已整合进 Hyperf 进程，作为 MCP 服务在主 server 的 `/rag` 路径承载（JSON-RPC 2.0 协议）。
 
 ## 组成
 
 ```
+app/Rag/
+└── RagSearch.php              核心检索类（FTS5 建表 / 切块 / BM25 检索 / LIKE 兜底）
+app/Controller/
+└── RagController.php          Streamable HTTP MCP server（JSON-RPC 2.0，主 server /rag 路径）
+app/Command/
+└── RagBuildCommand.php        建索引命令（php bin/hyperf.php rag:build）
 rag/
-├── RagSearch.php      核心检索类（FTS5 建表 / 切块 / BM25 检索 / LIKE 兜底）
-├── build_index.php    CLI：扫描 knowledge/ 构建索引
-├── server.php         Streamable HTTP MCP server（JSON-RPC 2.0）
-├── index.db           SQLite 索引（构建生成，路径由 ai.mcp.rag.db 指定，勿提交）
-├── knowledge/         知识库正文（Markdown / TXT，按主题分目录，见下）
-└── public/            文档站静态资源（图片等，不参与索引）
+├── index.db                   SQLite 索引（构建生成，路径由 ai.mcp.rag.db 指定，勿提交）
+├── knowledge/                 知识库正文（Markdown / TXT，按主题分目录，见下）
+└── public/                    文档站静态资源（图片等，不参与索引）
 ```
 
 ## 知识库文档
 
-`knowledge/` 直接存放检索正文（按主题分目录），`build_index.php` 递归索引其中所有 `.md` / `.txt` / `.log` 文件。
+`knowledge/` 直接存放检索正文（按主题分目录），`rag:build` 递归索引其中所有 `.md` / `.txt` / `.log` 文件。
 
 - 每个 `## ` 二级标题作为一个检索单元（切块），标题权重高于正文，标题尽量用检索关键词
 - `public/` 为文档站静态资源（图片），位于 `knowledge/` 之外，不会被索引
@@ -27,41 +30,24 @@ rag/
 
 数据库路径由 `Config.inc.php` 的 `ai.mcp.rag.db` 指定（相对项目根，默认 `rag/index.db`）；`RAG_DB_PATH` 环境变量仅作开发/测试覆盖。
 
-> **注意**：`server.php` / `build_index.php` 解析路径时会读取项目根 `Config.inc.php`（`ai.mcp.rag.db`）；若文件缺失则回退到默认 `rag/index.db`。RAG 服务与 LogShare 共用同一份配置。
-
 ### 1. 构建索引
 
 ```bash
-php rag/build_index.php                 # 默认 knowledge/ → ai.mcp.rag.db
-php rag/build_index.php /path/to/docs   # 指定知识库目录
+php bin/hyperf.php rag:build
 ```
 
-### 2. 启动 server
+### 2. 启动 RAG 服务
 
-```bash
-php -S 127.0.0.1:8081 rag/server.php
-```
+RAG 已整合进 Hyperf 主进程，随 `php bin/hyperf.php start` 一并启动，MCP 端点在主 server 的 `/rag` 路径。无需单独启动。
 
-仅监听本机即可；若需跨机访问请置于 nginx 反代并加访问控制。
-
-### 3. Docker Compose（推荐）
-
-Compose 已包含 `rag` 服务，随 `docker compose up -d` 一并启动，启动时自动重建索引：
-
-```bash
-docker compose -f docker/compose.yaml up -d
-```
-
-`Config.inc.php` 默认 `ai.mcp.rag.url = http://rag:8081`（compose 网络内服务名），开箱即用。
-
-### 4. 接入 LogShare
+### 3. 接入 LogShare
 
 ```php
 'ai' => [
     'agent' => ['enabled' => true],
     'mcp' => [
         'rag' => [
-            'url' => 'http://rag:8081',   // 或本地 http://127.0.0.1:8081
+            'url' => 'http://127.0.0.1:9501/rag',
             'db'  => 'rag/index.db',
         ],
     ],
@@ -79,5 +65,5 @@ LogAgent 即可通过 `rag_search(query, k)` 检索知识库。
 ## 测试
 
 ```bash
-php vendor/bin/pest tests/Unit/RagSearchTest.php tests/Unit/RagServerTest.php
+php vendor/bin/pest tests/Unit/RagSearchTest.php
 ```

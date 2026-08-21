@@ -12,10 +12,10 @@ return [
     /* ─── Storage ─────────────────────────────────────────── */
     'storage' => [
         'storages' => [
-            'm' => ['name' => 'MongoDB',     'class' => '\\Storage\\MongoStorage',       'enabled' => true],
-            'f' => ['name' => 'Filesystem',  'class' => '\\Storage\\FilesystemStorage',  'enabled' => false],
+            's' => ['name' => 'MariaDB',     'class' => '\\App\\Storage\\MariaDbStorage',      'enabled' => true],
+            'f' => ['name' => 'Filesystem',  'class' => '\\App\\Storage\\FilesystemStorage',  'enabled' => false],
         ],
-        'storageId' => 'm',
+        'storageId' => 's',
         'storageTime' => 7 * 24 * 60 * 60,
         'maxLength' => 10 * 1024 * 1024,
         'maxLines' => 50_000,
@@ -27,7 +27,7 @@ return [
 
     /* ─── Cache (Redis) ──────────────────────────────────── */
     'cache' => [
-        'cacheId' => '\\Cache\\RedisCache',
+        'cacheId' => '\\App\\Cache\\RedisCache',
         'enabled' => true,
         'redis' => ['host' => 'mclogs-redis', 'port' => 6379],
         'ttl' => 30 * 60,
@@ -43,19 +43,19 @@ return [
     /* ─── Filter ───────────────────────────────────────────── */
     'filter' => [
         'pre' => [
-            '\\Filter\\TrimFilter',
-            '\\Filter\\LimitBytesFilter',
-            '\\Filter\\LimitLinesFilter',
-            '\\Filter\\IPv4Filter',
-            '\\Filter\\IPv6Filter',
-            '\\Filter\\IPv6ShortFilter',
-            '\\Filter\\UuidFilter',
-            '\\Filter\\XuidFilter',
-            '\\Filter\\SessionTokenFilter',
-            '\\Filter\\ClientIdFilter',
-            '\\Filter\\CoordinateFilter',
-            '\\Filter\\UsernameFilter',
-            '\\Filter\\AccessTokenFilter',
+            '\\App\\Filter\\TrimFilter',
+            '\\App\\Filter\\LimitBytesFilter',
+            '\\App\\Filter\\LimitLinesFilter',
+            '\\App\\Filter\\IPv4Filter',
+            '\\App\\Filter\\IPv6Filter',
+            '\\App\\Filter\\IPv6ShortFilter',
+            '\\App\\Filter\\UuidFilter',
+            '\\App\\Filter\\XuidFilter',
+            '\\App\\Filter\\SessionTokenFilter',
+            '\\App\\Filter\\ClientIdFilter',
+            '\\App\\Filter\\CoordinateFilter',
+            '\\App\\Filter\\UsernameFilter',
+            '\\App\\Filter\\AccessTokenFilter',
         ],
     ],
 
@@ -63,6 +63,12 @@ return [
     'urls' => [
         'baseUrl' => 'https://logshare.cn',
         'apiBaseUrl' => 'https://api.logshare.cn',
+    ],
+
+    /* ─── Rate limit（Redis INCR 限流，按 IP + method + path）── */
+    'rateLimit' => [
+        'limit' => 36000,
+        'window' => 60,
     ],
 
     /* ─── Legal ────────────────────────────────────────────── */
@@ -75,12 +81,6 @@ return [
     /* ─── Filesystem ───────────────────────────────────────── */
     'filesystem' => [
         'path' => '/storage/logs/',
-    ],
-
-    /* ─── MongoDB ──────────────────────────────────────────── */
-    'mongo' => [
-        'url' => 'mongodb://mclogs-mongo/',
-        'database' => 'mclogs',
     ],
 
     /* ─── AI ───────────────────────────────────────────────── */
@@ -103,10 +103,9 @@ return [
                 'headers' => [],
             ],
             'rag' => [
-                // 内置 RAG MCP server（SQLite FTS5 纯本地检索）。
-                // Docker Compose 已包含 rag 服务，默认 url 指向服务名；
-                // 本地开发可改用 http://127.0.0.1:8081（先 php rag/build_index.php）。
-                'url' => 'http://rag:8081',
+                // 内置 RAG MCP server（SQLite FTS5 纯本地检索），已整合进 Hyperf 进程
+                // （主 http server 的 /rag 路径，由 RagController 承载 MCP JSON-RPC）。
+                'url' => 'http://127.0.0.1:9501/rag',
                 'headers' => [],
                 // SQLite 数据库路径（相对项目根）
                 'db' => 'rag/index.db',
@@ -116,10 +115,10 @@ return [
 
     /* ─── SpinYarn（反混淆 PHP 扩展）────────────────────── */
     'spinyarn' => [
-        // Yarn/Vanilla 映射目录。相对路径按项目根解析；留空则用扩展默认
-        // （SPINYARN_MAPPINGS_DIR 环境变量或宿主 exe 旁 ./mappings）。
-        // Docker 部署可显式设为 /opt/spinyarn/mappings（对应命名卷）。
-        'mappings_dir' => 'spinyarn/mappings',
+        // Yarn/Vanilla 映射目录，相对项目根 ./mappings。
+        // 本地开发：运行 scripts/download_mappings.sh 预下载映射；
+        // Docker 部署：命名卷挂载到 /app/mappings，auto_download 自动补全，无需改动。
+        'mappings_dir' => 'mappings',
         'auto_download' => true,
         'cache_max_entries' => 44,
         'cache_high_watermark' => 40,
