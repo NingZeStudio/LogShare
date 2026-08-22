@@ -45,4 +45,4 @@ COPY . .
 # 下载脚本 scripts/download_mappings.sh + download_vanilla_mappings.py 预先生成）
 
 # 启动：构建 RAG 索引（幂等），随后常驻
-CMD ["sh", "-c", "php bin/hyperf.php rag:build && php bin/hyperf.php start"]
+CMD ["sh", "-c", "echo '[hyperf] CMD start'; php -v 2>&1; echo '[hyperf] rag:build'; php bin/hyperf.php rag:build 2>&1; echo '[hyperf] rag:build exit='$?; echo '[hyperf] start'; php bin/hyperf.php start 2>&1"]
