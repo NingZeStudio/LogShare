@@ -1,7 +1,7 @@
 # Hyperf 常驻进程镜像：Swoole 6.2 + SpinYarn 扩展 + pdo_mysql/redis
 # 阶段 1：编译 SpinYarn C ABI 库
 FROM rust:1 AS spinyarn-capi
-RUN git clone --depth 1 --branch v1.0.0-pre.2 https://github.com/NingZeStudio/SpinYarn /spinyarn
+RUN git clone --depth 1 --branch v1.0.0 https://github.com/NingZeStudio/SpinYarn /spinyarn
 WORKDIR /spinyarn
 RUN cargo build --release --workspace
 

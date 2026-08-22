@@ -82,7 +82,7 @@ test('storage classes implement StorageInterface', function () {
 test('cache classes implement CacheInterface', function () {
     foreach (architectureFiles('Cache') as $file) {
         $className = basename($file, '.php');
-        if (in_array($className, ['CacheInterface', 'CacheEntry'])) continue;
+        if ($className === 'CacheInterface') continue;
         
         $class = '\App\Cache\\' . $className;
         if (class_exists($class)) {

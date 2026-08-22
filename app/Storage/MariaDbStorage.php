@@ -148,7 +148,7 @@ class MariaDbStorage implements StorageInterface
 
     /**
      * Delete expired logs whose `created` timestamp is older than
-     * `storage.storageTime`. Mirrors the MongoDB TTL index behaviour.
+     * `storage.storageTime`.
      *
      * @return int Number of deleted logs
      */
