@@ -1,0 +1,13 @@
+.git
+.gitignore
+vendor
+runtime
+tmp
+Config.inc.php
+.phpunit.cache
+coverage
+mappings
+rag/index.db
+rag/public
+docker
+tests

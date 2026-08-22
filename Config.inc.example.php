@@ -116,10 +116,9 @@ return [
     /* ─── SpinYarn（反混淆 PHP 扩展）────────────────────── */
     'spinyarn' => [
         // Yarn/Vanilla 映射目录，相对项目根 ./mappings。
-        // 本地开发：运行 scripts/download_mappings.sh 预下载映射；
-        // Docker 部署：命名卷挂载到 /app/mappings，auto_download 自动补全，无需改动。
+        // 映射表由下载脚本（scripts/download_mappings.sh + download_vanilla_mappings.py）
+        // 预先生成并提交进仓库；Docker 部署时 bind mount 宿主机 ./mappings。
         'mappings_dir' => 'mappings',
-        'auto_download' => true,
         'cache_max_entries' => 44,
         'cache_high_watermark' => 40,
         'cache_low_watermark' => 30,

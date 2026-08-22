@@ -27,7 +27,7 @@
 ### ⚠️ 配置变更
 
 - 移除 `mongo` 配置段；数据库连接由 `DB_*` 环境变量提供
-- 新增 `spinyarn` 配置段（`mappings_dir` / `auto_download` / 缓存水位）
+- 新增 `spinyarn` 配置段（`mappings_dir` / 缓存水位）；映射表改由下载脚本预生成并提交进仓库（Git LFS），Docker 以 bind mount 挂载，SpinYarn 不再运行时下载
 - 存储后端改为 MariaDB（`s`，默认）↔ 文件系统（`f`）
 
 ### 🧪 测试

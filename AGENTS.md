@@ -59,8 +59,8 @@ Environment overrides in `App\Config::applyEnvironmentOverrides()`: `REDIS_HOST`
 - Log deobfuscation uses the **SpinYarn PHP extension** (`App\Client\SpinYarnClient`), replacing the retired `aternos/sherlock` dependency.
 - `Log::deobfuscateContent()` detects the log type (Vanilla → `vanilla`, Fabric → `yarn`) and version, then calls `SpinYarnClient::deobfuscate()`. When the extension is not loaded, it degrades to null and the log passes through unchanged.
 - The extension handle is process-level (`static`), reused across requests — this is the whole point of the resident-process migration (avoids ~110ms mapping reload per request).
-- Config under `spinyarn` (see `Config.inc.example.php`): `mappings_dir` (relative `mappings` = `./mappings`), `auto_download`, `cache_max_entries/high_watermark/low_watermark`.
-- The extension is built in `docker/hyperf.Dockerfile` (multi-stage: Rust C ABI lib + phpize-built `spinyarn.so`); mappings live in `./mappings` (Yarn `*.tiny.gz` + `vanilla/*.txt`, gitignored). Local dev pre-downloads via `scripts/download_mappings.sh` + `scripts/download_vanilla_mappings.py`; Docker mounts the `spinyarn-mappings` named volume at `/app/mappings` and `auto_download` backfills on demand.
+- Config under `spinyarn` (see `Config.inc.example.php`): `mappings_dir` (relative `mappings` = `./mappings`), `cache_max_entries/high_watermark/low_watermark`. SpinYarn v1.0.0-pre.2+ has **no `auto_download`** — it only parses; mapping files must already be present locally.
+- The extension is built in `docker/hyperf.Dockerfile` (multi-stage: Rust C ABI lib + phpize-built `spinyarn.so`, cloned at tag `v1.0.0-pre.2`); mappings live in `./mappings` (Yarn `*.tiny.gz` + `vanilla/*.txt`, tracked via **Git LFS**). Generate/refresh them with `scripts/download_mappings.sh` + `scripts/download_vanilla_mappings.py`; Docker bind-mounts the host `./mappings` at `/app/mappings`.
 
 ## Namespaces
 
@@ -126,9 +126,9 @@ docker compose -f docker/compose.yaml up -d
 ```
 
 - nginx reverse-proxies `9300` → Hyperf `9501` (SSE-friendly: `proxy_buffering off`, `proxy_read_timeout 300s`)
-- `hyperf` service — resident process built by `docker/hyperf.Dockerfile` (Swoole 6.2 + SpinYarn + pdo_mysql + redis); serves RAG on the main HTTP server under `/rag`
+- `hyperf` service — resident process built by `docker/hyperf.Dockerfile` (Swoole 6.2 + SpinYarn + pdo_mysql + redis; project code + vendor baked into the image via `composer install`); serves RAG on the main HTTP server under `/rag`
 - `mariadb:11` (schema auto-created by `docker/mariadb-init.sql`) + `redis:7-alpine`
-- named volumes: `mariadb-data`, `redis-data`, `spinyarn-mappings`
+- named volumes: `mariadb-data`, `redis-data`; host `./mappings` is bind-mounted into `hyperf` at `/app/mappings`
 
 ## Constraints
 

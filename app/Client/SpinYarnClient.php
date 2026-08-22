@@ -78,13 +78,12 @@ class SpinYarnClient
         if ($handle === null) {
             $config = \App\Config::Get('spinyarn');
             $mappingsDir = self::resolveMappingsDir($config['mappings_dir'] ?? '');
-            $autoDownload = (bool) ($config['auto_download'] ?? true);
             $cacheMax = (int) ($config['cache_max_entries'] ?? 44);
             $cacheHigh = (int) ($config['cache_high_watermark'] ?? 40);
             $cacheLow = (int) ($config['cache_low_watermark'] ?? 30);
 
             try {
-                $handle = spinyarn_init($mappingsDir, $autoDownload, $cacheMax, $cacheHigh, $cacheLow);
+                $handle = spinyarn_init($mappingsDir, $cacheMax, $cacheHigh, $cacheLow);
             } catch (\Throwable $e) {
                 error_log("[SpinYarn] 初始化失败: " . $e->getMessage());
                 $handle = false;

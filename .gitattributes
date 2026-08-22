@@ -1,0 +1,2 @@
+mappings/*.tiny.gz filter=lfs diff=lfs merge=lfs -text
+mappings/vanilla/*.txt filter=lfs diff=lfs merge=lfs -text
