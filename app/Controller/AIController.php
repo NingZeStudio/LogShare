@@ -13,6 +13,10 @@ class AIController extends AbstractController
     #[GetMapping(path: 'ai/{id}')]
     public function ai(string $id): ResponseInterface
     {
+        if (!$this->isAIEnabled()) {
+            throw new ApiError(404, "AI analysis is disabled.");
+        }
+
         $logId = new \App\Id($id);
         $log = new \App\Log($logId);
 
