@@ -11,9 +11,9 @@ FROM php:8.5-cli
 # Composer（安装项目依赖用）
 COPY --from=composer:2 /usr/bin/composer /usr/bin/composer
 
-# 扩展安装器：swoole / pdo_mysql / redis 一键安装
+# 扩展安装器：swoole / pdo_mysql / redis / zip（zip 供 composer 解压 dist 包）
 COPY --from=mlocati/php-extension-installer /usr/bin/install-php-extensions /usr/local/bin/
-RUN install-php-extensions pdo_mysql redis
+RUN install-php-extensions pdo_mysql redis zip
 
 # 编译 Swoole 6.2（PHP 8.5 需 Swoole 6.2+）
 RUN apt-get update && apt-get install -y --no-install-recommends \
