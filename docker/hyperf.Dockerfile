@@ -11,9 +11,10 @@ FROM php:8.5-cli
 # Composer（安装项目依赖用）
 COPY --from=composer:2 /usr/bin/composer /usr/bin/composer
 
-# 扩展安装器：swoole / pdo_mysql / redis / zip（zip 供 composer 解压 dist 包）
+# 扩展安装器：pdo_mysql / redis / zip（zip 供 composer 解压 dist 包）
+# pcntl / posix / sockets 为 Hyperf 注解扫描与 Swoole 所需
 COPY --from=mlocati/php-extension-installer /usr/bin/install-php-extensions /usr/local/bin/
-RUN install-php-extensions pdo_mysql redis zip
+RUN install-php-extensions pdo_mysql redis zip pcntl posix sockets mbstring
 
 # 编译 Swoole 6.2（PHP 8.5 需 Swoole 6.2+）
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -45,4 +46,4 @@ COPY . .
 # 下载脚本 scripts/download_mappings.sh + download_vanilla_mappings.py 预先生成）
 
 # 启动：构建 RAG 索引（幂等），随后常驻
-CMD ["sh", "-c", "echo '[hyperf] CMD start'; echo '[hyperf] rag:build (dev 诊断)'; APP_ENV=dev php bin/hyperf.php rag:build 2>&1; echo '[hyperf] rag:build exit='$?; echo '[hyperf] start'; php bin/hyperf.php start 2>&1"]
+CMD ["sh", "-c", "php bin/hyperf.php rag:build && php bin/hyperf.php start"]
