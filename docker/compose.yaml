@@ -5,7 +5,6 @@ services:
     ports:
       - "9300:9300"
     volumes:
-      - ../:/web/mclogs
       - ./mclogs.conf:/etc/nginx/conf.d/default.conf
     depends_on:
       - hyperf
@@ -15,11 +14,10 @@ services:
   hyperf:
     container_name: mclogs-hyperf
     build:
-      context: .
-      dockerfile: hyperf.Dockerfile
+      context: ..
+      dockerfile: docker/hyperf.Dockerfile
     volumes:
-      - ../:/app
-      - spinyarn-mappings:/app/mappings
+      - ./mappings:/app/mappings
     environment:
       APP_ENV: prod
       SCAN_CACHEABLE: "true"
@@ -64,7 +62,6 @@ services:
 volumes:
   redis-data:
   mariadb-data:
-  spinyarn-mappings:
 
 networks:
   mclogs-network:

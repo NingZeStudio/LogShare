@@ -5,7 +5,7 @@ Minecraft / Hytale 日志分析与分享平台。基于 Aternos Codex 与 SpinYa
 ## 功能特性
 
 - **自动日志识别**：支持 Paper、Spigot、Bukkit、Forge、Fabric、NeoForge、Vanilla 服务端及客户端日志，自动检测服务端类型和版本
-- **混淆映射反解**：集成 SpinYarn 引擎，自动获取对应版本的混淆映射，还原可读堆栈信息
+- **混淆映射反解**：集成 SpinYarn 引擎，使用预下载的对应版本映射，还原可读堆栈信息
 - **敏感信息脱敏**：上传时自动过滤 IPv4/IPv6 地址、用户名、Access Token，支持可配置的过滤链
 - **结构化分析**：基于 Codex-Minecraft 和 Codex-Hytale 解析引擎，提取错误堆栈、崩溃原因、性能问题
 - **多文件日志**：同一 ID 下可上传多个文件或 `.zip` 压缩包（自动展开），子文件按路径读取
@@ -54,7 +54,7 @@ php bin/hyperf.php start
 | `id` | ID 字符集和长度（修改会破坏现有 ID） |
 | `urls` | 前端和 API 的基础 URL |
 | `rateLimit` | 限流配置（limit / window，Redis INCR） |
-| `spinyarn` | 反混淆扩展配置（映射目录、自动下载、缓存水位） |
+| `spinyarn` | 反混淆扩展配置（映射目录、缓存水位） |
 
 > 支持环境变量覆盖：`REDIS_HOST`、`REDIS_PORT`、`REDIS_TIMEOUT`、`AI_API_KEYS`（逗号分隔）、`AI_BASE_URL`、`AI_MODEL`。数据库连接由 `DB_*` 环境变量提供（`config/autoload/databases.php`）。
 
