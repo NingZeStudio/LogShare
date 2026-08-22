@@ -9,6 +9,18 @@ class Config
 
     public static function load(string $path): void
     {
+        if (!is_file($path)) {
+            // 配置缺失（如 Docker 镜像内无 Config.inc.php）时回退到示例配置，
+            // 避免 `require` 直接 fatal 导致进程无法启动。
+            $example = CORE_PATH . '/Config.inc.example.php';
+            if (is_file($example)) {
+                $path = $example;
+            } else {
+                self::$loaded = true;
+                return;
+            }
+        }
+
         $data = require $path;
         if (is_array($data)) {
             self::applyEnvironmentOverrides($data);
