@@ -57,10 +57,10 @@ Environment overrides in `App\Config::applyEnvironmentOverrides()`: `REDIS_HOST`
 ## Deobfuscation (SpinYarn)
 
 - Log deobfuscation uses the **SpinYarn PHP extension** (`App\Client\SpinYarnClient`), replacing the retired `aternos/sherlock` dependency.
-- `Log::deobfuscateContent()` detects the log type (Vanilla → `vanilla`, Fabric → `yarn`) and version, then calls `SpinYarnClient::deobfuscate()`. When the extension is not loaded, it degrades to null and the log passes through unchanged.
+- `Log::deobfuscateForStorage()` detects the log type (Vanilla → `vanilla`, Fabric → `yarn`) and version, then calls `SpinYarnClient::deobfuscate()` before storing, so the DB holds deobfuscated text and reads need no further deobfuscation. When the extension is not loaded it degrades to null and the log passes through unchanged.
 - The extension handle is process-level (`static`), reused across requests — this is the whole point of the resident-process migration (avoids ~110ms mapping reload per request).
-- Config under `spinyarn` (see `Config.inc.example.php`): `mappings_dir` (relative `mappings` = `./mappings`), `cache_max_entries/high_watermark/low_watermark`. SpinYarn v1.0.0-pre.2+ has **no `auto_download`** — it only parses; mapping files must already be present locally.
-- The extension is built in `docker/hyperf.Dockerfile` (multi-stage: Rust C ABI lib + phpize-built `spinyarn.so`, cloned at tag `v1.0.0-pre.2`); mappings live in `./mappings` (Yarn `*.tiny.gz` + `vanilla/*.txt`, tracked via **Git LFS**). Generate/refresh them with `scripts/download_mappings.sh` + `scripts/download_vanilla_mappings.py`; Docker bind-mounts the host `./mappings` at `/app/mappings`.
+- Config under `spinyarn` (see `Config.inc.example.php`): `mappings_dir` (relative `mappings` = `./mappings`), `cache_max_entries/high_watermark/low_watermark`. SpinYarn v1.0.0+ has **no `auto_download`** — it only parses; mapping files must already be present locally.
+- The extension is built in `docker/hyperf.Dockerfile` (multi-stage: Rust C ABI lib + phpize-built `spinyarn.so`, cloned at tag `v1.0.0`); mappings live in `./mappings` (Yarn `*.tiny.gz` + `vanilla/*.txt`, tracked via **Git LFS**). Generate/refresh them with `scripts/download_mappings.sh` + `scripts/download_vanilla_mappings.py`; Docker bind-mounts the host `./mappings` at `/app/mappings`.
 
 ## Namespaces
 
