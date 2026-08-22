@@ -43,6 +43,14 @@ abstract class AbstractController
         return $header !== '' ? $header : null;
     }
 
+    /**
+     * Whether the AI analysis feature is enabled (ai.enabled, default on).
+     */
+    protected function isAIEnabled(): bool
+    {
+        return (bool) (\App\Config::Get('ai')['enabled'] ?? true);
+    }
+
     protected function respondSuccess(mixed $data, string $message = 'OK'): PsrResponseInterface
     {
         return ApiResponse::success($data, $message);

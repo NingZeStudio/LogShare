@@ -85,6 +85,8 @@ return [
 
     /* ─── AI ───────────────────────────────────────────────── */
     'ai' => [
+        // 完全禁用 AI 分析（/v1/ai/* 返回 404）。设为 false 时无需配置 apiKeys。
+        'enabled' => true,
         'apiKeys' => [
             // Add your NVIDIA API keys here
         ],
