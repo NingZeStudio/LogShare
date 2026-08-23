@@ -61,6 +61,11 @@ abstract class AbstractController
         return ApiResponse::json($data);
     }
 
+    protected function respondRawJson(string $json): PsrResponseInterface
+    {
+        return ApiResponse::jsonRaw($json);
+    }
+
     protected function respondError(string $message, int $code = 400, mixed $details = null): PsrResponseInterface
     {
         return ApiResponse::error($message, $code, $details);

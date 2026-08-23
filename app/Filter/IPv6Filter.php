@@ -30,6 +30,11 @@ class IPv6Filter extends Filter
 
     public static function filter(string $data): string
     {
+        // 快速预检：IPv6 必然含「4 位十六进制组 + 冒号」或「::」，无则跳过全文正则
+        if (preg_match('/(?:[0-9A-Fa-f]{4}:|::)/', $data) === 0) {
+            return $data;
+        }
+
         foreach (static::getPatterns() as $pattern) {
             $data = preg_replace_callback('/' . $pattern->getPattern() . '/', function ($matches) use ($pattern) {
                 foreach (static::getExemptions() as $exemption) {

@@ -32,6 +32,11 @@ class IPv4Filter extends Filter
 
     public static function filter(string $data): string
     {
+        // 快速预检：IPv4 必然含「4 组数字点分」形式，无则跳过全文正则
+        if (preg_match('/\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}/', $data) === 0) {
+            return $data;
+        }
+
         foreach (static::getPatterns() as $pattern) {
             $data = preg_replace_callback('/' . $pattern->getPattern() . '/', function ($matches) use ($pattern) {
                 foreach (static::getExemptions() as $exemption) {

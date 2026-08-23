@@ -21,11 +21,6 @@ class AnalyseController extends AbstractController
 
         $log->setData($content);
 
-        $log->analyse();
-
-        $codexLog = $log->get();
-        $codexLog->setIncludeEntries(false);
-
-        return $this->respondJson($codexLog);
+        return $this->respondRawJson($log->getAnalysisJson());
     }
 }

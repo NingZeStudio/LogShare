@@ -122,6 +122,40 @@ class Log
     }
 
     /**
+     * 分析结果 JSON 缓存（进程级，keyed by 内容 hash）。
+     *
+     * Codex 的 detect+parse+analyse 对大型日志成本高昂（~2.5s/3.5MB），同一内容的
+     * 重复分析（如 GET /v1/insights/{id} 反复访问）应命中缓存，避免重复全量分析。
+     *
+     * @var array<string, string>
+     */
+    private static array $analysisJsonCache = [];
+
+    private const MAX_ANALYSIS_JSON_CACHE = 32;
+
+    /**
+     * 返回 Codex 分析结果的 JSON 字符串（含进程级缓存）。
+     */
+    public function getAnalysisJson(): string
+    {
+        $key = md5($this->data);
+        if (isset(self::$analysisJsonCache[$key])) {
+            return self::$analysisJsonCache[$key];
+        }
+
+        $codexLog = $this->get();
+        $codexLog->setIncludeEntries(false);
+        $json = json_encode($codexLog, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+
+        if (count(self::$analysisJsonCache) >= self::MAX_ANALYSIS_JSON_CACHE) {
+            array_shift(self::$analysisJsonCache);
+        }
+        self::$analysisJsonCache[$key] = (string) $json;
+
+        return (string) $json;
+    }
+
+    /**
      * Resolve the SpinYarn mapping type for this log.
      *
      * @return string|null "yarn" (Fabric) / "vanilla" (Mojang official), or null to skip
