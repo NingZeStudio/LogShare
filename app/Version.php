@@ -8,5 +8,5 @@ namespace App;
  */
 final class Version
 {
-    public const VERSION = '1.7.0-beta.1';
+    public const VERSION = '1.7.0';
 }

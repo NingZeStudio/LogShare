@@ -2,7 +2,7 @@
 
 ## Overview
 
-Minecraft / Hytale log analysis and sharing platform (v1.7.0-beta.1). Hyperf 3.2 (Swoole 6.2 resident + coroutine) app with `bin/hyperf.php` entrypoint, `app/` classes under the `App\` namespace, and `Config.inc.php` (business config) + `config/autoload/` (framework config) at root.
+Minecraft / Hytale log analysis and sharing platform (v1.7.0). Hyperf 3.2 (Swoole 6.2 resident + coroutine) app with `bin/hyperf.php` entrypoint, `app/` classes under the `App\` namespace, and `Config.inc.php` (business config) + `config/autoload/` (framework config) at root.
 
 ## Entrypoint & routing
 
