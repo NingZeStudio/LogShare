@@ -88,10 +88,10 @@ return [
         // 完全禁用 AI 分析（/v1/ai/* 返回 404）。设为 false 时无需配置 apiKeys。
         'enabled' => true,
         'apiKeys' => [
-            // Add your NVIDIA API keys here
+            // Add your API key(s) here
         ],
-        'baseUrl' => 'https://integrate.api.nvidia.com/v1/chat/completions',
-        'model' => 'stepfun-ai/step-3.7-flash',
+        'baseUrl' => 'https://api.huidev.com/v1/chat/completions',
+        'model' => 'deepseek-v4-pro',
         'timeout' => 180,
         'agent' => [
             'enabled' => false,
