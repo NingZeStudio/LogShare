@@ -16,12 +16,16 @@ use Psr\Http\Message\ResponseInterface;
 #[Controller(prefix: '/rag')]
 class RagController extends AbstractController
 {
-    private const SERVER_VERSION = '1.7.0-beta.1';
+    private const SERVER_VERSION = \App\Version::VERSION;
 
     private static ?RagSearch $search = null;
 
     /**
      * 进程级复用 RagSearch（含 SQLite PDO 连接），避免每个 MCP 请求重建连接。
+     *
+     * 协程安全性：Swoole 为单线程协程模型，SQLite 查询是同步文件操作（期间不
+     * yield），同一时刻仅一个协程执行，共享 PDO 无并发串扰；本地查询 <1ms，
+     * 同步阻塞可接受。
      */
     private function getSearch(): RagSearch
     {

@@ -50,6 +50,8 @@ class RedisClient
         $timeout = (float) ($redisConfig['timeout'] ?? self::CONNECT_TIMEOUT);
 
         if (self::inCoroutine()) {
+            // 协程级连接存 Context，协程结束时由 ext-redis 析构自动关闭底层 socket
+            // （无需显式 close/defer）。
             $conn = \Hyperf\Context\Context::get(self::CONTEXT_CONN_KEY);
             if ($conn instanceof \Redis && $conn->isConnected()) {
                 return $conn;

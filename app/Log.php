@@ -3,9 +3,7 @@
 namespace App;
 
 use Aternos\Codex\Analysis\Analysis;
-use Aternos\Codex\Analysis\Information;
 use Aternos\Codex\Log\File\StringLogFile;
-use Aternos\Codex\Minecraft\Analysis\Information\Vanilla\VanillaVersionInformation;
 use Aternos\Codex\Minecraft\Log\Minecraft\Vanilla\Fabric\FabricLog;
 use Aternos\Codex\Minecraft\Log\Minecraft\Vanilla\VanillaClientLog;
 use Aternos\Codex\Minecraft\Log\Minecraft\Vanilla\VanillaCrashReportLog;
@@ -159,24 +157,22 @@ class Log
     protected function deobfuscateForStorage(): void
     {
         $detected = (new Detective())->setLogFile(new StringLogFile($this->data))->detect();
-        /** @var \Aternos\Codex\Log\Log $detected */
+        if (!$detected instanceof \Aternos\Codex\Minecraft\Log\Minecraft\MinecraftLog) {
+            return;
+        }
         $this->log = $detected;
         $this->log->parse();
-        $this->analysis = $this->log->analyse();
 
         $mappingType = $this->getMappingType();
         if ($mappingType === null) {
             return;
         }
 
-        /**
-         * @var ?Information $version
-         */
-        $version = $this->analysis->getFilteredInsights(VanillaVersionInformation::class)[0] ?? null;
-        if (!$version) {
+        // Codex 最佳实践：通过 Log::getVersion() 获取版本（内部走 analyse，带缓存）。
+        $version = $detected->getVersion();
+        if ($version === null) {
             return;
         }
-        $version = $version->getValue();
 
         $content = \App\Client\SpinYarnClient::deobfuscate($this->data, $version, $mappingType);
         if ($content === null) {
@@ -186,10 +182,9 @@ class Log
         $this->data = $content;
         $this->lineCount = null;
 
-        $detected = (new Detective())->setLogFile(new StringLogFile($this->data))->detect();
-        /** @var \Aternos\Codex\Log\Log $detected */
-        $this->log = $detected;
-        $this->log->parse();
+        // 反混淆后重置 log/analysis，让后续 get()/analyse() 基于新内容重新检测
+        $this->log = null;
+        $this->analysis = null;
     }
 
     /**

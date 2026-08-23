@@ -39,6 +39,7 @@ class Config
      *  - AI_API_KEYS        → ai.apiKeys (comma-separated)
      *  - AI_BASE_URL        → ai.baseUrl
      *  - AI_MODEL           → ai.model
+     *  - AI_ENABLED         → ai.enabled (1/true/on/yes = true)
      *
      * @param array $data Config array by reference
      * @return void
@@ -63,6 +64,9 @@ class Config
         }
         if ($model = getenv('AI_MODEL')) {
             $data['ai']['model'] = $model;
+        }
+        if (($enabled = getenv('AI_ENABLED')) !== false) {
+            $data['ai']['enabled'] = in_array(strtolower($enabled), ['1', 'true', 'on', 'yes'], true);
         }
     }
 
