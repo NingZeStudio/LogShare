@@ -1,5 +1,25 @@
 # Changelog
 
+## 1.7.0 — 2026-08-23
+
+> 首个正式版（LTS）。在 1.7.0-beta.1 基础上完成 SpinYarn v1.0.0 去下载化、Docker 部署闭环、性能优化与两轮代码审查修复。
+
+### ✨ 新功能
+
+- **SpinYarn v1.0.0 LTS**：移除运行时下载能力，映射表改由宿主提供（Git LFS + 下载脚本 + Docker bind mount），SpinYarn 只做「本地加载 + 解析 + LRU 缓存」
+- **AI 可完全禁用**：新增 `ai.enabled` 开关 + `AI_ENABLED` 环境变量，禁用后 `/v1/ai/*` 统一返回 404
+
+### 🔧 改进
+
+- **Docker 部署闭环**：镜像补齐 `composer install`、`zip`/`pcntl`/`posix`/`sockets` 扩展、`Config` 缺失回退示例配置，CI 6 个 job 全绿
+- **性能优化**：过滤器快速预检（IPv6/UUID/IPv4 等，脱敏 -2.3s）、Codex 分析结果进程级缓存（重复访问 ~3.7s → 8ms）
+- Redis 连接改为协程级 `Context` 隔离；版本号收敛至 `App\Version`
+
+### 🐛 修复
+
+- 修复 CRCLASH 第六轮审查问题（反混淆重复 analyse、AI 环境变量缺口、版本号硬编码、RedisMock 缺 `ping()` 等）
+- 映射表纳入 Git LFS 版本管理
+
 ## 1.7.0-beta.1 — 2026-08-21
 
 ### ✨ 新功能
