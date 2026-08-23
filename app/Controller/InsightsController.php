@@ -22,9 +22,6 @@ class InsightsController extends AbstractController
 
         $log->renew();
 
-        $codexLog = $log->get();
-        $codexLog->setIncludeEntries(false);
-
-        return $this->respondJson($codexLog);
+        return $this->respondRawJson($log->getAnalysisJson());
     }
 }

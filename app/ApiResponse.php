@@ -49,6 +49,19 @@ class ApiResponse
         return self::jsonResponse($data, $httpCode);
     }
 
+    /**
+     * 输出已序列化好的 JSON 字符串（跳过二次 json_encode，供缓存命中场景直接返回）。
+     */
+    public static function jsonRaw(string $json, int $httpCode = 200): ResponseInterface
+    {
+        $response = new \Hyperf\HttpMessage\Server\Response();
+
+        return $response
+            ->withStatus($httpCode)
+            ->withHeader('Content-Type', 'application/json; charset=utf-8')
+            ->withBody(new SwooleStream($json));
+    }
+
     public static function text(string $content, string $contentType = 'text/plain', int $httpCode = 200): ResponseInterface
     {
         $response = new \Hyperf\HttpMessage\Server\Response();
