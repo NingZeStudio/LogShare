@@ -88,7 +88,8 @@ class MariaDbStorage implements StorageInterface
     }
 
     public static function Get(\App\Id $id, bool $includeContent = true): ?array
-    {        $log = Db::table(self::TABLE_LOGS)->where('id', $id->getRaw())->first();
+    {
+        $log = Db::table(self::TABLE_LOGS)->where('id', $id->getRaw())->first();
         if ($log === null) {
             return null;
         }
