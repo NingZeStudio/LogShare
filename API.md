@@ -164,21 +164,21 @@ GET /v1/insights/{id}
 {
     "id": "vanilla/server",
     "name": "Vanilla",
-    "type": "server",
+    "type": "Server Log",
     "version": "1.21.9",
-    "title": "Vanilla 1.21.9 server",
+    "title": "Vanilla 1.21.9 Server Log",
     "analysis": {
         "problems": [
             { "message": "...", "counter": 1, "solutions": ["..."] }
         ],
         "information": [
-            { "message": "minecraft-version: 1.21.9", "counter": 1 }
+            { "message": "Minecraft version: 1.21.9", "counter": 1, "label": "Minecraft version", "value": "1.21.9" }
         ]
     }
 }
 ```
 
-> `analysis.problems` 为诊断出的问题（含解决方案建议），`analysis.information` 为提取的信息（版本、类型等）。响应不包含 `entries`（原始日志行），内容紧凑。
+> `analysis.problems` 为诊断出的问题（含解决方案建议），`analysis.information` 为提取的信息（版本、类型等，含 `label`/`value`）。响应不包含 `entries`（原始日志行），内容紧凑。
 
 ---
 
