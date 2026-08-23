@@ -158,7 +158,27 @@ GET /1/insights/{id}   （已弃用，保留兼容）
 GET /v1/insights/{id}
 ```
 
-返回 Codex 解析引擎的结构化分析结果，包含服务端类型、版本、错误信息、堆栈跟踪等。
+返回 Codex 解析引擎的结构化分析结果，包含服务端类型、版本、错误信息、堆栈跟踪等：
+
+```json
+{
+    "id": "vanilla/server",
+    "name": "Vanilla",
+    "type": "server",
+    "version": "1.21.9",
+    "title": "Vanilla 1.21.9 server",
+    "analysis": {
+        "problems": [
+            { "message": "...", "counter": 1, "solutions": ["..."] }
+        ],
+        "information": [
+            { "message": "minecraft-version: 1.21.9", "counter": 1 }
+        ]
+    }
+}
+```
+
+> `analysis.problems` 为诊断出的问题（含解决方案建议），`analysis.information` 为提取的信息（版本、类型等）。响应不包含 `entries`（原始日志行），内容紧凑。
 
 ---
 
@@ -171,11 +191,13 @@ POST /1/analyse   （已弃用，保留兼容）
 POST /v1/analyse
 ```
 
-与 `GET /insights/{id}` 类似，但直接从请求体取内容而非读取已存储日志。请求格式同 `POST /log`。返回 Codex 结构化分析结果。
+与 `GET /insights/{id}` 类似，但直接从请求体取内容而非读取已存储日志。请求格式同 `POST /log`。返回 Codex 结构化分析结果（结构同上「获取分析结果」）。
 
 ---
 
 ## AI 分析
+
+> **禁用开关**：配置 `ai.enabled = false`（或环境变量 `AI_ENABLED=false`）时，所有 `/v1/ai/*` 接口统一返回 HTTP 404（`{"success":false,"error":"AI analysis is disabled.","code":404}`）。默认 `true` 启用。
 
 当配置 `ai.agent.enabled` 为 `true` 时，AI 接口走 LogAgent（模型驱动工具循环）；否则保持旧版直连分析。SSE 事件协议见下。
 
@@ -232,7 +254,166 @@ LogAgent 模式（`ai.agent.enabled`）会输出额外的 `event: status` 事件
 
 ---
 
+## RAG MCP 服务（内置知识库检索）
+
+内置于 Hyperf 主进程的 **Streamable HTTP MCP 服务**（JSON-RPC 2.0），提供纯本地 SQLite FTS5 知识库检索（零网络、零 embedding）。数据库路径由 `ai.mcp.rag.db` 指定（默认 `rag/index.db`），构建索引：`php bin/hyperf.php rag:build`。
+
+### 端点
+
+```
+POST /rag   （同时接受 GET）
+```
+
+### JSON-RPC 方法
+
+| 方法 | 说明 |
+|------|------|
+| `initialize` | MCP 握手，返回协议版本与服务信息 |
+| `tools/list` | 列出可用工具（`rag_search` / `list_topics`） |
+| `tools/call` | 调用工具 |
+| `ping` | 健康探测（返回 `{}`） |
+
+### initialize
+
+请求：
+
+```json
+{ "jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {} }
+```
+
+响应：
+
+```json
+{
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+        "protocolVersion": "2025-03-26",
+        "capabilities": { "tools": { "listChanged": false } },
+        "serverInfo": { "name": "logshare-rag", "version": "1.7.0" }
+    }
+}
+```
+
+### tools/list
+
+请求：
+
+```json
+{ "jsonrpc": "2.0", "id": 2, "method": "tools/list" }
+```
+
+响应：
+
+```json
+{
+    "jsonrpc": "2.0",
+    "id": 2,
+    "result": {
+        "tools": [
+            {
+                "name": "rag_search",
+                "description": "在内部知识库中检索相关文档片段。用于查找已知错误与解决方案。",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "query": { "type": "string", "description": "检索关键词，使用错误类名或报错关键词" },
+                        "k": { "type": "number", "description": "返回片段数量，默认 5" }
+                    },
+                    "required": ["query"]
+                }
+            },
+            {
+                "name": "list_topics",
+                "description": "列出知识库涵盖的主题与文档分布，帮助你决定检索方向。搜索前可先调用本工具了解知识库有什么。",
+                "inputSchema": { "type": "object", "properties": {} }
+            }
+        ]
+    }
+}
+```
+
+### tools/call —— rag_search
+
+请求：
+
+```json
+{
+    "jsonrpc": "2.0",
+    "id": 3,
+    "method": "tools/call",
+    "params": { "name": "rag_search", "arguments": { "query": "OutOfMemoryError", "k": 5 } }
+}
+```
+
+响应（检索结果以纯文本汇总在 `content[0].text`）：
+
+```json
+{
+    "jsonrpc": "2.0",
+    "id": 3,
+    "result": {
+        "content": [
+            { "type": "text", "text": "在知识库中找到 2 条相关文档：\n\n[1] 内存溢出（来源: ...）\n    ...\n" }
+        ]
+    }
+}
+```
+
+### tools/call —— list_topics
+
+请求：
+
+```json
+{
+    "jsonrpc": "2.0",
+    "id": 4,
+    "method": "tools/call",
+    "params": { "name": "list_topics", "arguments": {} }
+}
+```
+
+响应：
+
+```json
+{
+    "jsonrpc": "2.0",
+    "id": 4,
+    "result": {
+        "content": [
+            { "type": "text", "text": "知识库共 N 个主题目录、M 个分块：\n\n■ ...\n" }
+        ]
+    }
+}
+```
+
+### 错误码
+
+| 错误码 | 含义 |
+|--------|------|
+| `-32700` | 请求不是合法 JSON-RPC |
+| `-32602` | 工具不存在 / 参数错误 |
+| `-32603` | 数据库不可用 |
+
+---
+
 ## 信息查询
+
+### 根端点
+
+```
+GET /
+```
+
+返回全部可用端点的列表：
+
+```json
+{
+    "success": true,
+    "message": "LogShare API",
+    "endpoints": ["POST /v1/log", "GET /v1/raw/{id}", "..."]
+}
+```
 
 ### 速率限制
 
