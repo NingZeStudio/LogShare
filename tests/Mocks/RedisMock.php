@@ -12,6 +12,7 @@ class RedisMock
     public function connect(): bool { return true; }
     public function auth(): bool { return true; }
     public function select(): bool { return true; }
+    public function ping(): bool { return true; }
 
     public function get(string $key): string|false
     {

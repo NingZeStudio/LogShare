@@ -1,0 +1,12 @@
+<?php
+
+namespace App;
+
+/**
+ * 应用版本号（单一来源）。RagController / MCPClient 等需要对外暴露版本号
+ * 的位置统一引用，避免多处硬编码漂移。
+ */
+final class Version
+{
+    public const VERSION = '1.7.0-beta.1';
+}
