@@ -8,6 +8,35 @@
 
 ---
 
+## 快速接入（启动器开发者）
+
+三步接入「日志上传 + AI 分析」：
+
+```bash
+# ① 上传崩溃日志（source 填你的启动器名/版本，帮助 AI 匹配对应生态的知识库）
+curl -X POST https://api.logshare.cn/v1/log \
+     -H 'Content-Type: application/json' \
+     -d '{"content":"<日志全文>","source":"your-launcher/1.0.0"}'
+# → {"success":true,"id":"sAbCdEf","token":"...","raw":"...","url":"..."}
+
+# ② 展示原始日志 / 结构化解析（可选）
+curl https://api.logshare.cn/v1/raw/sAbCdEf          # 日志原文
+curl https://api.logshare.cn/v1/insights/sAbCdEf     # Codex 结构化分析
+
+# ③ AI 深度分析（SSE 流式，读超时建议 ≥300s）
+curl -N https://api.logshare.cn/v1/ai/sAbCdEf
+```
+
+**接入检查清单：**
+
+- [ ] 保存上传响应中的 `token`（删除日志的唯一凭证，不可找回）
+- [ ] `source` 字段填启动器名/版本（如 `fcl/1.2.0`）——知识库内置了 Pojav/FCL/ZL2/Amethyst/PGW/MobileGlues 等启动器生态的实战案例库，来源标识能显著提升 AI 分析的针对性
+- [ ] AI 分析使用 SSE 流式协议，按「SSE 事件协议」一节解析（注意 `event:` 行与 `data:` 行的配对）
+- [ ] 移动端建议开启 gzip 上传（`Content-Encoding: gzip`），大日志可省 80%+ 流量
+- [ ] 客户端 HTTP 读超时 ≥300s（Agent 多轮工具分析可能持续数十秒）
+
+---
+
 ## 日志管理
 
 ### 上传日志
@@ -26,8 +55,8 @@ POST /v1/log
 |------|------|------|------|
 | `content` | string | 是* | 日志内容（多文件上传时可为空，见下） |
 | `files` | array | 否 | 附加文件数组，每个元素 `{name, content}` |
-| `metadata[]` | array | 否 | 元数据 |
-| `source` | string | 否 | 来源标识（最长 64 字符） |
+| `metadata[]` | array | 否 | 元数据，每项 `{key, value, label?, visible?}`；`value` 为字符串时直接存储，其他类型会 JSON 序列化；单项最长 value 1024 / label 128 / key 64 字符 |
+| `source` | string | 否 | 来源标识（最长 64 字符）。**启动器接入强烈建议填写**，格式如 `fcl/1.2.0`、`pojavlauncher/3.4.1`——知识库按启动器生态组织了实战案例（FCL/ZL2/PGW/Amethyst/MobileGlues），该字段帮助 AI 优先匹配对应案例 |
 
 \* 当提供 `files` 时 `content` 可省略，主文件取 `files[0]`。
 
@@ -197,6 +226,8 @@ POST /v1/analyse
 
 ## AI 分析
 
+> **面向启动器开发者的推荐姿势：** 先请求 `GET /v1/insights/{id}` 展示结构化的错误摘要（毫秒级、免费），再提供「AI 深度分析」按钮按需触发 `GET /v1/ai/{id}` 流式分析——两者结合体验最佳，且避免每个用户无差别消耗 AI 资源。
+
 > **禁用开关**：配置 `ai.enabled = false`（或环境变量 `AI_ENABLED=false`）时，所有 `/v1/ai/*` 接口统一返回 HTTP 404（`{"success":false,"error":"AI analysis is disabled.","code":404}`）。默认 `true` 启用。
 
 当配置 `ai.agent.enabled` 为 `true` 时，AI 接口走 LogAgent（模型驱动工具循环）；否则保持旧版直连分析。SSE 事件协议见下。
@@ -209,6 +240,8 @@ GET /v1/ai/{id}
 ```
 
 SSE（Server-Sent Events）流式输出。LogAgent 模式下，Agent 可读取该日志 ID 下的所有文件（`list_log_files` / `read_log_file` 工具，作用域限定在当前 ID）。`GET /v1/ai/{id}` 会绑定该 ID；`POST /v1/ai/analyse` 只有请求 JSON 提供 `id` 时才会开放文件工具。
+
+> **缓存行为：** `GET /v1/ai/{id}` 的分析结论按日志 ID 缓存 30 分钟——同一 ID 重复请求会直接返回上次结论（秒回，无工具调用事件）；调试时如需强制重新分析，重新上传一份新日志即可。
 
 ### 直接提交内容
 
@@ -290,7 +323,9 @@ LogAgent 模式（`ai.agent.enabled`）会输出额外的 `event: status` 事件
 
 ## RAG MCP 服务（内置知识库检索）
 
-内置于 Hyperf 主进程的 **Streamable HTTP MCP 服务**（JSON-RPC 2.0），提供纯本地 SQLite FTS5 知识库检索（零网络、零 embedding）。数据库路径由 `ai.mcp.rag.db` 指定（默认 `rag/index.db`），构建索引：`php bin/hyperf.php rag:build`。
+内置于 Hyperf 主进程的 **Streamable HTTP MCP 服务**（JSON-RPC 2.0），提供本地知识库检索。知识库覆盖：Forge/NeoForge/Fabric 官方开发者文档、PaperMC 全家桶（Paper/Velocity/Waterfall/Folia）、Purpur/Glowstone/Geyser/Quilt、Android 启动器生态实战案例库与错误签名模式库。
+
+检索管线：词法召回（FTS5 BM25 + LIKE，AND→OR 逐级降级，CJK 自动二元切分）∪ 可选向量召回（bge-m3）→ bge-reranker-v2-m3 精排。数据库路径由 `ai.mcp.rag.db` 指定（默认 `rag/index.db`），构建索引：`php bin/hyperf.php rag:build`。
 
 ### 端点
 
@@ -324,7 +359,7 @@ POST /rag   （同时接受 GET）
     "result": {
         "protocolVersion": "2025-03-26",
         "capabilities": { "tools": { "listChanged": false } },
-        "serverInfo": { "name": "logshare-rag", "version": "1.7.0" }
+        "serverInfo": { "name": "logshare-rag", "version": "1.7.1" }
     }
 }
 ```
@@ -426,8 +461,9 @@ POST /rag   （同时接受 GET）
 | 错误码 | 含义 |
 |--------|------|
 | `-32700` | 请求不是合法 JSON-RPC |
+| `-32601` | 方法不存在 |
 | `-32602` | 工具不存在 / 参数错误 |
-| `-32603` | 数据库不可用 |
+| `-32603` | 内部错误（含数据库不可用） |
 
 ---
 
@@ -465,6 +501,8 @@ GET /v1/limits
     "storageTime": 604800
 }
 ```
+
+> **限流口径：** 全局限流按 `IP + method + 归一化路径` 计数（动态资源段如 `/v1/raw/{id}` 共享同一桶），默认每 IP 每方法每路径 36,000 次/60 秒，触发返回 HTTP 429。正常集成远达不到该阈值；若你的应用有高并发拉取需求请联系部署方调整。
 
 ### 过滤器列表
 
