@@ -10,7 +10,7 @@ services:
       # 只绑回环：公网流量经宿主机反向代理进入
       - "127.0.0.1:9501:9501"
     volumes:
-      - ./mappings:/app/mappings
+      - ../mappings:/app/mappings
       # 完整业务配置（AI 密钥、语义 RAG、生产域名等）挂载到容器内，
       # 文件不存在时自动回退 Config.inc.example.php；该文件已被 .gitignore 排除
       - ../Config.inc.php:/app/Config.inc.php:ro

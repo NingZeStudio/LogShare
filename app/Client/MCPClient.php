@@ -26,6 +26,12 @@ class MCPClient
             throw new \InvalidArgumentException('MCP URL must use HTTP or HTTPS');
         }
         $host = strtolower((string) $parts['host']);
+
+        $this->url = $url;
+        $this->headers = $headers;
+        $this->timeout = $timeout;
+        $this->connectTimeout = $connectTimeout;
+
         if (in_array($host, ['127.0.0.1', '::1', 'localhost'], true)) {
             return;
         }
@@ -33,10 +39,6 @@ class MCPClient
         if ($ip !== false && !filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE)) {
             throw new \InvalidArgumentException('MCP URL targets a private address');
         }
-        $this->url = $url;
-        $this->headers = $headers;
-        $this->timeout = $timeout;
-        $this->connectTimeout = $connectTimeout;
     }
 
     /**
