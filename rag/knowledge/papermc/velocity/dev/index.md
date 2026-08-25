@@ -1,0 +1,11 @@
+# Development
+
+Welcome to the Velocity development guide! This guide includes information and tutorials for
+developers to create and expand on Velocity plugins.
+
+#### Getting started
+
+#### How-to guides
+
+#### API
+

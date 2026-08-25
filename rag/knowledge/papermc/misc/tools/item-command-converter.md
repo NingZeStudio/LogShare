@@ -1,0 +1,10 @@
+# Item command converter
+
+In 1.20.5, Mojang has moved from unstructured NBT to the so-called item components. While Minecraft
+will automatically update all existing items for you, only Paper will update commands and text
+components containing items where possible. This tool helps you convert old item commands to the
+new format externally.
+
+Note that you need to select the *Entity Argument* mode if you want to convert entity data outside of
+the summon command, as we require the entity type to convert data correctly.
+

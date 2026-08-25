@@ -1,0 +1,62 @@
+# BungeeCord
+
+Adventure targets the latest version of BungeeCord and BungeeCord-compatible
+forks, such as Waterfall.
+
+> **Danger**
+
+Adventure platform implementation for Bungeecord and the Bungeecord component serializer is no longer maintained.
+The Adventure team no longer provides support for using these libraries.
+
+We recommend that users of these libraries update to modern software that [natively supports Adventure](/adventure/platform/native) (e.g., [Velocity](/velocity)).
+
+Declaring the dependency:
+
+## Usage
+
+You should first obtain a `BungeeAudiences` object by using `BungeeAudiences.create(plugin)`. This object is thread-safe
+and can be reused from different threads if needed. This object should also be *closed* when the plugin is disabled.
+
+Note that not all functionality is available on the proxy. Sending chat messages, action bar messages, titles, and boss bars,
+and tab list header and footer are supported, but all other requests will fail silently.
+
+A simple example of how to appropriately initialize this platform follows:
+
+```java
+public class MyPlugin extends Plugin {
+
+    private BungeeAudiences adventure;
+
+    public BungeeAudiences adventure() {
+        if (this.adventure == null) {
+            throw new IllegalStateException("Cannot retrieve audience provider while plugin is not enabled");
+        }
+        return this.adventure;
+    }
+
+    @Override
+    public void onEnable() {
+        this.adventure = BungeeAudiences.create(this);
+    }
+
+    @Override
+    public void onDisable() {
+        if (this.adventure != null) {
+            this.adventure.close();
+            this.adventure = null;
+        }
+    }
+}
+```
+
+## Component serializers
+
+For functionality not already supported by `Audience`, the `BungeeComponentSerializer` allows you to convert between
+Adventure [Components](/adventure/text) and the native BungeeCord chat component API and back.
+
+> **Cautions**
+
+For some areas of the proxy (notably, sending server list responses), the component serializer cannot be appropriately
+injected unless a `BungeeAudiences` instance has been initialized. Using Adventure `Component` instances **will not**
+work without a created `BungeeAudiences` instance.
+

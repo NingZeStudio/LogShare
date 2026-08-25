@@ -76,31 +76,14 @@ class FilesystemStorage implements StorageInterface
             return null;
         }
 
-        $files = [];
-        if (!empty($document['files'])) {
-            foreach ($document['files'] as $file) {
-                if ($includeContent) {
-                    $files[] = [
-                        'name' => $file['name'] ?? '',
-                        'data' => $file['data'] ?? '',
-                        'size' => isset($file['size']) ? (int) $file['size'] : strlen($file['data'] ?? ''),
-                    ];
-                } else {
-                    $files[] = [
-                        'name' => $file['name'] ?? '',
-                        'size' => isset($file['size']) ? (int) $file['size'] : strlen($file['data'] ?? ''),
-                    ];
-                }
-            }
-        }
-
         return [
             'data' => $document['data'] ?? null,
             'token' => $document['token'] ?? null,
             'metadata' => $document['metadata'] ?? [],
             'source' => $document['source'] ?? null,
             'created' => $document['created'] ?? null,
-            'files' => $files,
+            // 与 MariaDbStorage 对称：includeContent=false 仅剥离附加文件内容
+            'files' => self::normalizeFiles($document['files'] ?? [], $includeContent),
         ];
     }
 
@@ -182,5 +165,27 @@ class FilesystemStorage implements StorageInterface
         }
 
         return unlink($path);
+    }
+
+    /**
+     * Normalize file entries; drops `data` when $includeContent is false.
+     */
+    private static function normalizeFiles(array $files, bool $includeContent): array
+    {
+        $result = [];
+        foreach ($files as $file) {
+            if (!is_array($file)) {
+                continue;
+            }
+            $entry = [
+                'name' => $file['name'] ?? '',
+                'size' => isset($file['size']) ? (int) $file['size'] : strlen($file['data'] ?? ''),
+            ];
+            if ($includeContent) {
+                $entry['data'] = $file['data'] ?? '';
+            }
+            $result[] = $entry;
+        }
+        return $result;
     }
 }

@@ -1,0 +1,146 @@
+# Registry
+
+Registries in Minecraft hold all sort of information - possible item or block types, enchantments, potion effects, ... and more!
+
+There are two types of registry arguments: `resource` and `resourceKey`.
+The main difference between those arguments is the return value: The `resource` argument returns the parsed value, whilst the `resourceKey` only returns a `TypedKey`, which
+you can use to retrieve the value yourself.
+
+## Resource argument
+Just like any other argument, you can get a `ArgumentType<T>` reference to it using `ArgumentTypes.resource(RegistryKey<T>)`. A selection of possible registry keys can be
+found below. They are accessed in a static context using the [`RegistryKey`](jd:paper:io.papermc.paper.registry.RegistryKey) interface.
+
+Each entry in `RegistryKey` returns a `RegistryKey<T>`. The `<T>` generic parameter here describes the return type. This means that if we were to retrieve
+[`RegistryKey.ITEM`](jd:paper:io.papermc.paper.registry.RegistryKey#ITEM), the return type would be an `ItemType`, since it is defined as follows:
+
+```java title="RegistryKey.java"
+public sealed interface RegistryKey<T> extends Keyed permits RegistryKeyImpl {
+    // ...
+    RegistryKey<ItemType> ITEM = RegistryKeyImpl.create("item");
+    // ...
+}
+```
+
+And really, there isn't much more to it. For that exact reason, here is an example on the implementation of such an argument:
+
+```java
+public static LiteralCommandNode<CommandSourceStack> enchantmentRegistry() {
+    return Commands.literal("enchants-registry")
+        .then(Commands.argument("enchantment", ArgumentTypes.resource(RegistryKey.ENCHANTMENT))
+            .executes(ctx -> {
+                final Enchantment enchantment = ctx.getArgument("enchantment", Enchantment.class);
+
+                if (ctx.getSource().getExecutor() instanceof Player player) {
+                    final ItemStack stack = player.getInventory().getItemInMainHand();
+                    stack.addUnsafeEnchantment(enchantment, 10);
+                    ctx.getSource().getSender().sendRichMessage("Enchanted <player>'s <item> with <enchantment>!",
+                        Placeholder.component("player", player.name()),
+                        Placeholder.component("item", Component.translatable(stack)),
+                        Placeholder.component("enchantment", enchantment.displayName(10))
+                    );
+                    return Command.SINGLE_SUCCESS;
+                }
+
+                ctx.getSource().getSender().sendRichMessage("<red>This command requires a player!");
+                return Command.SINGLE_SUCCESS;
+            }))
+        .build();
+}
+```
+
+We define an `enchantment` argument using a enchantment registry key resource and retrieve the value of that using `ctx.getArgument("enchantment", Enchantment.class)`.
+Finally, we enchant the item of the executing player's hand with whatever enchantment the sender chose at level 10 and send a success message.
+
+Here is how it looks in-game:
+
+> **Caution**
+
+There are certain edge-cases where this argument, due to missing registries on the client, will cause a **Network Protocol Error**.
+Currently, the only resource where this is the case, is with the `STRUCTURE` registry key.
+
+```java
+// Registering this command will cause clients to not be able to connect to the server.
+final LiteralCommandNode<CommandSourceStack> invalidRegistryArgument = Commands.literal("registry-structure")
+    .then(Commands.argument("value", ArgumentTypes.resource(RegistryKey.STRUCTURE)))
+    .build();
+```
+
+Due to this fact, it is advised to only use the `STRUCTURE` registry key with a `resourceKey(...)` argument type and parse the values yourself.
+
+## Resource key argument
+For the client, there is barely any difference between the using `ArgumentTypes.resource` or `ArgumentTypes.resourceKey`. The only difference is that
+using `ArgumentTypes.resourceKey` does not provide **error checking**. We can visualize this using `RegistryKey.ITEM`.
+
+Here is the tab completion when using `ArgumentTypes.resource(RegistryKey.ITEM)`:
+
+And here is the tab completion when using `ArgumentTypes.resourceKey(RegistryKey.ITEM)`:
+
+> **Note**
+
+In the example given above, due to an unhandled null pointer exception, the command does not successfully run. The code for that command is directly trying to use the value retrieved
+by the registry access by doing `ItemType item = RegistryAccess.registryAccess().getRegistry(itemKey.registryKey()).get(itemKey.key())`. If you try to do any
+operation with the result, it might be null and error.
+
+You should **always** check the result of a registry retrieval operation. An example for that is given below in the [direct code comparison](#direct-code-comparison).
+
+The resource argument provides a much cleaner user experience, whilst the `resourceKey` argument has one very important use case: You get the raw
+`TypedKey<T>` returned as an argument result. This object is particularly useful, as it provides all information required to be able to retrieve
+a value from a registry yourself.
+
+> **Tip**
+
+Unless you have a specific reason for using the `resourceKey` argument over the `resource` one, the `resource` argument is preferred due to the client-side error
+checking and simple usability.
+
+### Direct code comparison
+Here is a simple code snipped on how one could use the `RegistryKey.ITEM` registry with a `resource` argument type:
+
+```java
+Commands.argument("item", ArgumentTypes.resource(RegistryKey.ITEM))
+    .executes(ctx -> {
+        final ItemType item = ctx.getArgument("item", ItemType.class);
+
+        if (ctx.getSource().getExecutor() instanceof Player player) {
+            player.getInventory().addItem(item.createItemStack());
+        }
+
+        return Command.SINGLE_SUCCESS;
+    });
+```
+
+Here is the same code, using a `resourceKey` argument type. Instead of directly retrieving the argument using `ctx.getArgument("item", TypedKey.class)`, we instead use the
+[`RegistryArgumentExtractor`](jd:paper:io.papermc.paper.command.brigadier.argument.RegistryArgumentExtractor) to retrieve our `TypedKey<ItemType>`.
+
+```java
+Commands.argument("item", ArgumentTypes.resourceKey(RegistryKey.ITEM))
+    .executes(ctx -> {
+        final TypedKey<ItemType> itemKey = RegistryArgumentExtractor.getTypedKey(ctx, RegistryKey.ITEM, "item");
+        ItemType item = RegistryAccess.registryAccess().getRegistry(itemKey.registryKey()).get(itemKey.key());
+
+        if (item == null) {
+            ctx.getSource().getSender().sendRichMessage("<red>Please provide a valid item!");
+            return Command.SINGLE_SUCCESS;
+        }
+
+        if (ctx.getSource().getExecutor() instanceof Player player) {
+            player.getInventory().addItem(item.createItemStack());
+        }
+
+        return Command.SINGLE_SUCCESS;
+    })
+```
+
+### Using a TypedKey
+First, in order to get the correct registry, you can run `RegistryAccess#getRegistry(RegistryKey)`. In order to get a `RegistryAccess`, you can just use the static
+`RegistryAccess.registryAccess()` method. The `RegistryKey` is retrieved using `TypedKey#registryKey()`.
+Now, in order to get the final value `T`, you can run `Registry#get(Key)`, where the key can be retrieved using `TypedKey#key()`. This will return the backing instance
+from that resource key or null, if no value has been found.
+
+### Use case over resource argument
+The main use case for this argument type is the ability to store the key (the value returned to you by `TypedKey#key`). If you want to be able to store the exact user
+input and be able to retrieve the backed instance without much trouble, that is the way to do it.
+
+## Registry key types
+
+You can get a list of all registry key types and their return values on the
+[`RegistryKey` Javadocs](jd:paper:io.papermc.paper.registry.RegistryKey).

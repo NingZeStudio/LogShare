@@ -41,7 +41,7 @@ class RagController extends AbstractController
         try {
             $rag = $this->getSearch();
         } catch (\Throwable $e) {
-            error_log("[RAG] 数据库不可用: " . $e->getMessage());
+            \App\Syslog::error("RAG", "数据库不可用: " . $e->getMessage());
             return $this->respondJson([
                 'jsonrpc' => '2.0',
                 'id' => null,
@@ -138,10 +138,18 @@ class RagController extends AbstractController
                     break;
 
                 default:
-                    throw new \RuntimeException('Method not found: ' . $method);
+                    throw new \App\Exception\McpMethodNotFoundException('Method not found: ' . $method);
             }
-        } catch (\Throwable $e) {
+        } catch (\InvalidArgumentException $e) {
+            // 入参校验类错误：消息由本端点自身产生，可安全回传
             $response['error'] = ['code' => -32602, 'message' => $e->getMessage()];
+        } catch (\App\Exception\McpMethodNotFoundException $e) {
+            $response['error'] = ['code' => -32601, 'message' => $e->getMessage()];
+        } catch (\Throwable $e) {
+            // 内部错误（PDO/IO 等）可能携带数据库路径、schema 等环境细节，
+            // /rag 为公开无鉴权端点，对外只返回通用消息，细节仅写日志。
+            \App\Syslog::error('RAG', 'tool call failed: ' . $e->getMessage());
+            $response['error'] = ['code' => -32603, 'message' => 'Internal error'];
         }
 
         return $this->respondJson($response);
@@ -161,8 +169,8 @@ class RagController extends AbstractController
         $lines = ["在知识库中找到 " . count($results) . " 条相关文档：", ""];
         foreach ($results as $i => $result) {
             $lines[] = '[' . ($i + 1) . '] ' . $result['title'] . '（来源: ' . $result['source'] . '）';
-            $snippet = preg_replace('/\s+/', ' ', $result['snippet'] ?? $result['body']);
-            $lines[] = '    ' . $snippet;
+            // 保留原始换行：Markdown 列表/代码块结构对模型理解「修复步骤」类内容至关重要
+            $lines[] = $result['snippet'] ?? $result['body'];
             $lines[] = '';
         }
 

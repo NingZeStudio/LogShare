@@ -36,7 +36,7 @@ class IPv6Filter extends Filter
         }
 
         foreach (static::getPatterns() as $pattern) {
-            $data = preg_replace_callback('/' . $pattern->getPattern() . '/', function ($matches) use ($pattern) {
+            $data = static::safePregReplaceCallback('/' . $pattern->getPattern() . '/', function ($matches) use ($pattern) {
                 foreach (static::getExemptions() as $exemption) {
                     if (preg_match('/' . $exemption->getPattern() . '/', $matches[0])) {
                         return $matches[0];

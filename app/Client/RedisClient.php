@@ -57,7 +57,7 @@ class RedisClient
                 return $conn;
             }
 
-            $conn = self::createConnection($host, $port, $timeout);
+            $conn = self::createConnection($redisConfig);
             \Hyperf\Context\Context::set(self::CONTEXT_CONN_KEY, $conn);
             return $conn;
         }
@@ -73,11 +73,14 @@ class RedisClient
             self::$connection = null;
         }
 
-        self::$connection = self::createConnection($host, $port, $timeout);
+        self::$connection = self::createConnection($redisConfig);
         return self::$connection;
     }
 
-    private static function createConnection(string $host, int $port, float $timeout): \Redis
+    /**
+     * @param array $redisConfig cache.redis 配置节（host/port/timeout/password/database）
+     */
+    private static function createConnection(array $redisConfig): \Redis
     {
         if (!class_exists('Redis')) {
             // 缺少 ext-redis（如本地开发 / Termux）。抛出可捕获的异常，
@@ -85,9 +88,21 @@ class RedisClient
             throw new \Exception('Redis extension is not installed');
         }
 
+        $host = (string) ($redisConfig['host'] ?? 'mclogs-redis');
+        $port = (int) ($redisConfig['port'] ?? 6379);
+        $timeout = (float) ($redisConfig['timeout'] ?? self::CONNECT_TIMEOUT);
+
         $conn = new \Redis();
         if (!$conn->connect($host, $port, $timeout)) {
             throw new \Exception('Redis connection failed: ' . $host . ':' . $port);
+        }
+        $password = $redisConfig['password'] ?? null;
+        if (is_string($password) && $password !== '') {
+            $conn->auth($password);
+        }
+        $database = $redisConfig['database'] ?? null;
+        if (is_int($database) && $database > 0) {
+            $conn->select($database);
         }
         return $conn;
     }
@@ -104,6 +119,17 @@ class RedisClient
         } else {
             $conn->set($key, $value);
         }
+    }
+
+    /**
+     * 仅当 key 不存在时写入 0 并附带 TTL（SET NX EX）。
+     *
+     * 用于计数器初始化：与后续 INCR 配合可保证计数 key 永远携带 TTL，
+     * 避免「INCR 后进程崩溃、EXPIRE 未执行」留下的永久限流 key。
+     */
+    protected static function opSetNxEx(string $key, int $ttl): bool
+    {
+        return (bool) self::connection()->set($key, 0, ['nx', 'ex' => $ttl]);
     }
 
     protected static function opGet(string $key): ?string

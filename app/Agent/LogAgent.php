@@ -4,8 +4,7 @@ namespace App\Agent;
 
 use App\Client\AIClient;
 use App\Client\MCPClient;
-use Hyperf\Context\Context;
-use Hyperf\Engine\Http\EventStream;
+use App\Sse\SseWriter;
 use Hyperf\HttpServer\Response;
 
 /**
@@ -19,30 +18,8 @@ class LogAgent
 {
     public const DEFAULT_MAX_TOOL_ROUNDS = 3;
     private const MAX_TOOL_RESULT_BYTES = 12000;
+    private const MAX_RETRIEVAL_RESULT_BYTES = 32000;
     private const STATUS_SUMMARY_BYTES = 400;
-
-    private const SSE_CONTEXT_KEY = 'logshare_sse_stream';
-
-    /** CLI fallback storage (no Swoole coroutine, so a static is safe). */
-    private static ?EventStream $stream = null;
-
-    private static function setStream(?EventStream $stream): void
-    {
-        if (extension_loaded('swoole')) {
-            Context::set(self::SSE_CONTEXT_KEY, $stream);
-        } else {
-            self::$stream = $stream;
-        }
-    }
-
-    private static function getStream(): ?EventStream
-    {
-        if (extension_loaded('swoole')) {
-            $stream = Context::get(self::SSE_CONTEXT_KEY);
-            return $stream instanceof EventStream ? $stream : null;
-        }
-        return self::$stream;
-    }
 
     /**
      * Run the agent loop and stream the result as SSE.
@@ -60,30 +37,35 @@ class LogAgent
         $cacheTTL = $options['cacheTTL'] ?? 1800;
         $logId = $options['logId'] ?? null;
 
-        self::startSSE($response);
+        SseWriter::begin($response);
 
-        if ($cacheKey !== null) {
-            $cached = self::checkCache($cacheKey);
-            if ($cached !== null) {
-                self::emitContent($cached);
-                self::emitDone();
-                return;
-            }
-        }
-
-        $config = \App\Config::Get('ai');
-        $agentConfig = $config['agent'] ?? [];
-        $maxRounds = (int) ($agentConfig['maxToolRounds'] ?? self::DEFAULT_MAX_TOOL_ROUNDS);
-
-        $tools = self::buildTools($config, $logId);
-        $messages = self::buildMessages($content, $logId, $config, self::fetchTopics($config));
-
-        $fullAnswer = '';
-        $success = false;
-
+        // try 边界紧贴 begin()：SSE 开始输出后任何异常都必须以流内 error 收尾，
+        // 不能逃逸到全局 JSON handler 造成坏帧。
         try {
+            if ($cacheKey !== null) {
+                $cached = self::checkCache($cacheKey);
+                if ($cached !== null) {
+                    self::emitContent($cached);
+                    self::emitDone();
+                    return;
+                }
+            }
+
+            $config = \App\Config::Get('ai');
+            $agentConfig = $config['agent'] ?? [];
+            $maxRounds = (int) ($agentConfig['maxToolRounds'] ?? self::DEFAULT_MAX_TOOL_ROUNDS);
+
+            // 会话级可变状态：MCP 客户端复用 + 已读文件记录（防重复读取循环）
+            $session = new ToolSession();
+            $tools = self::buildTools($config, $logId);
+            $messages = self::buildMessages($content, $logId, $config, self::fetchTopics($config, $session));
+
+            $fullAnswer = '';
+            $success = false;
+
             for ($round = 0; $round < $maxRounds; $round++) {
                 $roundToolCalls = [];
+                $roundReasoning = '';
                 $roundContent = '';
 
                 AIClient::streamChat(
@@ -96,8 +78,9 @@ class LogAgent
                     function (string $reasoning) {
                         self::emitThinking($reasoning);
                     },
-                    function (array $toolCalls) use (&$roundToolCalls) {
+                    function (array $toolCalls, string $reasoning) use (&$roundToolCalls, &$roundReasoning) {
                         $roundToolCalls = $toolCalls;
+                        $roundReasoning = $reasoning;
                     },
                     function (string $fullContent) use (&$roundContent) {
                         $roundContent = $fullContent;
@@ -111,7 +94,16 @@ class LogAgent
                     break;
                 }
 
-                $messages[] = self::assistantMessageWithToolCalls($roundToolCalls);
+                // 双保险：空 name 的调用回传上游会被 400 拒绝；全部无效则视为本轮完成
+                $roundToolCalls = array_values(
+                    array_filter($roundToolCalls, fn($call) => !empty($call['name']))
+                );
+                if (empty($roundToolCalls)) {
+                    $success = true;
+                    break;
+                }
+
+                $messages[] = self::assistantMessageWithToolCalls($roundToolCalls, $roundReasoning);
 
                 foreach ($roundToolCalls as $call) {
                     $name = $call['name'] ?? '';
@@ -122,13 +114,23 @@ class LogAgent
 
                     self::emitTool($name, $arguments);
 
-                    $result = self::executeTool($name, $arguments, $config, $logId);
+                    $result = self::executeTool($name, $arguments, $config, $logId, $session);
                     self::emitToolResult($name, $result);
+
+                    // read_log_file 的全文结果已在 readLogFile 内按 maxFileBytes 截断并附提示，
+                    // 不再套用通用工具的 12KB 截断（否则「一次读全」会被无声砍成残篇）；
+                    // 检索类工具（rag_search/web_search_exa）是分析的核心证据，放宽到 32KB；
+                    // 其余工具保留 12000 字节上限，超限时附带可见标记。
+                    $toolContent = match ($name) {
+                        'read_log_file' => $result,
+                        'rag_search', 'web_search_exa' => self::truncateForModel($result, self::MAX_RETRIEVAL_RESULT_BYTES),
+                        default => self::truncateForModel($result),
+                    };
 
                     $messages[] = [
                         'role' => 'tool',
                         'tool_call_id' => $call['id'] ?? '',
-                        'content' => self::truncateForModel($result),
+                        'content' => $toolContent,
                     ];
                 }
             }
@@ -142,7 +144,8 @@ class LogAgent
             }
 
             self::emitDone();
-        } catch (\Exception $e) {
+        } catch (\Throwable $e) {
+            \App\Syslog::error('LogAgent', '分析失败: ' . $e->getMessage());
             self::emitError($e->getMessage());
         }
     }
@@ -214,13 +217,11 @@ class LogAgent
                 'type' => 'function',
                 'function' => [
                     'name' => 'read_log_file',
-                    'description' => '读取当前日志下指定文件的指定行区间。主文件名为 main。',
+                    'description' => '读取当前日志下指定文件的完整内容（不设行区间，直接返回全文）。为避免重复调用，仅对未读取过的文件调用；已读过的文件使用已内容进行分析，不要再次读取。主文件名为 main。',
                     'parameters' => [
                         'type' => 'object',
                         'properties' => [
                             'filename' => ['type' => 'string', 'description' => '文件名（主文件为 main，或使用 list_log_files 列出的名称）'],
-                            'start_line' => ['type' => 'number', 'description' => '起始行号（1 开始），默认 1'],
-                            'end_line' => ['type' => 'number', 'description' => '结束行号，默认到文件末尾'],
                         ],
                         'required' => ['filename'],
                     ],
@@ -239,9 +240,12 @@ class LogAgent
             $system .= "\n\n以下是你可检索的内部知识库所涵盖的主题（帮助判断检索方向，搜索前先浏览）：\n" . $topicsText;
         }
 
-        $userContent = "需要分析的日志内容：\n\n" . self::truncateForModel($content);
+        // 用户消息截断使用专属提示（不用工具结果的标记文案）
+        $userContent = "需要分析的日志内容：\n\n" . $content;
         if (strlen($content) > self::MAX_TOOL_RESULT_BYTES) {
-            $userContent .= "\n\n[日志内容过长已截断，如需要可用文件工具读取完整内容]";
+            $userContent = "需要分析的日志内容：\n\n"
+                . mb_strcut($content, 0, self::MAX_TOOL_RESULT_BYTES)
+                . "\n\n[日志内容过长已截断，如需要可用文件工具读取完整内容]";
         }
 
         return [
@@ -257,9 +261,10 @@ class LogAgent
      * knowledge base covers and can pick search directions accordingly.
      *
      * @param array $config
+     * @param ToolSession $session
      * @return string Empty when RAG is not configured or unreachable
      */
-    private static function fetchTopics(array $config): string
+    private static function fetchTopics(array $config, ToolSession $session): string
     {
         $mcp = $config['mcp'] ?? [];
         $endpoint = $mcp['rag'] ?? [];
@@ -270,13 +275,34 @@ class LogAgent
         }
 
         try {
-            $client = new MCPClient($url, is_array($endpoint['headers'] ?? null) ? $endpoint['headers'] : [], (int) ($endpoint['timeout'] ?? 10));
+            $client = self::mcpClient($endpoint, $session);
             $contents = $client->callTool('list_topics', []);
             return implode("\n\n", $contents);
         } catch (\Exception $e) {
-            error_log("[LogAgent] 获取知识库主题失败: " . $e->getMessage());
+            \App\Syslog::error('LogAgent', '获取知识库主题失败: ' . $e->getMessage());
             return '';
         }
+    }
+
+    /**
+     * Return a shared, already-initialized MCPClient for the endpoint.
+     *
+     * Clients are cached per url within a single analyze() call, so repeated
+     * tool invocations skip the initialize handshake round-trip. The cache is
+     * request-scoped (held on the ToolSession), never shared across requests.
+     *
+     * @param array $endpoint
+     * @param ToolSession $session
+     */
+    private static function mcpClient(array $endpoint, ToolSession $session): MCPClient
+    {
+        $url = (string) ($endpoint['url'] ?? '');
+        if (!isset($session->mcpClients[$url])) {
+            $headers = is_array($endpoint['headers'] ?? null) ? $endpoint['headers'] : [];
+            $timeout = (int) ($endpoint['timeout'] ?? 30);
+            $session->mcpClients[$url] = new MCPClient($url, $headers, $timeout);
+        }
+        return $session->mcpClients[$url];
     }
 
     private static function defaultSystemPrompt(?string $logId): string
@@ -285,10 +311,14 @@ class LogAgent
 你是一个专业的 Minecraft 服务器日志分析助手。你的任务是分析玩家提交的日志，定位问题并提供解决方案。
 
 工作方式：
-1. 首先分析日志内容，识别崩溃、错误、性能问题或异常。
-2. 如需要更多信息，可以使用可用的工具（如搜索网络、检索知识库、查看日志文件）。
-3. 若 rag_search 返回的内容被截断（出现省略号"…"或"已截断"标记），可用被截断处开头或末尾的关键词再次检索，以补全完整段落。
-4. 给出结论时说明原因，并提供可行的解决步骤。
+1. 如需查看日志文件，先用 `list_log_files` 查看有哪些文件，然后调用 `read_log_file` 直接读取该文件的**完整内容**（此工具无行区间参数）。一次获取全文后，立即基于已有内容进行分析。
+2. 调用 `rag_search` 之前，必须先调用 `list_topics` 了解知识库涵盖的主题与文档分布，据此选择贴合知识库的关键词检索；首次检索无结果时也应回看主题列表换词重试。知识库查不到的公开问题，再用 `web_search_exa` 搜索网络。
+3. 若知识库检索结果被截断（出现"…"或"已截断"标记），基于被截断处再次检索补全，不需要重复读取文件。
+
+重要停止规则：
+- 不要在已经有完整日志内容的情况下再次调用 `read_log_file`，重复调用会被拒绝并浪费预算。
+- 严禁使用相同的 `read_log_file` 参数调用两次；已读取内容可直接用于分析。
+- 当某一个工具调用能覆盖全部问题时，不要再发起新的工具调用；应直接给出结论。
 
 回答使用简体中文，结构清晰。全程禁止使用 emoji 或表情符号。
 PROMPT;
@@ -300,28 +330,53 @@ PROMPT;
         return $prompt;
     }
 
-    private static function assistantMessageWithToolCalls(array $toolCalls): array
+    /**
+     * Build the assistant message carrying this round's tool calls.
+     *
+     * Reasoning models (DeepSeek thinking mode 等) require the round's
+     * reasoning_content to be passed back verbatim with the assistant message;
+     * omitting it makes the upstream reject the follow-up request with 400.
+     *
+     * @param array $toolCalls
+     * @param string $reasoningContent
+     * @return array
+     */
+    private static function assistantMessageWithToolCalls(array $toolCalls, string $reasoningContent = ''): array
     {
         $formatted = [];
         foreach ($toolCalls as $call) {
             $formatted[] = [
                 'id' => $call['id'] ?? '',
                 'type' => 'function',
+                // 空 arguments 部分网关会 400 拒绝，无参调用归一为 {}
                 'function' => [
                     'name' => $call['name'] ?? '',
-                    'arguments' => $call['arguments'] ?? '',
+                    'arguments' => ($call['arguments'] ?? '') !== '' ? $call['arguments'] : '{}',
                 ],
             ];
         }
 
-        return [
+        $message = [
             'role' => 'assistant',
             'content' => null,
             'tool_calls' => $formatted,
         ];
+        if ($reasoningContent !== '') {
+            $message['reasoning_content'] = $reasoningContent;
+        }
+
+        return $message;
     }
 
-    private static function executeTool(string $name, array $arguments, array $config, ?string $logId): string
+    /**
+     * @param string $name
+     * @param array $arguments
+     * @param array $config
+     * @param string|null $logId
+     * @param ToolSession $session
+     * @return string
+     */
+    private static function executeTool(string $name, array $arguments, array $config, ?string $logId, ToolSession $session): string
     {
         $mcp = $config['mcp'] ?? [];
 
@@ -329,21 +384,21 @@ PROMPT;
             switch ($name) {
                 case 'web_search_exa':
                     $endpoint = $mcp['webSearch'] ?? [];
-                    return self::callMcpTool('web_search_exa', $arguments, $endpoint);
+                    return self::callMcpTool('web_search_exa', $arguments, $endpoint, $session);
 
                 case 'rag_search':
                     $endpoint = $mcp['rag'] ?? [];
-                    return self::callMcpTool('rag_search', $arguments, $endpoint);
+                    return self::callMcpTool('rag_search', $arguments, $endpoint, $session);
 
                 case 'list_topics':
                     $endpoint = $mcp['rag'] ?? [];
-                    return self::callMcpTool('list_topics', [], $endpoint);
+                    return self::callMcpTool('list_topics', [], $endpoint, $session);
 
                 case 'list_log_files':
                     return self::listLogFiles($logId);
 
                 case 'read_log_file':
-                    return self::readLogFile($logId, $arguments);
+                    return self::readLogFile($logId, $arguments, $session);
 
                 default:
                     return '未知工具: ' . $name;
@@ -353,17 +408,15 @@ PROMPT;
         }
     }
 
-    private static function callMcpTool(string $name, array $arguments, array $endpoint): string
+    private static function callMcpTool(string $name, array $arguments, array $endpoint, ToolSession $session): string
     {
         $url = $endpoint['url'] ?? '';
-        $headers = $endpoint['headers'] ?? [];
-        $timeout = (int) ($endpoint['timeout'] ?? 30);
 
         if ($url === '') {
             return '该工具未配置，无法调用';
         }
 
-        $client = new MCPClient($url, is_array($headers) ? $headers : [], $timeout);
+        $client = self::mcpClient($endpoint, $session);
         $contents = $client->callTool($name, $arguments);
 
         return implode("\n\n", $contents);
@@ -398,13 +451,18 @@ PROMPT;
     }
 
     /**
-     * Read a line range from a file bound to the current log session.
+     * Read the full content of a file bound to the current log session.
+     *
+     * Deliberately returns the whole file (no line-range parameters): fence-off
+     * reads are the main source of repeated tool calls. Duplicate reads of the
+     * same file within a single analyze() session are blocked via the session.
      *
      * @param string|null $logId
      * @param array $arguments
+     * @param ToolSession $session
      * @return string
      */
-    private static function readLogFile(?string $logId, array $arguments): string
+    private static function readLogFile(?string $logId, array $arguments, ToolSession $session): string
     {
         if ($logId === null) {
             return '当前会话未绑定日志文件';
@@ -416,7 +474,11 @@ PROMPT;
         }
 
         $filename = $arguments['filename'] ?? '';
-        if ($filename === 'main' || $filename === '') {
+        // 会话去重键归一化：'' 与 'main' 指向同一主文件，必须视为同键，
+        // 否则省略 filename 的重复调用会绕过防重复拦截
+        $sessionKey = ($filename === '' || $filename === 'main') ? 'main' : $filename;
+
+        if ($sessionKey === 'main') {
             $content = $log->getContent();
         } else {
             $content = $log->getFile($filename);
@@ -425,44 +487,53 @@ PROMPT;
             }
         }
 
+        // 重复读取同一文件直接提醒，避免模型陷入重复调用
+        if (isset($session->readFiles[$sessionKey])) {
+            return self::duplicateReadNotice($sessionKey, $content);
+        }
+
         $agentConfig = \App\Config::Get('ai')['agent'] ?? [];
-        $maxLines = (int) ($agentConfig['maxFileLines'] ?? 500);
-        $maxBytes = (int) ($agentConfig['maxFileBytes'] ?? 16 * 1024);
+        $maxBytes = (int) ($agentConfig['maxFileBytes'] ?? (512 * 1024));
 
-        $allLines = explode("\n", $content);
-        $total = count($allLines);
+        // substr_count 计行，避免为计数而 explode 出全量行数组
+        $total = substr_count($content, "\n") + 1;
 
-        $startLine = max(1, (int) ($arguments['start_line'] ?? 1));
-        $endLine = (int) ($arguments['end_line'] ?? $total);
-        if ($endLine <= 0 || $endLine > $total) {
-            $endLine = $total;
-        }
-        if ($endLine - $startLine + 1 > $maxLines) {
-            $endLine = $startLine + $maxLines - 1;
-        }
-
-        $slice = array_slice($allLines, $startLine - 1, $endLine - $startLine + 1);
-        $text = implode("\n", $slice);
-
+        // 全文读取：受字节上限保护（超大文件在存储层已被 10MB/50k 行限制）
+        $text = $content;
         $truncatedBytes = false;
         if (strlen($text) > $maxBytes) {
-            $text = mb_substr($text, 0, $maxBytes);
+            $text = mb_strcut($text, 0, $maxBytes);
             $truncatedBytes = true;
         }
 
         $tail = '';
-        if ($truncatedBytes || $endLine < $total) {
-            $tail = "\n[已截断，可继续使用 read_log_file 传入 start_line 读取后续行]";
+        if ($truncatedBytes) {
+            $tail = "\n[文件过大已截断为 " . number_format($maxBytes / 1024, 0) . " KiB；如需更多内容请联系用户获取原始文件]";
         }
 
+        $session->readFiles[$sessionKey] = true;
+
         return sprintf(
-            "文件 %s（共 %d 行）\n第 %d-%d 行：\n%s%s",
+            "文件 %s（共 %d 行，%d 字节）\n全文：\n%s%s",
             $filename === '' ? 'main' : $filename,
             $total,
-            $startLine,
-            $endLine,
+            strlen($content),
             $text,
             $tail
+        );
+    }
+
+    /**
+     * Response for duplicate read attempts within a single session.
+     */
+    private static function duplicateReadNotice(string $filename, string $content): string
+    {
+        $total = substr_count($content, "\n") + 1;
+        return sprintf(
+            '文件 %s 已读取（共 %d 行，%d 字节），其内容已在上文中提供，请直接基于已有内容进行分析，不要重复调用本工具。',
+            $filename,
+            $total,
+            strlen($content)
         );
     }
 
@@ -477,102 +548,131 @@ PROMPT;
         return $log->exists() ? $log : null;
     }
 
-    private static function truncateForModel(string $text): string
+    /**
+     * Byte-bounded truncation that never splits a multi-byte character
+     * (mb_strcut counts bytes but cuts on character boundaries).
+     *
+     * Truncation always appends a visible marker so the model knows the result
+     * is incomplete and can decide to re-query instead of reasoning over a
+     * silently truncated payload.
+     */
+    private static function truncateForModel(string $text, int $maxBytes = self::MAX_TOOL_RESULT_BYTES): string
     {
-        if (strlen($text) <= self::MAX_TOOL_RESULT_BYTES) {
+        if (strlen($text) <= $maxBytes) {
             return $text;
         }
-        return mb_substr($text, 0, self::MAX_TOOL_RESULT_BYTES);
+        return mb_strcut($text, 0, $maxBytes)
+            . "\n\n[...工具结果过长，已截断至 {$maxBytes} 字节；如需更多细节，请调整参数后重新调用]";
     }
 
     /* ─── SSE emission ─────────────────────────────────────── */
 
-    private static function startSSE(?Response $response): void
-    {
-        self::setStream(null);
-
-        if ($response !== null) {
-            $connection = $response->getConnection();
-            if ($connection !== null) {
-                self::setStream(new EventStream($connection, $response));
-                return;
-            }
-        }
-
-        if (PHP_SAPI !== 'cli') {
-            header('Content-Type: text/event-stream');
-            header('Cache-Control: no-cache');
-            header('Connection: keep-alive');
-            header('X-Accel-Buffering: no');
-        }
-
-        if (ob_get_level() > 0) {
-            ob_end_flush();
-        }
-        flush();
-    }
-
-    private static function write(string $data): void
-    {
-        $stream = self::getStream();
-        if ($stream instanceof EventStream) {
-            $stream->write($data);
-        } else {
-            echo $data;
-            flush();
-        }
-    }
-
     private static function emitContent(string $delta): void
     {
-        self::write("data: " . json_encode(['choices' => [['delta' => ['content' => $delta]]]], JSON_UNESCAPED_UNICODE) . "\n\n");
+        SseWriter::write("data: " . json_encode(['choices' => [['delta' => ['content' => $delta]]]], JSON_UNESCAPED_UNICODE) . "\n\n");
     }
 
     private static function emitThinking(string $reasoning): void
     {
-        self::write("event: status\ndata: " . json_encode(['type' => 'thinking', 'delta' => $reasoning], JSON_UNESCAPED_UNICODE) . "\n\n");
+        SseWriter::write("event: status\ndata: " . json_encode(['type' => 'thinking', 'delta' => $reasoning], JSON_UNESCAPED_UNICODE) . "\n\n");
     }
 
     private static function emitTool(string $name, array $arguments): void
     {
-        self::write("event: status\ndata: " . json_encode(['type' => 'tool', 'name' => $name, 'arguments' => $arguments], JSON_UNESCAPED_UNICODE) . "\n\n");
+        SseWriter::write("event: status\ndata: " . json_encode(['type' => 'tool', 'name' => $name, 'arguments' => $arguments], JSON_UNESCAPED_UNICODE) . "\n\n");
     }
 
     private static function emitToolResult(string $name, string $result): void
     {
-        $summary = mb_substr($result, 0, self::STATUS_SUMMARY_BYTES);
-        self::write("event: status\ndata: " . json_encode([
+        $summary = match ($name) {
+            'read_log_file', 'list_log_files', 'list_topics' => self::buildCompactSummary($name, $result),
+            'rag_search' => self::buildHitListSummary($result),
+            default => mb_strcut($result, 0, self::STATUS_SUMMARY_BYTES),
+        };
+
+        SseWriter::write("event: status\ndata: " . json_encode([
             'type' => 'tool_result',
             'name' => $name,
             'summary' => $summary,
-            'truncated' => strlen($result) > self::STATUS_SUMMARY_BYTES,
+            'truncated' => strlen($result) > strlen($summary),
         ], JSON_UNESCAPED_UNICODE) . "\n\n");
+    }
+
+    /**
+     * Compact summaries for tools whose full output is meaningless to the user:
+     * read_log_file 的原文是给模型的，用户只需知道「读了哪个文件、多少行」；
+     * list_topics 只需知道知识库覆盖哪些主题目录。
+     */
+    private static function buildCompactSummary(string $tool, string $result): string
+    {
+        $lines = explode("\n", $result);
+
+        if ($tool === 'read_log_file') {
+            // 首行即概要：「文件 main（共 N 行，M 字节）」或「文件 X 已读取…」
+            $summary = trim($lines[0]);
+            foreach ($lines as $line) {
+                if (str_starts_with(trim($line), '[文件过大已截断')) {
+                    $summary .= "\n" . trim($line);
+                }
+            }
+            return $summary;
+        }
+
+        if ($tool === 'list_topics') {
+            // 首行统计 + 各主题目录行（跳过每目录下的文件示例明细）
+            $head = trim($lines[0]);
+            foreach ($lines as $line) {
+                $trim = trim($line);
+                if (str_starts_with($trim, '■')) {
+                    $head .= "\n" . $trim;
+                }
+            }
+            return mb_strcut($head !== '' ? $head : $result, 0, 1200);
+        }
+
+        // list_log_files 本身已是紧凑的文件清单
+        return mb_strcut($result, 0, self::STATUS_SUMMARY_BYTES);
+    }
+
+    /**
+     * Hit-list summary for multi-document results (rag_search 等) so the UI
+     * shows every matched document instead of the first one's body prefix —
+     * a plain 400-char cut made it look like only one document came back.
+     */
+    private static function buildHitListSummary(string $result): string
+    {
+        if (preg_match('/^在知识库中找到\s*(\d+)\s*条相关文档/u', $result, $countMatch)) {
+            // 标题段 (.+?) 允许包含全角括号等字符，靠行尾锚定与「（来源: …）」收尾定位，
+            // 否则标题自带括号的条目会被整条丢弃，出现「命中 5 条只列出 2 条」
+            preg_match_all('/^\[(\d+)\]\s*(.+?)（来源:\s*([^）]+)）\s*$/mu', $result, $hits, PREG_SET_ORDER);
+            if ($hits !== []) {
+                $lines = ['共命中 ' . $countMatch[1] . ' 条：'];
+                foreach ($hits as $hit) {
+                    $lines[] = sprintf('[%s] %s（%s）', $hit[1], trim($hit[2]), trim($hit[3]));
+                }
+                // 清单需要容纳全部命中条目，放宽到 3000 字符
+                return mb_strcut(implode("\n", $lines), 0, 3000);
+            }
+        }
+
+        return mb_strcut($result, 0, self::STATUS_SUMMARY_BYTES);
     }
 
     private static function emitLimit(int $rounds): void
     {
-        self::write("event: status\ndata: " . json_encode(['type' => 'limit', 'rounds' => $rounds], JSON_UNESCAPED_UNICODE) . "\n\n");
+        SseWriter::write("event: status\ndata: " . json_encode(['type' => 'limit', 'rounds' => $rounds], JSON_UNESCAPED_UNICODE) . "\n\n");
     }
 
     private static function emitDone(): void
     {
-        self::write("event: done\ndata: {\"status\":\"completed\"}\n\n");
-        self::end();
+        SseWriter::write("event: done\ndata: {\"status\":\"completed\"}\n\n");
+        SseWriter::end();
     }
 
     private static function emitError(string $message): void
     {
-        self::write("event: error\ndata: " . json_encode(['error' => $message], JSON_UNESCAPED_UNICODE) . "\n\n");
-        self::end();
-    }
-
-    private static function end(): void
-    {
-        $stream = self::getStream();
-        if ($stream instanceof EventStream) {
-            $stream->end();
-            self::setStream(null);
-        }
+        SseWriter::write("event: error\ndata: " . json_encode(['error' => $message], JSON_UNESCAPED_UNICODE) . "\n\n");
+        SseWriter::end();
     }
 
     /* ─── Cache ────────────────────────────────────────────── */
@@ -585,7 +685,7 @@ PROMPT;
                 return $cached;
             }
         } catch (\Exception $e) {
-            error_log("[LogAgent Cache] 读取失败: " . $e->getMessage());
+            \App\Syslog::error('LogAgent Cache', '读取失败: ' . $e->getMessage());
         }
         return null;
     }
@@ -595,7 +695,7 @@ PROMPT;
         try {
             \App\Cache\RedisCache::Set($cacheKey, $content, $cacheTTL);
         } catch (\Exception $e) {
-            error_log("[LogAgent Cache] 写入失败: " . $e->getMessage());
+            \App\Syslog::error('LogAgent Cache', '写入失败: ' . $e->getMessage());
         }
     }
 }

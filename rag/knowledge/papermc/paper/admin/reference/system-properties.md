@@ -1,0 +1,318 @@
+# System properties
+
+These system properties and environment variables can be set when you start your server allowing for the configuration
+of various settings.
+
+> **Danger: Danger Ahead**
+
+Setting flags for the JVM can alter how it operates and the same goes for the Paper server.
+If you are unsure about what a flag does, it is recommended that you **do not use it**.
+
+## How they work
+
+System properties are set when you start your server. For example, if you are using a `.bat` or a `.sh` file to start
+your server, you can add the system properties to the file. For example:
+
+```bash
+java -Dcom.mojang.eula.agree=true -jar paper.jar
+```
+
+> **Note**
+
+Some of Paper's system properties contain a `.` character in their name. When using PowerShell, these will require
+wrapping in quotes.
+i.e. `"-Dcom.mojang.eula.agree=true"`
+
+Where a `-D` is used to set a system property, and the system property is `com.mojang.eula.agree` with a value of
+`true`. Otherwise, just add them to the start command.
+
+> **Note**
+
+Where a system property is stated as `unset`, setting it as `true` will work to enable it.
+
+[Environment variables](https://en.wikipedia.org/wiki/Environment_variable) are another way to pass values to Paper.
+They can be set in various ways, depending on your operating system and how you start Paper.
+
+In most cases, you will not need to use these, unless you are running Paper in a (Docker) container or such.
+
+## List of system properties
+
+#### paper.playerconnection.keepalive
+
+- **default**: `30`
+- **description**: Controls how long the player connection will wait before closing when not receiving any keepalives,
+  in seconds.
+
+#### timings.bypassMax
+
+> **Danger: Deprecation**
+
+Timings are deprecated. Due to that, this flag does not have any effect.
+
+- **default**: `unset`
+- **description**: Allows for bypassing the max amount of data to send to the Aikar's Timings API. Setting this will not
+  permit bypassing the limit unless the API is configured to allow it.
+
+#### LetMeReload
+
+- **default**: `unset`
+- **description**: This disables the reload confirmation message when using the `/reload` command.
+
+#### paper.disableChannelLimit
+
+- **default**: `unset`
+- **description**: Disables the plugin channel limit for the server. This will disable the limit of 128 plugin channels
+  per player.
+
+#### net.kyori.adventure.text.warnWhenLegacyFormattingDetected
+
+- **default**: `false`
+- **description**: Enables or disables the warning when legacy formatting is detected in a chat component.
+
+#### Paper.DisableClassPrioritization
+
+- **default**: `unset`
+- **description**: Disables the class prioritization system - mostly an issue when failing to relocate or shade
+  properly.
+
+#### Paper.disableFlushConsolidate
+
+- **default**: `unset`
+- **description**: Disables the netty flush consolidation system.
+
+#### Paper.debugDynamicMissingKeys
+
+- **default**: `unset`
+- **description**: Enables debug logging for missing keys in NBT objects.
+
+#### disable.watchdog
+
+- **default**: `unset`
+- **description**: Disables the watchdog warning system.
+
+#### paper.explicit-flush
+
+- **default**: `unset`
+- **description**: Enables explicit flushing of the network channel.
+
+#### Paper.enable-sync-chunk-writes
+
+- **default**: `unset`
+- **description**: Syncs writes on each write call. This has a performance impact, particularly on hard drives.
+
+#### paper.debug-sync-loads
+
+- **default**: `unset`
+- **description**: Enables debug logging for sync chunk loads.
+
+#### Paper.ignoreWorldDataVersion
+
+- **default**: `unset`
+- **description**: Ignores the world data version when loading a world. This is not recommended and will likely cause
+  issues.
+
+#### Paper.bypassHostCheck
+
+- **default**: `unset`
+- **description**: Bypasses the host pattern matching attempt for the client when connecting to the server.
+
+#### paper.maxCustomChannelName
+
+- **default**: `32767`
+- **description**: Sets the largest size that a plugin channel name can take.
+
+#### Paper.maxSignLength
+
+- **default**: `80`
+- **description**: Sets the maximum line length for signs.
+
+#### Paper.minPrecachedDatafixVersion
+
+- **default**: `Minecraft world version + 1`
+- **description**: If you are expecting to convert a large number of chunks you might consider setting this to only
+  convert from a point onwards.
+
+#### Paper.WorkerThreadCount
+
+- **default**: half of available physical (**not logical**) cores or `1` if 3 or fewer cores are available
+- **description**: Sets the number of worker threads to use for chunk loading.
+  See [here](/paper/reference/global-configuration#chunk_system_worker_threads) for more info.
+
+#### Paper.MaxViewDistance
+
+- **default**: `32`
+- **description**: Overrides the maximum view distance of the server. This does not set the current view distance,
+  it simply modifies the limit.
+
+#### Paper.excessiveTELimit
+
+- **default**: `750`
+- **description**: Splits tile entities into multiple packets if there are more than this many.
+
+#### io.papermc.paper.suppress.sout.nags
+
+- **default**: `unset`
+- **description**: Suppresses the nag message about using `System.out`/`System.err` in a plugin.
+-
+
+#### io.papermc.paper.sout.nags.timeout
+
+- **default**: `5000`
+- **description**: Time in milliseconds between nag messages about using `System.out`/`System.err` in a plugin.
+  A value equal to or less than 0 results in time-based nags being disabled entirely.
+
+#### io.papermc.paper.sout.nags.interval
+
+- **default**: `200`
+- **description**: Amount of repeated `System.out`/`System.err` uses to wait before nagging again. Gets reset if
+  the timeout triggers first. A value equal to or less than 0 results in message-based nags being disabled entirely.
+
+#### Paper.skipServerPropertiesComments
+
+- **default**: `unset`
+- **description**: Skips the comments in the `server.properties` file.
+
+#### paper.alwaysPrintWarningState
+
+- **default**: `unset`
+- **description**: Always prints the warning state for the particular level.
+
+#### Paper.parseYamlCommentsByDefault
+
+- **default**: `true`
+- **description**: Sets whether to parse comments in YAML files by default.
+
+#### paperclip.patchonly
+
+- **default**: `false`
+- **description**: If the server is started via the Paperclip patch utility (the default distribution on the downloads
+  page) then this sets whether it should only patch the Vanilla server and download libraries without starting the
+  server.
+
+#### Paper.IgnoreJavaVersion
+
+- **default**: `false`
+- **description**: Allows you to bypass the Java version check.
+  See [here](/paper/faq#unsupported-java-detected-what-do-i-do) for more info.
+
+#### paper.disableStartupVersionCheck
+
+- **default**: `unset`
+- **description**: If set, disables the automatic update checking on startup. See [here](/paper/misc/update-checker) for
+  more info.
+
+#### paper.useLegacyPluginLoading
+
+- **default**: `false`
+- **description**: Allows cyclic plugin loading. See [here](/paper/reference/paper-plugins#cyclic-plugin-loading) for
+  more info.
+
+#### paper.disableOldApiSupport
+
+- **default**: `false`
+- **description**: Disables plugin compatibility measures that can otherwise result in a considerable delay of class
+  loading (also known as "Commodore" plugin rewriting). This generally requires all of your plugins to be compiled
+  against a recent API version.
+
+#### paper.preferSparkPlugin
+
+- **default**: `false`
+- **description**: Whether the bundled spark profiler should be disabled in favor of a standalone plugin. If the spark
+  plugin is not found, the bundled version will be loaded regardless of the setting, unless it
+  is [explicitly disabled](/paper/reference/global-configuration#spark_enabled).
+
+#### paper.disableWorldSymlinkValidation
+
+- **default**: `false`
+- **description**: Disables the folder walk and symlink validation when loading a world. Significantly improves world
+  loading speed on massive worlds (>1TB). This does not disable symlink verification of datapacks.
+
+#### paper.disableMigrationDelay
+
+> **Caution**
+
+It is not suggested that you use this flag on production servers. Always make sure to back up important data
+and know what you are doing.
+
+- **default**: `unset`
+- **description**: Disables the 30-second delay before starting a world migration.
+
+#### minecraft.api.session.host
+
+- **default**: `https://sessionserver.mojang.com`
+- **description**: Allows specifying of a custom session server URL e.g. for caching. [
+  `minecraft.api.services.host`](#minecraftapiserviceshost) needs to be set too for this to apply.
+
+#### minecraft.api.services.host
+
+- **default**: `https://api.minecraftservices.com`
+- **description**: Allows specifying of a custom services API URL e.g. for caching. [
+  `minecraft.api.session.host`](#minecraftapisessionhost) needs to be set too for this to apply.
+
+#### com.mojang.eula.agree
+
+- **default**: `false`
+- **description**: Setting this to true indicates that you have agreed
+  with [Mojang's EULA](https://aka.ms/MinecraftEULA), skipping `eula.txt` checks.
+
+#### org.bukkit.plugin.java.LibraryLoader.centralURL
+
+- **default**: `https://maven-central.storage-download.googleapis.com/maven2`
+- **description**: Sets the default central repository URL, from which plugins' dependencies declared using the [
+  `libraries`](/paper/dev/plugin-yml#libraries) plugin.yml field are resolved. This is overridden by the [
+  `PAPER_DEFAULT_CENTRAL_REPOSITORY`](#paper_default_central_repository) environment variable, if it is set.
+
+> **Caution**
+
+If you wish to configure this with Maven Central, use a mirror, as using Maven Central directly as a CDN is against the
+Maven Central Terms of Service, and you may hit rate limits.
+
+By default, this uses Google's NA mirror of Maven Central. You may also use region-specific mirrors
+listed [here](https://storage-download.googleapis.com/maven-central/index.html).
+
+#### paper.debugEntitiesWithInvalidIds
+
+- **default**: `false`
+- **description**: Enables logging the full entity NBT when an entity with a missing or otherwise invalid entity id is
+  attempted to be loaded. (Whenever 'Skipping Entity with id' is logged to the console.)
+
+#### paper.maxChatCommandInputSize
+
+- **default**: `256`
+- **description**: The maximum length a chat command may have. A Vanilla client cannot send more than 256 characters.
+
+#### management.tls.keystore.password
+
+- **default**: `unset`
+- **description**: Overrides the value set for `management-server-tls-keystore-password` in `server.properties`.
+
+## List of environment variables
+
+#### PAPER_VELOCITY_SECRET
+
+- **default**: `unset`
+- **description**: Overrides the [
+  `proxies.velocity.secret`](/paper/reference/global-configuration#proxies_velocity_secret) global configuration option.
+
+#### PAPER_DEFAULT_CENTRAL_REPOSITORY
+
+- **default**: `https://maven-central.storage-download.googleapis.com/maven2`
+- **description**: Sets the default central repository URL, from which plugins' dependencies declared using the [
+  `libraries`](/paper/dev/plugin-yml#libraries) plugin.yml field are resolved. This overrides the [
+  `org.bukkit.plugin.java.LibraryLoader.centralURL`](#orgbukkitpluginjavalibraryloadercentralurl) system property, if it
+  is set.
+
+#### MINECRAFT_MANAGEMENT_TLS_KEYSTORE_PASSWORD
+
+- **default**: `unset`
+- **description**: Overrides the value set for `management-server-tls-keystore-password` in `server.properties`. This
+  take precedence over the `management.tls.keystore.password` system property.
+
+> **Caution**
+
+If you wish to configure this with Maven Central, use a mirror, as using Maven Central directly as a CDN is against the
+Maven Central Terms of Service, and you may hit rate limits.
+
+By default, this uses Google's NA mirror of Maven Central. You may also use region-specific mirrors
+listed [here](https://storage-download.googleapis.com/maven-central/index.html).
+

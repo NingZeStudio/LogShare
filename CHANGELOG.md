@@ -1,5 +1,35 @@
 # Changelog
 
+## 1.7.1 — 2026-08-25
+
+> 语义 RAG 上线：知识库大扩容 + 向量检索与重排序，Agent 分析质量与部署体验全面优化。
+
+### ✨ 新功能
+
+- **语义 RAG 增强**：bge-m3 向量召回 + bge-reranker-v2-m3 精排（`ai.rag` 独立网关/密钥，多供应商 failover），API 异常自动回退纯词法检索
+- **知识库大扩容**：新增 Forge / NeoForge 官方开发者文档，PaperMC 全家桶（Paper/Velocity/Waterfall/Folia）、Purpur、Glowstone、Geyser、Quilt 服务端文档，以及 Android 启动器生态 issue 蒸馏库（patterns/renderers 等）——共 632 文件 / 2250 分块
+- **知识库清洗器**：下载脚本自动剥离 frontmatter / MDX / admonition / HTML 噪声，fenced code 完整保护
+- **CJK bigram 检索**：中文长串查询按 2-gram 降级匹配，不再空手而归
+- **tool_result 按工具定制摘要**：读文件只报行数、rag 输出命中清单、list_topics 折叠主题目录
+- **生产部署编排** `docker/compose.prod.yaml`：挂载完整 Config.inc.php，四服务 healthcheck
+
+### 🔧 改进
+
+- `read_log_file` 全文直返（无行区间参数）+ 会话级防重复读取拦截
+- 思维链 `reasoning_content` 按轮回传上游，修复 DeepSeek 思维模式工具调用 400
+- 检索 snippet 扩容（1600 字符整段阈值 / ±800 窗口）并保留 Markdown 结构；检索类工具结果限额放宽至 32KB
+- 限流 key 归一化防随机 ID 绕过；计数键 SET NX EX 原子初始化
+- Redis 支持密码/库选择；语义 RAG 支持 `AI_RAG_*` 环境变量；DB 连接池心跳保活
+- SSE 基础设施收敛为 `App\Sse\SseWriter`，日志统一 `App\Syslog`
+- 删除令牌落库改为 SHA-256 哈希（兼容存量明文）；Filters/Index 端点由配置动态生成
+
+### 🐛 修复
+
+- Docker 镜像补 `pdo_sqlite`（RAG 必需）；REDIS_PASSWORD 双端一致；AI_RAG env 透传
+- rerank 返回空结果集时兜底回退词法排序，检索不再「归零」
+- 分析结果 JSON 编码失败不再污染进程级缓存
+- ApiTest 重写为真实 HTTP 集成测试（上传/读取/删除全链路）
+
 ## 1.7.0 — 2026-08-23
 
 > 首个正式版（LTS）。在 1.7.0-beta.1 基础上完成 SpinYarn v1.0.0 去下载化、Docker 部署闭环、性能优化与两轮代码审查修复。

@@ -69,7 +69,7 @@ class Log
             try {
                 $result = $this->loadFromRedis();
             } catch (\Exception $e) {
-                error_log("[Redis] 缓存读取失败: " . $e->getMessage());
+                \App\Syslog::error("Redis", "缓存读取失败: " . $e->getMessage());
             }
         }
 
@@ -81,11 +81,15 @@ class Log
             $result = $storage::Get($this->id);
 
             if ($result !== null && $this->isCacheEnabled()) {
-                if ($this->shouldCacheToRedis($result['data'])) {
+                $filesBytes = array_sum(array_map(
+                    fn($file) => isset($file['size']) ? (int) $file['size'] : strlen($file['data'] ?? ''),
+                    $result['files'] ?? []
+                ));
+                if ($this->shouldCacheToRedis((string) $result['data'], $filesBytes)) {
                     try {
                         $this->saveToRedisCache($result);
                     } catch (\Exception $e) {
-                        error_log("[Redis] 缓存写入失败: " . $e->getMessage());
+                        \App\Syslog::error('Redis', '缓存写入失败: ' . $e->getMessage());
                     }
                 }
             }
@@ -138,7 +142,7 @@ class Log
      */
     public function getAnalysisJson(): string
     {
-        $key = md5($this->data);
+        $key = md5((string) $this->data);
         if (isset(self::$analysisJsonCache[$key])) {
             return self::$analysisJsonCache[$key];
         }
@@ -147,12 +151,18 @@ class Log
         $codexLog->setIncludeEntries(false);
         $json = json_encode($codexLog, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
 
+        // 编码失败（如内容含非法 UTF-8）时不得把空串写入缓存，
+        // 否则同内容的后续请求会持续命中坏缓存并返回空响应。
+        if ($json === false) {
+            throw new ApiError(500, 'Failed to encode analysis result: ' . json_last_error_msg());
+        }
+
         if (count(self::$analysisJsonCache) >= self::MAX_ANALYSIS_JSON_CACHE) {
             array_shift(self::$analysisJsonCache);
         }
-        self::$analysisJsonCache[$key] = (string) $json;
+        self::$analysisJsonCache[$key] = $json;
 
-        return (string) $json;
+        return $json;
     }
 
     /**
@@ -298,7 +308,10 @@ class Log
         $this->lineCount = null;
         $this->preFilter();
         $this->deobfuscateForStorage();
-        $this->token = $token ?? new Token();
+        $plainToken = $token ?? new Token();
+        // 存储层（MariaDB / 文件系统 / Redis 缓存）只落 SHA-256 哈希；
+        // 上传响应通过调用方持有的 $token 原对象返回原文。
+        $this->token = new Token(hash('sha256', (string) $plainToken->get()));
         $this->metadata = $metadata;
         $this->source = $source;
         $this->files = [];
@@ -306,15 +319,9 @@ class Log
         if (!empty($files)) {
             $filteredFiles = [];
             foreach ($files as $file) {
-                $name = $file['name'] ?? '';
-                $content = $file['data'] ?? '';
-                $filteredContent = $content;
-                $filterConfig = Config::Get('filter');
-                foreach ($filterConfig['pre'] as $preFilterClass) {
-                    $filteredContent = $preFilterClass::filter($filteredContent);
-                }
+                $filteredContent = $this->preFilterValue($file['data'] ?? '');
                 $filteredFiles[] = [
-                    'name' => $name,
+                    'name' => $file['name'] ?? '',
                     'data' => $filteredContent,
                     'size' => strlen($filteredContent),
                 ];
@@ -333,10 +340,8 @@ class Log
         $this->exists = true;
 
         if ($this->id !== null && $this->isCacheEnabled()) {
-            $filesBytes = array_sum(array_map(fn($file) => strlen($file['data'] ?? ''), $this->files));
-            $cacheConfig = Config::Get('cache');
-            $maxCacheSize = $cacheConfig['maxSize'] ?? (600 * 1024);
-            if ($this->shouldCacheToRedis($this->data) && strlen($this->data) + $filesBytes <= $maxCacheSize) {
+            $filesBytes = array_sum(array_map(fn($file) => strlen($file['data']), $this->files));
+            if ($this->shouldCacheToRedis($this->data, $filesBytes)) {
                 try {
                     $this->saveToRedisCache([
                         'data' => $this->data,
@@ -347,7 +352,7 @@ class Log
                         'files' => $this->files,
                     ]);
                 } catch (\Exception $e) {
-                    error_log("[Redis] 缓存写入失败: " . $e->getMessage() . "，已降级到 MariaDB");
+                    \App\Syslog::error('Redis', '缓存写入失败: ' . $e->getMessage() . '，已降级到 MariaDB');
                 }
             }
         }
@@ -360,6 +365,10 @@ class Log
      */
     public function renew()
     {
+        if (!$this->id) {
+            return;
+        }
+
         $config = Config::Get('storage');
 
         /**
@@ -377,7 +386,7 @@ class Log
                     \App\Storage\MariaDbStorage::CleanupExpired();
                 }
             } catch (\Exception $e) {
-                error_log("[Storage] 过期日志清理失败: " . $e->getMessage());
+                \App\Syslog::error("Storage", "过期日志清理失败: " . $e->getMessage());
             }
         }
 
@@ -385,7 +394,7 @@ class Log
             try {
                 $this->renewRedisCache();
             } catch (\Exception $e) {
-                error_log("[Redis] 缓存 TTL 续期失败: " . $e->getMessage());
+                \App\Syslog::error("Redis", "缓存 TTL 续期失败: " . $e->getMessage());
             }
         }
 
@@ -397,10 +406,20 @@ class Log
      */
     private function preFilter()
     {
+        $this->data = $this->preFilterValue((string) $this->data);
+    }
+
+    /**
+     * Run the pre filter chain over a single content string
+     * (shared by the primary log body and additional files).
+     */
+    private function preFilterValue(string $data): string
+    {
         $config = Config::Get('filter');
         foreach ($config['pre'] as $preFilterClass) {
-            $this->data = $preFilterClass::filter($this->data);
+            $data = $preFilterClass::filter($data);
         }
+        return $data;
     }
 
     /**
@@ -440,7 +459,7 @@ class Log
             try {
                 $this->deleteFromRedisCache();
             } catch (\Exception $e) {
-                error_log("[Redis] 缓存删除失败: " . $e->getMessage());
+                \App\Syslog::error("Redis", "缓存删除失败: " . $e->getMessage());
             }
         }
 
@@ -596,7 +615,7 @@ class Log
 
         $decoded = json_decode($cachedData, true);
         if ($decoded === null || !is_array($decoded)) {
-            error_log("[Redis] 缓存数据 JSON 解析失败: " . $cacheKey);
+            \App\Syslog::error("Redis", "缓存数据 JSON 解析失败: " . $cacheKey);
             return null;
         }
 
@@ -611,16 +630,20 @@ class Log
     }
 
     /**
-     * 判断日志是否应该缓存到 Redis
+     * 判断日志是否应该缓存到 Redis。
      *
-     * @param string $data 日志数据
+     * 统一口径：主内容 + 附加文件字节总量均不得超过 cache.maxSize，
+     * load 回源与 put 写入两条路径共用本判定。
+     *
+     * @param string $data 主日志数据
+     * @param int $filesBytes 附加文件字节总量
      * @return bool
      */
-    private function shouldCacheToRedis(string $data): bool
+    private function shouldCacheToRedis(string $data, int $filesBytes = 0): bool
     {
         $config = Config::Get('cache');
         $maxCacheSize = $config['maxSize'] ?? (600 * 1024);
-        return strlen($data) <= $maxCacheSize;
+        return strlen($data) + $filesBytes <= $maxCacheSize;
     }
 
     /**

@@ -13,6 +13,7 @@ class RedisMock
     public function auth(): bool { return true; }
     public function select(): bool { return true; }
     public function ping(): bool { return true; }
+    public function isConnected(): bool { return true; }
 
     public function get(string $key): string|false
     {
@@ -38,8 +39,15 @@ class RedisMock
         return true;
     }
 
-    public function set(string $key, string $value, string|int $mode = 'EX', int $ttl = 0): bool
+    public function set(string $key, string $value, string|array|int $mode = 'EX', int $ttl = 0): bool
     {
+        // 支持 ext-redis 的选项数组形式：set($key, $value, ['nx', 'ex' => 10])
+        if (is_array($mode)) {
+            $ttl = (int) ($mode['ex'] ?? 0);
+            if (in_array('nx', $mode, true) && isset(self::$data[$key])) {
+                return false;
+            }
+        }
         self::$data[$key] = $value;
         if ($ttl > 0) {
             self::$ttl[$key] = time() + $ttl;
