@@ -22,7 +22,7 @@ php bin/hyperf.php start          # start the Swoole HTTP server (9501, RAG serv
 php bin/hyperf.php rag:build      # (re)build the RAG SQLite FTS5 index
 ```
 
-`composer stan` runs `phpstan analyse app --level=5`. `composer cs-fix` references `php-cs-fixer`, which is not installed and has no config; there is no enforced formatter.
+`composer stan` runs `phpstan analyse app --level=5`. No formatter is configured.
 
 `phpstan.neon` (and Pest coverage) **exclude** `app/Data/*`, `app/Cache/*`, `app/Client/*`, `app/Storage/*` — those dirs are not type-checked or coverage-measured. `composer test:coverage` writes `coverage/clover.xml`.
 
@@ -76,15 +76,17 @@ All source classes live under `App\` PSR-4 (`composer.json` maps `App\` → `app
 
 - `App\Controller\*` — HTTP controllers (extend `AbstractController`)
 - `App\Storage\*` — `MariaDbStorage` / `FilesystemStorage`
-- `App\Filter\*` — pre-filter redaction chain
+- `App\Filter\*` — pre-filter redaction chain (incl. `Pattern/`)
 - `App\Data\*` — `Token`, `MetadataEntry`
 - `App\Client\*` — `AIClient`, `MCPClient`, `RedisClient`, `SpinYarnClient`
 - `App\Agent\*` — `LogAgent` (tool loop)
 - `App\Rag\*` — `RagSearch` (SQLite FTS5)
+- `App\Sse\*` — `SseWriter`
 - `App\Cache\*` — `RedisCache` (optional cache layer) + `CacheInterface`
 - `App\Command\*` — `RagBuildCommand` (`rag:build` Hyperf command)
 - `App\Middleware\*` — `CorsMiddleware`, `RateLimitMiddleware` (global HTTP middleware)
 - `App\Exception\Handler\*` — exception handlers
+- `App\Syslog` — uniform diagnostic logging (`Syslog::error()`); do not use raw `error_log()`
 - Top-level `App\`: `Config`, `Log`, `Id`, `Version`, `ApiError`, `ApiResponse`, `ContentParser`, `UploadParser`, `Detective`
 
 Reference classes as `\App\Foo` / `App\Sub\Foo`; never prefix `LogShare\`.
@@ -104,7 +106,7 @@ Controllers extend `App\Controller\AbstractController`, which provides:
 
 `ApiError` is thrown for expected errors; `App\Exception\Handler\ApiExceptionHandler` renders it as JSON with the correct status code.
 
-Global HTTP middleware (`config/autoload/middlewares.php`): `CorsMiddleware` then `RateLimitMiddleware`. Rate limiting is Redis `INCR`+`EXPIRE` keyed by `IP + method + normalized path` (dynamic resource segments like `/v1/raw/{id}` collapse to `/v1/raw/*`; config `rateLimit`, default 36000/60s) and **fails open** when Redis is unavailable.
+Global HTTP middleware (`config/autoload/middlewares.php`): `CorsMiddleware` then `RateLimitMiddleware`. Rate limiting is Redis `INCR`+`EXPIRE` keyed by `IP + method + normalized path` (dynamic resource segments like `/v1/raw/{id}` collapse to `/v1/raw/*`; config `rateLimit`, default 36000/60s) and **fails open** when Redis is unavailable. When behind a reverse proxy, list trusted-proxy IPs in `rateLimit.trustedProxies` so the `X-Real-IP` header is used instead of `remote_addr`.
 
 API changes must be reflected in the maintained API docs: `openapi.yaml`, `postman_collection.json`, and `API.md` — all three are referenced from `README.md`.
 
@@ -112,7 +114,7 @@ API changes must be reflected in the maintained API docs: `openapi.yaml`, `postm
 
 Applied before storage. Configured in `Config.inc.php` under `filter.pre`:
 - Trim, LimitBytes (10MB), LimitLines (50K) — the two `Limit*` filters **reject** oversized input (400) rather than truncating
-- IPv4, IPv6, IPv6Short, UUID, XUID, SessionToken, ClientId, Coordinate, Username, AccessToken redaction
+- Encoding, IPv4, IPv6, IPv6Short, UUID, XUID, SessionToken, ClientId, Coordinate, Username, AccessToken redaction
 
 ## Content parsing
 
@@ -123,8 +125,8 @@ Applied before storage. Configured in `Config.inc.php` under `filter.pre`:
 When `ai.enabled` is false (`AI_ENABLED` env overrides), all `/v1/ai/*` routes return 404 — check this first when debugging missing AI endpoints. When `ai.agent.enabled` is true, those routes run the model-driven tool loop (`App\Agent\LogAgent`):
 
 - `App\Client\MCPClient` — lightweight Streamable-HTTP MCP client (curl + JSON-RPC, zero deps). Used for `web_search_exa` (Exa hosted endpoint) and `rag_search`.
-- `App\Rag\RagSearch` + `App\Controller\RagController` — built-in RAG MCP server (SQLite FTS5 BM25), hosted by Hyperf on the main `http` server under the `/rag` path, MCP JSON-RPC 2.0 protocol. DB path from `ai.mcp.rag.db` (default `rag/index.db`); `RAG_DB_PATH` env overrides. Build index via `php bin/hyperf.php rag:build`. Knowledge base (`rag/knowledge/`) includes Fabric developer docs, Forge & NeoForge docs (`scripts/download_modloader_docs.sh`), server/proxy admin docs for PaperMC family (Paper/Velocity/Waterfall/Folia/Adventure), Purpur, Glowstone, Geyser and Quilt (`scripts/download_server_docs.sh`), plus hand-distilled Android-launcher issue KBs (`*-issues`, `patterns`, `renderers`); both download scripts run `scripts/clean_knowledge_docs.php` afterwards (frontmatter/MDX/admonition/HTML stripping; meta-file deletion applies to upstream dirs only). Bukkit/Spigot/BungeeCord are NOT indexed — no markdown source exists upstream. Search semantics: strict AND first, degrades to OR (bm25 / matched-term ranking); CJK runs are exploded into bigrams so Chinese multi-word queries never return empty. Semantic enhancement (`ai.rag` section, off by default): when enabled with an independent gateway/key, `rag:build` embeds chunks via bge-m3 and search adds vector recall + bge-reranker-v2-m3 reordering (`App\Rag\SemanticClient`); any API failure degrades silently to lexical-only. Env: `AI_RAG_ENABLED` / `AI_RAG_BASE_URL` / `AI_RAG_API_KEY`.
-- `App\Client\AIClient::streamChat()` — streaming LLM request via curl (coroutine-hooked by `SWOOLE_HOOK_ALL`), multi-key rotation; parses `content`, `reasoning_content`, `tool_calls` deltas.
+- `App\Rag\RagSearch` + `App\Controller\RagController` — built-in RAG MCP server (SQLite FTS5 BM25), hosted by Hyperf on the main `http` server under the `/rag` path, MCP JSON-RPC 2.0 protocol. DB path from `ai.mcp.rag.db` (default `rag/index.db`); `RAG_DB_PATH` env overrides. Build index via `php bin/hyperf.php rag:build`. Access control: by default the `/rag` endpoint only accepts loopback connections; to expose it via a reverse proxy, set `ai.mcp.rag.authToken` and require `Authorization: Bearer <token>` (LogAgent automatically forwards it). The RAG JSON-RPC request body intentionally has no application-level size limit; this is by design for the MCP transport. Limit individual `rag_search.query` values instead. Knowledge base (`rag/knowledge/`) includes Fabric developer docs, Forge & NeoForge docs (`scripts/download_modloader_docs.sh`), server/proxy admin docs for PaperMC family (Paper/Velocity/Waterfall/Folia/Adventure), Purpur, Glowstone, Geyser and Quilt (`scripts/download_server_docs.sh`), plus hand-distilled Android-launcher issue KBs (`*-issues`, `patterns`, `renderers`); both download scripts run `scripts/clean_knowledge_docs.php` afterwards (frontmatter/MDX/admonition/HTML stripping; meta-file deletion applies to upstream dirs only). Bukkit/Spigot/BungeeCord are NOT indexed — no markdown source exists upstream. Search semantics: strict AND first, degrades to OR (bm25 / matched-term ranking); CJK runs are exploded into bigrams so Chinese multi-word queries never return empty. Semantic enhancement (`ai.rag` section, off by default): when enabled with an independent gateway/key, `rag:build` embeds chunks via bge-m3 and search adds vector recall + bge-reranker-v2-m3 reordering (`App\Rag\SemanticClient`); any API failure degrades silently to lexical-only. Env: `AI_RAG_ENABLED` / `AI_RAG_BASE_URL` / `AI_RAG_API_KEY`.
+- `App\Client\AIClient::streamChat()` — streaming LLM request via curl (coroutine-hooked by `SWOOLE_HOOK_ALL`), multi-key rotation; parses `content`, `reasoning_content`, `tool_calls` deltas. Robustness against misbehaving gateways: in-stream `data: {"error":...}` frames (HTTP 200) are surfaced as failures so the next key is tried; SSE lines without the space separator (`data:{...}`) are accepted; if the body parses as a one-shot non-streaming JSON completion (gateway ignored `stream=true`), it is consumed as a single delta instead of failing with "empty stream"; a truly empty stream logs the response-body head to Syslog (`Empty stream diagnostics, body head: ...`) before throwing.
 - SSE is written through `App\Sse\SseWriter` (shared by AIClient + LogAgent); under Swoole the stream handle lives in `Hyperf\Context\Context` (coroutine-scoped) with a static fallback only for CLI/tests — don't hold it in a plain static for request handling.
 - Diagnostic logging goes through `App\Syslog::error(component, message)` (uniform `[Component] message` format over `error_log`), not raw `error_log()` calls.
 - Session-scoped file tools `list_log_files` / `read_log_file` operate only on the bound log id (`logId`), so the agent cannot read other logs.
@@ -136,8 +138,7 @@ When `ai.enabled` is false (`AI_ENABLED` env overrides), all `/v1/ai/*` routes r
 docker compose -f docker/compose.yaml up -d
 ```
 
-- nginx reverse-proxies `9300` → Hyperf `9501` (SSE-friendly: `proxy_buffering off`, `proxy_read_timeout 300s`)
-- `hyperf` service — resident process built by `docker/hyperf.Dockerfile` (Swoole 6.2 (pinned via `SWOOLE_VERSION` build arg) + SpinYarn + pdo_mysql + pdo_sqlite (RAG) + redis; project code + vendor baked into the image via `composer install`); serves RAG on the main HTTP server under `/rag`; ships a PHP-based healthcheck probing `/v1/limits`
+- `hyperf` service — resident process built by `docker/hyperf.Dockerfile` (Swoole 6.2 (pinned via `SWOOLE_VERSION` build arg) + SpinYarn + pdo_mysql + pdo_sqlite (RAG) + redis; project code + vendor baked into the image via `composer install`); serves RAG on the main HTTP server under `/rag`; ships a PHP-based healthcheck probing `/v1/limits`; listens on `9501`
 - `mariadb:11` (schema auto-created by `docker/mariadb-init.sql`) + `redis:7-alpine`
 - named volumes: `mariadb-data`, `redis-data`; host `./mappings` is bind-mounted into `hyperf` at `/app/mappings`
 - **Deployment notes:** `.dockerignore` excludes `Config.inc.php` (secrets never enter the image — the app falls back to `Config.inc.example.php`); configure via compose envs (`AI_ENABLED`, `AI_API_KEYS`, `REDIS_PASSWORD`, `MARIADB_PASSWORD`). `REDIS_PASSWORD` is applied to **both** hyperf and redis (redis starts with conditional `--requirepass`), so setting it on one side only will break cache/rate-limit. `mariadb-init.sql` runs only when the `mariadb-data` volume is empty (first init); pre-existing volumes from older deployments need manual schema creation.
@@ -146,4 +147,4 @@ docker compose -f docker/compose.yaml up -d
 
 - Requires PHP 8.4+, ext-json, ext-zlib, ext-mbstring, ext-pdo_mysql; Swoole 6.2 (resident server). SpinYarn deobfuscation requires the optional `spinyarn` extension (degrades gracefully when absent).
 - MariaDB + Redis hostnames come from `DB_*` / `REDIS_*` env (framework config) — see `config/autoload/databases.php`.
-- Max upload: nginx 210MB, app 10MB (`maxLength`).
+- Max upload: app 10MB (`maxLength`); external reverse proxies should allow a larger request body.

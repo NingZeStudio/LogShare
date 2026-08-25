@@ -21,6 +21,7 @@ namespace App\Rag;
 final class SemanticClient
 {
     private const CONNECT_TIMEOUT = 10;
+    private const MAX_RESPONSE_BYTES = 2097152;
 
     /**
      * @param array<int, array{name: string, baseUrl: string, apiKey: string, embeddingModel: string, rerankModel: string}> $providers
@@ -33,6 +34,14 @@ final class SemanticClient
 
     public static function provider(string $name, string $baseUrl, string $apiKey, string $embeddingModel, string $rerankModel): array
     {
+        $parts = parse_url($baseUrl);
+        if (!is_array($parts) || !in_array(strtolower($parts['scheme'] ?? ''), ['http', 'https'], true) || ($parts['host'] ?? '') === '') {
+            throw new \InvalidArgumentException('Semantic provider URL must use HTTP or HTTPS');
+        }
+        $host = strtolower((string) $parts['host']);
+        if ($host === 'localhost' || str_ends_with($host, '.local') || filter_var($host, FILTER_VALIDATE_IP) !== false && !filter_var($host, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE)) {
+            throw new \InvalidArgumentException('Semantic provider URL targets a private address');
+        }
         return [
             'name' => $name,
             'baseUrl' => rtrim($baseUrl, '/'),
@@ -197,6 +206,7 @@ final class SemanticClient
         $ch = curl_init($provider['baseUrl'] . $path);
         curl_setopt_array($ch, [
             CURLOPT_POST => true,
+            CURLOPT_MAXFILESIZE => self::MAX_RESPONSE_BYTES,
             CURLOPT_POSTFIELDS => json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE),
             CURLOPT_HTTPHEADER => [
                 'Content-Type: application/json',
@@ -213,6 +223,9 @@ final class SemanticClient
 
         if ($body === false || $body === '') {
             throw new \RuntimeException('request failed: ' . ($curlError !== '' ? $curlError : 'empty response'));
+        }
+        if (strlen((string) $body) > self::MAX_RESPONSE_BYTES) {
+            throw new \RuntimeException('response too large');
         }
         if ($httpCode >= 400) {
             throw new \RuntimeException('HTTP ' . $httpCode . ': ' . mb_substr((string) $body, 0, 200));

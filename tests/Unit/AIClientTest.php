@@ -115,6 +115,98 @@ test('streamChat continues with tool result messages', function () {
     expect($content)->toBe('最终分析结果');
 });
 
+test('streamChat consumes a non-streaming JSON body as a one-shot result', function () {
+    skipWithoutMockServer($GLOBALS['llm_base_url']);
+    $content = '';
+    $reasoning = '';
+    $done = false;
+
+    AIClient::streamChat(
+        [['role' => 'user', 'content' => 'NONSTREAM_FALLBACK_TEST']],
+        [],
+        function ($delta) use (&$content) {
+            $content .= $delta;
+        },
+        function ($delta) use (&$reasoning) {
+            $reasoning .= $delta;
+        },
+        function () {
+        },
+        function ($full, $hasTools) use (&$content, &$done) {
+            $done = true;
+        }
+    );
+
+    expect($reasoning)->toBe('一次性思考');
+    expect($content)->toBe('非流式完整回复');
+    expect($done)->toBeTrue();
+});
+
+test('streamChat accepts data: lines without the space separator', function () {
+    skipWithoutMockServer($GLOBALS['llm_base_url']);
+    $content = '';
+
+    AIClient::streamChat(
+        [['role' => 'user', 'content' => 'NO_SPACE_SSE_TEST']],
+        [],
+        function ($delta) use (&$content) {
+            $content .= $delta;
+        },
+        function () {
+        },
+        function () {
+        },
+        function () {
+        }
+    );
+
+    expect($content)->toBe('无空格流');
+});
+
+test('streamChat surfaces upstream in-stream error frames', function () {
+    skipWithoutMockServer($GLOBALS['llm_base_url']);
+
+    try {
+        AIClient::streamChat(
+            [['role' => 'user', 'content' => 'STREAM_ERROR_FRAME_TEST']],
+            [],
+            function () {
+            },
+            function () {
+            },
+            function () {
+            },
+            function () {
+            }
+        );
+        expect(true)->toBeFalse();
+    } catch (\Exception $e) {
+        expect($e->getMessage())->toContain('上下文长度超出限制');
+    }
+});
+
+test('streamChat throws on an HTTP 200 stream with no consumable data', function () {
+    skipWithoutMockServer($GLOBALS['llm_base_url']);
+
+    try {
+        AIClient::streamChat(
+            [['role' => 'user', 'content' => 'EMPTY_STREAM_TEST']],
+            [],
+            function () {
+            },
+            function () {
+            },
+            function () {
+            },
+            function () {
+            }
+        );
+        expect(true)->toBeFalse();
+    } catch (\Exception $e) {
+        expect($e->getMessage())->toContain('upstream returned an empty stream');
+    }
+});
+
 test('streamChat throws when all keys fail', function () {
     skipWithoutMockServer($GLOBALS['llm_base_url']);
     // Point config at an unreachable host

@@ -1,6 +1,6 @@
 # RAG 检索（SQLite FTS5 本地知识库）
 
-LogShare 的内置 RAG 实现：基于 SQLite FTS5（BM25）的纯本地知识库检索，零网络、零 embedding。已整合进 Hyperf 进程，作为 MCP 服务在主 server 的 `/rag` 路径承载（JSON-RPC 2.0 协议）。
+LogShare 的内置 RAG 实现：基于 SQLite FTS5（BM25）的纯本地知识库检索，可选的 bge-m3 向量召回 + bge-reranker-v2-m3 精排增强。已整合进 Hyperf 进程，作为 MCP 服务在主 server 的 `/rag` 路径承载（JSON-RPC 2.0 协议）。该端点默认仅允许本机回环调用；通过反向代理或外部 MCP 客户端访问时需配置 `ai.mcp.rag.authToken` 并携带 Bearer Token。
 
 ## 组成
 
@@ -49,18 +49,19 @@ RAG 已整合进 Hyperf 主进程，随 `php bin/hyperf.php start` 一并启动�
         'rag' => [
             'url' => 'http://127.0.0.1:9501/rag',
             'db'  => 'rag/index.db',
+            'authToken' => '',  // 设置后需携带 Bearer token
         ],
     ],
 ],
 ```
 
-LogAgent 即可通过 `rag_search(query, k)` 检索知识库。
+LogAgent 即可通过 `rag_search(query, k)` 检索知识库。当 `authToken` 不为空时，Agent 会自动携带 `Authorization: Bearer <authToken>` 头。
 
 ## 检索策略
 
 - 英文 / 代码 token（错误类名、mod 名）走 FTS5 前缀匹配，BM25 排序，标题权重 10、正文 1
 - 中文短语与子串走 LIKE 兜底，与 FTS5 结果合并去重
-- 短正文（≤ 600 字符）整段返回；长正文围绕命中词按句子边界提取片段（向前/后各约 250 字符），命中词居中，无命中时返回开头片段
+- 短正文（≤ 1600 字符）整段返回；长正文围绕命中词按句子边界提取片段（向前/后各约 800 字符），命中词居中，无命中时返回开头片段
 
 ## 测试
 

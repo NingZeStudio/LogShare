@@ -1,16 +1,4 @@
 services:
-  nginx:
-    image: nginx:latest
-    container_name: mclogs-nginx
-    ports:
-      - "9300:9300"
-    volumes:
-      - ./mclogs.conf:/etc/nginx/conf.d/default.conf
-    depends_on:
-      - hyperf
-    networks:
-      - mclogs-network
-
   hyperf:
     container_name: mclogs-hyperf
     build:
@@ -18,8 +6,14 @@ services:
       dockerfile: docker/hyperf.Dockerfile
       args:
         SWOOLE_VERSION: ${SWOOLE_VERSION:-6.2.0}
+    ports:
+      # 只绑回环：公网流量经宿主机反向代理进入
+      - "127.0.0.1:9501:9501"
     volumes:
       - ./mappings:/app/mappings
+      # 完整业务配置（AI 密钥、语义 RAG、生产域名等）挂载到容器内，
+      # 文件不存在时自动回退 Config.inc.example.php；该文件已被 .gitignore 排除
+      - ../Config.inc.php:/app/Config.inc.php:ro
     environment:
       APP_ENV: prod
       SCAN_CACHEABLE: "true"
@@ -31,8 +25,8 @@ services:
       REDIS_HOST: redis
       REDIS_PORT: "6379"
       REDIS_PASSWORD: ${REDIS_PASSWORD:-}
-      # AI 开关与密钥：不设置 AI_API_KEYS 时建议 AI_ENABLED=false，
-      # 否则 /v1/ai/* 会在分析时返回流内错误（镜像内 fallback 配置无密钥）
+      # AI 开关与密钥：不设置 AI_API_KEYS 时 AI_ENABLED=false 可关闭 AI 路由，
+      # 否则 /v1/ai/* 会因缺少密钥在流内返回错误。
       AI_ENABLED: ${AI_ENABLED:-true}
       AI_API_KEYS: ${AI_API_KEYS:-}
       # 语义 RAG 增强（bge-m3 / bge-reranker-v2-m3）：env 仅覆盖单主供应商场景，

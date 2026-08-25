@@ -17,6 +17,8 @@ use Psr\Http\Message\ResponseInterface;
 class RagController extends AbstractController
 {
     private const SERVER_VERSION = \App\Version::VERSION;
+    private const MAX_QUERY_CHARS = 512;
+    private const EXTRA_HOP_HEADERS = ['HTTP_X_FORWARDED_FOR', 'HTTP_X_REAL_IP', 'HTTP_FORWARDED'];
 
     private static ?RagSearch $search = null;
 
@@ -38,6 +40,29 @@ class RagController extends AbstractController
     #[RequestMapping(path: '', methods: ['GET', 'POST'])]
     public function mcp(): ResponseInterface
     {
+        // 访问控制：RAG MCP 端点进程内自用/回环调用为主，不应直接暴露到公网。
+        // 未配置 ai.mcp.rag.authToken 时仅接受来自本机回环（127.0.0.1/::1）的
+        // 直接连接；配置了 authToken 后，任何来源都必须在 Authorization 头
+        // 携带 Bearer <authToken>（else 分支保证外部流量不能绕过 token 校验）。
+        $token = (string) (\App\Config::Get('ai')['mcp']['rag']['authToken'] ?? '');
+        $server = $this->request->getServerParams();
+        $remote = (string) ($server['remote_addr'] ?? '');
+        $isLoopback = in_array($remote, ['127.0.0.1', '::1', 'localhost'], true);
+        $proxied = array_filter(array_map(
+            fn($h) => (string) ($server[$h] ?? ''),
+            self::EXTRA_HOP_HEADERS
+        ));
+        if (!$isLoopback || $proxied !== []) {
+            $authorization = $this->request->getHeaderLine('Authorization');
+            if ($token === '' || $authorization !== 'Bearer ' . $token) {
+                return $this->respondJson([
+                    'jsonrpc' => '2.0',
+                    'id' => null,
+                    'error' => ['code' => -32001, 'message' => 'Unauthorized'],
+                ]);
+            }
+        }
+
         try {
             $rag = $this->getSearch();
         } catch (\Throwable $e) {
@@ -121,6 +146,9 @@ class RagController extends AbstractController
                     if ($query === '') {
                         throw new \InvalidArgumentException('rag_search requires a non-empty query');
                     }
+                    if (mb_strlen($query) > self::MAX_QUERY_CHARS) {
+                        throw new \InvalidArgumentException('rag_search query is too long');
+                    }
 
                     $k = isset($arguments['k']) ? (int) $arguments['k'] : 5;
                     $results = $rag->search($query, $k);
@@ -147,7 +175,7 @@ class RagController extends AbstractController
             $response['error'] = ['code' => -32601, 'message' => $e->getMessage()];
         } catch (\Throwable $e) {
             // 内部错误（PDO/IO 等）可能携带数据库路径、schema 等环境细节，
-            // /rag 为公开无鉴权端点，对外只返回通用消息，细节仅写日志。
+            // /rag 即使通过鉴权后对外部仍保持最小信息暴露，只返回通用消息，细节仅写日志。
             \App\Syslog::error('RAG', 'tool call failed: ' . $e->getMessage());
             $response['error'] = ['code' => -32603, 'message' => 'Internal error'];
         }

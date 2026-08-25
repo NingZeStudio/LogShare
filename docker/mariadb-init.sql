@@ -14,7 +14,8 @@ CREATE TABLE IF NOT EXISTS log_files (
     name VARCHAR(512) NOT NULL,
     data LONGTEXT NOT NULL,
     size INT UNSIGNED NOT NULL,
-    KEY idx_log_files_log_id (log_id)
+    KEY idx_log_files_log_id (log_id),
+    CONSTRAINT fk_log_files_log_id FOREIGN KEY (log_id) REFERENCES logs (id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS log_metadata (
@@ -24,5 +25,6 @@ CREATE TABLE IF NOT EXISTS log_metadata (
     `value` TEXT NULL,
     `label` VARCHAR(128) NULL,
     `visible` TINYINT(1) NOT NULL DEFAULT 1,
-    KEY idx_log_metadata_log_id (log_id)
+    KEY idx_log_metadata_log_id (log_id),
+    CONSTRAINT fk_log_metadata_log_id FOREIGN KEY (log_id) REFERENCES logs (id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

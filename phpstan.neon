@@ -6,10 +6,7 @@ parameters:
   paths:
     - app
   excludePaths:
-    - app/Data/*
-    - app/Cache/*
-    - app/Client/*
-    - app/Storage/*
+    - app/Client/SpinYarnClient.php
   ignoreErrors:
     # Aternos Codex type hierarchy: analyse() lives on AnalysableLogInterface,
     # while detect() returns the base LogInterface. Runtime classes implement both.

@@ -11,6 +11,48 @@ foreach (($req['messages'] ?? []) as $m) {
     }
 }
 
+// ---- scenario markers injected via the user message text ----
+if (str_contains($body, 'NONSTREAM_FALLBACK_TEST')) {
+    // Gateway ignored stream=true and answered with a one-shot JSON body
+    header('Content-Type: application/json');
+    echo json_encode([
+        'id' => 'mock-nonstream',
+        'object' => 'chat.completion',
+        'choices' => [[
+            'index' => 0,
+            'message' => [
+                'role' => 'assistant',
+                'reasoning_content' => '一次性思考',
+                'content' => '非流式完整回复',
+            ],
+            'finish_reason' => 'stop',
+        ]],
+        'usage' => ['prompt_tokens' => 1, 'completion_tokens' => 2, 'total_tokens' => 3],
+    ], JSON_UNESCAPED_UNICODE);
+    return;
+}
+
+if (str_contains($body, 'NO_SPACE_SSE_TEST')) {
+    header('Content-Type: text/event-stream');
+    echo "data:{\"choices\":[{\"delta\":{\"content\":\"无空格流\"},\"finish_reason\":null}]}\n\n";
+    echo "data:[DONE]\n\n";
+    return;
+}
+
+if (str_contains($body, 'STREAM_ERROR_FRAME_TEST')) {
+    // HTTP 200 with an in-stream error frame
+    header('Content-Type: text/event-stream');
+    echo "data: {\"error\":{\"message\":\"上下文长度超出限制\",\"type\":\"invalid_request_error\"}}\n\n";
+    return;
+}
+
+if (str_contains($body, 'EMPTY_STREAM_TEST')) {
+    // HTTP 200 but nothing consumable at all
+    header('Content-Type: text/event-stream');
+    echo ": keep-alive\n\n";
+    return;
+}
+
 header('Content-Type: text/event-stream');
 header('Cache-Control: no-cache');
 

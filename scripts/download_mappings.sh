@@ -53,8 +53,9 @@ download_one() {
     local version="$1"
     local build="$2"
     local gz_file="${MAPPINGS_DIR}/${version}.tiny.gz"
+    local part_file="${gz_file}.part"
 
-    if [[ -f "$gz_file" ]]; then
+    if [[ -s "$gz_file" ]] && gzip -t "$gz_file" 2>/dev/null; then
         echo "  [skip] $version already exists"
         return 0
     fi
@@ -68,7 +69,9 @@ download_one() {
 
     # 1. Direct tiny.gz
     if echo "$listing" | grep -q "yarn-${encoded}-tiny.gz"; then
-        if curl -sfL --max-time 300 -o "$gz_file" "${dir_url}yarn-${encoded}-tiny.gz"; then
+        rm -f "$part_file"
+        if curl -sfL --max-time 300 -o "$part_file" "${dir_url}yarn-${encoded}-tiny.gz" && gzip -t "$part_file" 2>/dev/null && [[ -s "$part_file" ]]; then
+            mv -f "$part_file" "$gz_file"
             echo "OK ($(du -h "$gz_file" | cut -f1), tiny.gz)"
             return 0
         fi
@@ -87,7 +90,9 @@ download_one() {
     if [[ -n "$jar_kind" ]]; then
         local jar_file="${TMP_DIR}/${version}.jar"
         if curl -sfL --max-time 300 -o "$jar_file" "${dir_url}yarn-${encoded}-${jar_kind}.jar"; then
-            if jar_to_gz "$jar_file" "$gz_file" && [[ -f "$gz_file" ]] && [[ -s "$gz_file" ]]; then
+            rm -f "$part_file"
+            if jar_to_gz "$jar_file" "$part_file" && gzip -t "$part_file" 2>/dev/null && [[ -s "$part_file" ]]; then
+                mv -f "$part_file" "$gz_file"
                 rm -f "$jar_file"
                 echo "OK ($(du -h "$gz_file" | cut -f1), $jar_kind)"
                 return 0
@@ -156,3 +161,7 @@ done
 rm -rf "$TMP_DIR"
 echo ""
 echo "=== Done: $success ok, $failed failed, $skipped skipped ==="
+
+if (( failed > 0 )); then
+    exit 1
+fi

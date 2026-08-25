@@ -40,9 +40,8 @@ class RagSearch
         }
 
         $this->pdo = new \PDO('sqlite:' . $dbPath);
-        $this->pdo->setAttribute(\PDO::ATTR_ERRMODE, \PDO::ERRMODE_EXCEPTION);
-        $this->pdo->setAttribute(\PDO::ATTR_DEFAULT_FETCH_MODE, \PDO::FETCH_ASSOC);
-        $this->ensureSchema();
+        $this->configurePdo($this->pdo);
+        $this->ensureSchema($this->pdo);
     }
 
     public function getPdo(): \PDO
@@ -75,9 +74,15 @@ class RagSearch
         return $projectRoot . '/rag/index.db';
     }
 
-    private function ensureSchema(): void
+    private static function configurePdo(\PDO $pdo): void
     {
-        $this->pdo->exec(
+        $pdo->setAttribute(\PDO::ATTR_ERRMODE, \PDO::ERRMODE_EXCEPTION);
+        $pdo->setAttribute(\PDO::ATTR_DEFAULT_FETCH_MODE, \PDO::FETCH_ASSOC);
+    }
+
+    private function ensureSchema(\PDO $pdo): void
+    {
+        $pdo->exec(
             "CREATE VIRTUAL TABLE IF NOT EXISTS docs USING fts5(
                 title,
                 body,
@@ -87,7 +92,7 @@ class RagSearch
         );
         // 语义检索的向量存储：rowid 对应 docs 表 rowid；vec 为 packed float32。
         // 语义增强未开启/嵌入失败时该表为空，检索自动退回纯词法。
-        $this->pdo->exec(
+        $pdo->exec(
             "CREATE TABLE IF NOT EXISTS doc_embeddings(
                 rowid INTEGER PRIMARY KEY,
                 vec BLOB NOT NULL
@@ -98,7 +103,10 @@ class RagSearch
     /**
      * Index every supported file under a directory (recursively).
      *
-     * The index is rebuilt from scratch so stale chunks never linger.
+     * The index is built into a temporary database file, then atomically renamed
+     * to the target path on success. A failed build never corrupts the live
+     * database — the old index remains intact for online queries.
+     *
      * When a configured SemanticClient is supplied, chunk embeddings are
      * generated in batches after the lexical insert; failures leave
      * doc_embeddings empty and search transparently falls back to lexical.
@@ -113,23 +121,22 @@ class RagSearch
             throw new \RuntimeException("Knowledge directory does not exist: {$knowledgeDir}");
         }
 
-        $this->pdo->beginTransaction();
+        $tmpPath = $this->dbPath . '.tmp.' . bin2hex(random_bytes(8));
+        $tmpPdo = new \PDO('sqlite:' . $tmpPath);
+        self::configurePdo($tmpPdo);
+        self::ensureSchema($tmpPdo);
 
         try {
-            $this->pdo->exec("DELETE FROM docs");
-            $this->pdo->exec("DELETE FROM doc_embeddings");
+            $tmpPdo->beginTransaction();
 
             $files = 0;
             $chunks = 0;
-            /** @var array<int, int> $chunkRowids rowid of each inserted chunk, in order */
             $chunkRowids = [];
-            /** @var array<int, string> $chunkBodies bodies matching $chunkRowids */
             $chunkBodies = [];
-            $insert = $this->pdo->prepare("INSERT INTO docs(title, body, source) VALUES (?, ?, ?)");
+            $insert = $tmpPdo->prepare("INSERT INTO docs(title, body, source) VALUES (?, ?, ?)");
 
             $iterator = new \RecursiveIteratorIterator(new \RecursiveDirectoryIterator($knowledgeDir, \FilesystemIterator::SKIP_DOTS));
             foreach ($iterator as $fileInfo) {
-                /** @var \SplFileInfo $fileInfo */
                 if (!$fileInfo->isFile() || !in_array(strtolower($fileInfo->getExtension()), ['md', 'txt', 'log'], true)) {
                     continue;
                 }
@@ -139,27 +146,23 @@ class RagSearch
 
                 foreach (self::chunkMarkdown($relative, $content) as $chunk) {
                     $insert->execute([$chunk['title'], $chunk['body'], $relative]);
-                    $chunkRowids[] = (int) $this->pdo->lastInsertId();
+                    $chunkRowids[] = (int) $tmpPdo->lastInsertId();
                     $chunkBodies[] = $chunk['title'] . "\n" . $chunk['body'];
                     $chunks++;
                 }
                 $files++;
             }
 
-            $this->pdo->commit();
+            $tmpPdo->commit();
         } catch (\Throwable $e) {
-            $this->pdo->rollBack();
+            $tmpPdo->rollBack();
+            @unlink($tmpPath);
             throw $e;
         }
 
-        // Embeddings are written outside the lexical transaction so that an API
-        // outage degrades to lexical-only instead of failing the whole rebuild.
-        // Text is pre-truncated (embedding models cap input tokens) and a failed
-        // batch falls back to per-chunk embedding so one bad chunk never costs
-        // its whole batch.
         $embedded = 0;
         if ($semantic !== null && $semantic->isConfigured() && $chunks > 0) {
-            $embedStmt = $this->pdo->prepare("INSERT OR REPLACE INTO doc_embeddings(rowid, vec) VALUES (?, ?)");
+            $embedStmt = $tmpPdo->prepare("INSERT OR REPLACE INTO doc_embeddings(rowid, vec) VALUES (?, ?)");
 
             $storeEmbedding = function (int $rowid, array $vec) use ($embedStmt, &$embedded): void {
                 $embedStmt->bindValue(1, $rowid, \PDO::PARAM_INT);
@@ -188,7 +191,6 @@ class RagSearch
             $batchSize = 16;
             $pairs = array_map(null, $chunkRowids, $chunkBodies);
             foreach (array_chunk($pairs, $batchSize) as $i => $batch) {
-                // 预截断：embedding 模型有 token 上限，超长文本直接 400
                 $texts = array_map(fn($p) => trim(mb_strcut((string) $p[1], 0, 4000)), $batch);
 
                 try {
@@ -209,6 +211,15 @@ class RagSearch
                 }
             }
         }
+
+        $tmpPdo = null;
+        if (!rename($tmpPath, $this->dbPath)) {
+            @unlink($tmpPath);
+            throw new \RuntimeException("Failed to rename temporary index to {$this->dbPath}");
+        }
+
+        $this->pdo = new \PDO('sqlite:' . $this->dbPath);
+        self::configurePdo($this->pdo);
 
         return ['files' => $files, 'chunks' => $chunks, 'embedded' => $embedded];
     }
@@ -413,6 +424,7 @@ class RagSearch
     private static array $semanticCache = [];
     private const SEMANTIC_CACHE_TTL = 60;
     private const SEMANTIC_CACHE_MAX = 64;
+    private const SEMANTIC_CACHE_MAX_BYTES = 1048576;
 
     private function applySemanticEnhancement(string $query, array $lexical, int $k): array
     {
@@ -421,7 +433,7 @@ class RagSearch
             return array_slice($lexical, 0, $k);
         }
 
-        $cacheKey = md5($query) . ':' . $k;
+        $cacheKey = 'semantic-v2:' . md5($query) . ':' . $k;
         $cached = self::$semanticCache[$cacheKey] ?? null;
         if ($cached !== null && $cached['expires'] > time()) {
             return $cached['results'];
@@ -434,10 +446,13 @@ class RagSearch
             return array_slice($lexical, 0, $k);
         }
 
-        if (count(self::$semanticCache) >= self::SEMANTIC_CACHE_MAX) {
+        $entry = ['expires' => time() + self::SEMANTIC_CACHE_TTL, 'results' => $results];
+        while (self::$semanticCache !== [] && (count(self::$semanticCache) >= self::SEMANTIC_CACHE_MAX || strlen(serialize(self::$semanticCache)) + strlen(serialize($entry)) > self::SEMANTIC_CACHE_MAX_BYTES)) {
             array_shift(self::$semanticCache);
         }
-        self::$semanticCache[$cacheKey] = ['expires' => time() + self::SEMANTIC_CACHE_TTL, 'results' => $results];
+        if (strlen(serialize($entry)) <= self::SEMANTIC_CACHE_MAX_BYTES) {
+            self::$semanticCache[$cacheKey] = $entry;
+        }
 
         return $results;
     }

@@ -317,7 +317,7 @@ LogAgent 模式（`ai.agent.enabled`）会输出额外的 `event: status` 事件
 - `reasoning_content` 只有上游模型实际返回时才会产生 `thinking` 事件；模型不返回推理增量时不会人为生成思考内容。
 
 
-> RAG 为内置服务（`rag/` 目录），SQLite FTS5 纯本地检索。构建索引 `php bin/hyperf.php rag:build`；RAG MCP server 整合进 Hyperf 主进程的 `/rag` 路径，默认 `ai.mcp.rag.url = http://127.0.0.1:9501/rag`，数据库路径由 `ai.mcp.rag.db` 指定。
+> RAG 为内置服务（`rag/` 目录），SQLite FTS5 纯本地检索。构建索引 `php bin/hyperf.php rag:build`；RAG MCP server 整合进 Hyperf 主进程的 `/rag` 路径，默认 `ai.mcp.rag.url = http://127.0.0.1:9501/rag`，数据库路径由 `ai.mcp.rag.db` 指定。索引先在临时数据库中完整构建，再原子替换正式索引，构建失败会保留旧索引。MCP 请求体不设应用层大小限制，这是有意设计；`rag_search.query` 仍受服务端限制。
 
 ---
 
@@ -332,6 +332,8 @@ LogAgent 模式（`ai.agent.enabled`）会输出额外的 `event: status` 事件
 ```
 POST /rag   （同时接受 GET）
 ```
+
+访问控制：默认仅允许 Hyperf 本机回环请求。通过反向代理或外部客户端访问时，在 `Config.inc.php` 设置 `ai.mcp.rag.authToken`，并发送 `Authorization: Bearer <authToken>`；未设置 token 时不要将 `/rag` 暴露到公网。请求体不设应用层大小限制，这是 MCP transport 的有意设计；`rag_search.query` 由服务端单独限制长度。
 
 ### JSON-RPC 方法
 

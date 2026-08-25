@@ -1,4 +1,4 @@
-# LogShare v1.7.2
+# LogShare v1.7.3
 
 Minecraft / Hytale 日志分析与分享平台。基于 Aternos Codex 与 SpinYarn 构建，提供日志上传、自动诊断、敏感信息脱敏、多文件日志和大模型 AI 智能体（LogAgent）辅助分析能力。
 
@@ -10,7 +10,7 @@ Minecraft / Hytale 日志分析与分享平台。基于 Aternos Codex 与 SpinYa
 - **结构化分析**：基于 Codex-Minecraft 和 Codex-Hytale 解析引擎，提取错误堆栈、崩溃原因、性能问题
 - **多文件日志**：同一 ID 下可上传多个文件或 `.zip` 压缩包（自动展开），子文件按路径读取
 - **LogAgent（AI 智能体）**：模型驱动工具循环，LLM 自主调用网络搜索（Exa MCP）、内置 RAG（SQLite FTS5）与日志文件工具，SSE 流式透传思维链
-- **内置 RAG**：纯本地 SQLite FTS5（BM25）知识库检索，零网络、零 embedding，整合进主进程 `/rag` 路径
+- **内置 RAG**：SQLite FTS5（BM25）知识库检索，默认纯本地运行；可选 bge-m3 向量召回与 reranker 精排，整合进主进程 `/rag` 路径
 - **RESTful API**：同时提供 `/1/`（已弃用）和 `/v1/` 路径，支持单 ID 和多 ID（逗号分隔）操作，删除采用 Bearer Token 鉴权
 - **Redis 缓存**：可配置开关、TTL 和大小限制，超过阈值自动跳过缓存直读 MariaDB
 
@@ -39,7 +39,7 @@ cp Config.inc.example.php Config.inc.php
 php bin/hyperf.php start
 ```
 
-服务监听 9501 端口，RAG MCP server 承载于主 server 的 `/rag` 路径。
+服务监听 9501 端口，RAG MCP server 承载于主 server 的 `/rag` 路径；该端点默认只允许本机回环访问。
 
 ### 配置
 
@@ -64,24 +64,25 @@ php bin/hyperf.php start
 docker compose -f docker/compose.yaml up -d
 ```
 
-**生产推荐**：使用 `docker/compose.prod.yaml`——完整业务配置（主推理密钥、双供应商语义 RAG、生产域名）通过挂载项目根目录的 `Config.inc.php` 注入容器，服务器上放置好该文件后：
+生产部署同样使用 `docker/compose.yaml`。完整业务配置（主推理密钥、双供应商语义 RAG、生产域名）通过挂载项目根目录的 `Config.inc.php` 注入容器，服务器上放置好该文件后：
 
 ```bash
-docker compose -f docker/compose.prod.yaml up -d --build
+docker compose -f docker/compose.yaml up -d --build
 ```
 
 > `Config.inc.php` 含密钥，已被 Git 与 Docker 构建上下文排除——只需在服务器手动放置，切勿提交进仓库。挂载后 AI 配置以文件为准；`DB_*`/`REDIS_*` 容器网络寻址仍由 compose env 提供。
+>
+> 内置 `/rag` MCP 端点默认仅允许 Hyperf 本机回环调用。若通过反向代理或外部 MCP 客户端访问，在 `Config.inc.php` 的 `ai.mcp.rag.authToken` 设置随机强 token，并使用 `Authorization: Bearer <authToken>`；不要将未配置 token 的 `/rag` 端点暴露到公网。
 
-服务监听 9300 端口（nginx 反向代理），包含以下容器：
+Hyperf 常驻进程监听 9501 端口，包含以下容器：
 
-- **nginx**：反向代理，`proxy_buffering off` 支持 SSE，请求体限制 210MB
-- **hyperf**：Hyperf 常驻进程（Swoole 6.2 + SpinYarn + pdo_mysql + redis），启动时自动建表并重建 RAG 索引
+- **hyperf**：Hyperf 常驻进程（Swoole 6.2 + SpinYarn + pdo_mysql + redis），启动命令会先构建 RAG 索引；索引完成后原子替换，构建失败不会破坏旧索引
 - **mariadb**：MariaDB 11，schema 由 `docker/mariadb-init.sql` 自动创建
 - **redis**：Redis 7 Alpine，缓存层与限流
 
 ### 手动部署
 
-Nginx 反向代理到 Hyperf 9501 端口，参考 `docker/mclogs.conf`：
+如需 Nginx 反向代理，参考 `docker/mclogs.conf`：
 
 ```
 location / {
@@ -177,7 +178,7 @@ AI 分析使用 SSE（Server-Sent Events）流式输出。配置 API Key 后，�
 
 SSE 在原有 `data:` 正文增量基础上，扩展 `event: status` 事件（`thinking` 思维链 / `tool` / `tool_result` / `limit`），供前端展示思考过程。
 
-**内置 RAG**：`rag/` 目录提供 SQLite FTS5（BM25）纯本地检索。构建索引 `php bin/hyperf.php rag:build`，随 Hyperf 主进程启动，默认 `ai.mcp.rag.url = http://127.0.0.1:9501/rag`。
+**内置 RAG**：`rag/` 目录提供 SQLite FTS5（BM25）本地检索。索引需先执行 `php bin/hyperf.php rag:build`（Docker 启动命令会自动执行）；构建过程使用临时数据库，完成后原子替换正式索引，失败时保留旧索引。RAG MCP 服务随 Hyperf 主进程一并启动（`/rag` 路径），默认 `ai.mcp.rag.url = http://127.0.0.1:9501/rag`；该端点默认仅允许本机回环访问。请求体不设应用层大小限制（MCP transport 的有意设计），但 `rag_search.query` 受服务端长度限制。通过反代或外部访问时，需配置 `ai.mcp.rag.authToken` 并携带 Bearer Token。
 
 ### 其他
 
@@ -278,7 +279,7 @@ php bin/hyperf.php rag:build   # 扫描 rag/knowledge/ 构建 SQLite FTS5 索引
 
 > **知识库维护：** Forge/NeoForge 文档用 `scripts/download_modloader_docs.sh` 刷新，服务端/代理端文档（PaperMC 全家桶、Purpur、Glowstone、Geyser、Quilt）用 `scripts/download_server_docs.sh`——两个脚本拉取后自动执行清洗（剥离 frontmatter/MDX/admonition/HTML）。新增机器拉取的知识库目录时需同步登记到 `scripts/clean_knowledge_docs.php` 的 `UPSTREAM_DIRS` 白名单；手写蒸馏目录不受元文件删除规则影响。语义 RAG 开启后需重跑 `rag:build` 生成分块向量。
 
-数据库路径由 `ai.mcp.rag.db` 指定（默认 `rag/index.db`）；Docker Compose 部署时随 hyperf 容器启动自动重建索引。
+数据库路径由 `ai.mcp.rag.db` 指定（默认 `rag/index.db`）；Docker Compose 部署时 hyperf 容器启动命令会执行 `rag:build`（幂等）。
 
 更新日志见 [`CHANGELOG.md`](CHANGELOG.md)。
 

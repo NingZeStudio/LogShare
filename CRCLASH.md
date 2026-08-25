@@ -1,93 +1,179 @@
-# CRCLASH — LogShare 全面代码审查报告（第九轮 · 语义 RAG 上线后）
+# LogShare 全面 Code Review 报告
 
 - **审查日期：** 2026-08-25
-- **审查范围：** 项目全部源码 —— `app/` 61 文件约 6,800 行、`scripts/`（含新增清洗器与两个下载脚本）、`docker/`、`config/autoload/`、`tests/`、`composer.json/lock`；排除 `vendor/`、`.git/`、`runtime/`、`tmp/`、`rag/knowledge/` 内容文件与 `mappings/`
-- **技术栈：** PHP 8.4+ · Hyperf 3.2（Swoole 6.2 常驻）· MariaDB · Redis（可选）· SpinYarn v1.0.0 · SQLite FTS5 + bge-m3/bge-reranker-v2-m3 语义管线 · Aternos Codex · Pest 3 + PHPStan level 5
-- **本轮背景：** 第八轮问题全部修复后，项目完成了三批大变更：① 语义 RAG 管线（`SemanticClient` 多供应商 failover、向量召回 + rerank 精排、`doc_embeddings` 表、CJK bigram 检索、知识库清洗器）；② Agent 展示层与思维链优化（reasoning_content 回传、按工具定制的 tool_result summary）；③ Docker 与配置补全。当前基线：143 passed / 3 skipped、PHPStan 零错误、语义检索在线实测通过。
+- **审查对象：** 当前 Git 工作区全部已跟踪源代码、构建/部署脚本、配置和测试；跳过 `.git/`、`vendor/`、`runtime/`、`tmp/`、`rag/index.db` 等生成物，以及 `rag/knowledge/` 文档内容和 `mappings/` 映射数据。
+- **统计口径：** 核心 `app/` PHP 源码 50 个；另审查 `bin/`、`config/`、`scripts/`、`tests/`、`docker/`、CI、Composer 配置和 API 文档。
+- **技术栈：** PHP 8.4+、Hyperf 3.2、Swoole 6.2 常驻进程、Composer；MariaDB、Redis、SQLite FTS5；Pest 3、PHPStan level 5；Docker Compose；SpinYarn、Aternos Codex、AI/MCP/SSE、可选语义 RAG。
 
 ## 概览
 
-本轮重点复审语义管线与 Agent 改动。整体架构演进方向正确：检索从纯词法升级为「词法召回 ∪ 向量召回 → rerank 精排」三级管线，降级路径完整；多供应商 failover、嵌入批处理的容错设计都达到了生产水准。
+整体架构清晰：`app/Controller` 负责 HTTP/注解路由，`ContentParser`/`UploadParser` 负责输入解析，`Filter` 负责脱敏，`Log` 编排分析与存储，`Storage` 抽象 MariaDB/文件系统，`Client`/`Agent`/`Rag` 负责 AI 和知识库能力。Redis 故障降级、删除 token 哈希、ZIP 防护、日志绑定工具范围和语义检索词法回退均是较好的设计。
 
-但发现一个**语义开启场景下的真实缺陷**：reranker 返回空结果集时（网关偶发行为），整个搜索会返回空——把已经召回的词法结果也丢掉了，违背「语义增强绝不能破坏检索」的自设约束。另有一个 Docker 部署缺口：本轮新增的 `AI_RAG_*` 环境变量未透传到 compose，容器化部署无法配置语义增强。
-
-发现 **2 处「一般」**、**4 处「建议」**。无「严重」级问题。
-
----
+本次发现 **2 项严重、11 项一般、9 项建议**。最需要优先处理的是：公开 `/rag` 端点缺少访问控制、出站 URL 缺少 SSRF 策略、生产编排允许弱默认凭据、映射下载失败仍返回成功，以及关键安全/复杂链路的 HTTP 测试不足。
 
 ## 问题清单
 
-### 🔴 严重
+### 严重
 
-无。
+#### C1. `/rag` MCP 端点公开且无鉴权
 
-### 🟠 一般
+- **位置：** `app/Controller/RagController.php:16-39`
+- **问题：** `/rag` 同时接受 GET/POST，未见 token、来源限制或独立限流。任何可访问 HTTP 端口的请求方都能调用 `rag_search` 和 `list_topics`。
+- **影响：** 可消耗 SQLite、CPU、语义 embedding/rerank 配额，并枚举知识库主题和内容；语义开启时随机 query 可绕过进程缓存。
+- **建议：** 若仅供本进程使用，优先直接注入 `RagSearch`，或只监听 loopback；否则增加独立 Bearer token、来源限制、按 IP/工具限流、query 长度和语义并发预算。公网部署不得默认暴露该端点。
 
-#### M1. rerank 返回空结果集时丢弃全部词法召回 — `app/Rag/RagSearch.php:439-449`
+#### C2. MCP/语义客户端缺少统一出站 URL 安全策略
 
-- **问题：** `applySemanticEnhancement()` 的 try 块覆盖 embed → cosine → rerank 全链路。若 rerank 调用**成功但返回空 `results`**（网关限流时的静默空响应、异常 query 触发的空排序等），`$ranked = []` → `$out = []` 直接返回——此时词法召回可能已有 5 条完整结果，却被整体替换为空数组。
-- **影响：** 语义开启时，任何一次 rerank 空响应都会让 `/rag` MCP 与 Agent 的知识库检索"凭空归零"，且无任何错误日志（没有抛异常）。这直接违背了代码注释自设的约束 "semantic search must never break retrieval"。
-- **修复：** 循环结束后加兜底：`if ($out === []) { return array_slice($lexical, 0, $k); }`（一行）；可同时记一条 warning 日志便于观测网关质量。
+- **位置：** `app/Client/MCPClient.php:139-146`、`app/Rag/SemanticClient.php:195-208`、`app/Agent/LogAgent.php:297-305`
+- **问题：** 配置中的 URL 直接交给 cURL；未见 scheme/host/IP/端口/重定向校验。当前内置 RAG 使用 `http://127.0.0.1:9501/rag`，但外部 MCP/provider 与内部服务没有策略区分。
+- **影响：** 一旦 URL 通过部署面、环境变量或未来管理接口被影响，可能访问云 metadata、Redis、MariaDB、Docker API 或其他内网服务。
+- **建议：** 增加统一出站 URL policy：外部服务默认仅 HTTPS 和允许域名；内置 RAG 单独允许固定 loopback；解析并校验所有 DNS A/AAAA 结果，禁止内网/link-local/metadata 地址；关闭重定向或逐跳重新校验；限制端口。
 
-#### M2. compose 未透传 AI_RAG_* 环境变量 — `docker/compose.yaml`（hyperf.environment）
+### 一般
 
-- **问题：** 本轮为语义 RAG 新增的 `AI_RAG_ENABLED` / `AI_RAG_BASE_URL` / `AI_RAG_API_KEY` 环境变量覆盖已在 `Config::applyEnvironmentOverrides()` 实现，但 compose 的 hyperf 服务未透传这三个变量。
-- **影响：** Docker Compose 部署时语义 RAG 无法通过环境变量开启或配置——镜像内 fallback 配置的 `ai.rag.enabled = false`，语义管线在容器化生产环境中永远关闭；想开启只能挂载自定义 Config.inc.php，与第八轮建立的「env 优先」部署模式相悖。
-- **修复：** hyperf environment 补齐：
-  ```yaml
-  AI_RAG_ENABLED: ${AI_RAG_ENABLED:-false}
-  AI_RAG_BASE_URL: ${AI_RAG_BASE_URL:-}
-  AI_RAG_API_KEY: ${AI_RAG_API_KEY:-}
-  ```
-  （providers 多供应商列表仍需挂载配置文件支持，env 仅覆盖单主供应商场景——在 README 注明。）
+#### M1. 反向代理部署时限流按代理地址计数
 
-### 🟡 建议
+- **位置：** `app/Middleware/RateLimitMiddleware.php:51-54`
+- **问题：** 只读取 `remote_addr`。通过 nginx/宿主机反代时，Hyperf 可能看到的是代理地址，所有用户共享一个限流桶。
+- **影响：** 用户互相误伤，且无法实现真实 per-IP 限流。
+- **建议：** 在可信反代设置 `X-Real-IP`，应用只在明确配置了可信代理时读取该头；不要盲信客户端可伪造的 `X-Forwarded-For`。同时对 `/rag` 和 AI 设置更严格的专用限流。
 
-- **R1. topByCosine 全表加载正文 — `app/Rag/RagSearch.php:465-468`**：余弦扫描 SELECT 了 `d.body`（2250 分块 ≈ 3.4MB）进内存，但算相似度只需要 vec；命中 limit 后才需要 title/body。改为先 `SELECT e.rowid, e.vec` 打分，取 top 后再按 rowid 二次查询元数据，每次搜索省一次全表正文物化。
-- **R2. 向量维度不匹配静默跳过 — `topByCosine():474`**：用户切换 embedding 模型后（如 1024 维 → 其他维度），`count($vec) !== count($queryVec)` 会让**所有**历史向量被静默跳过，语义增强悄悄退化为纯词法而无任何提示。建议：检测到维度不一致时记录一次 warning（提示重跑 rag:build）。
-- **R3. 语义查询无短 TTL 缓存**：每次 `rag_search` 固定产生 embed + rerank 两次串行 API 往返（约 200–500ms 延迟与双份 token 成本）。对相同 query 做 60s 进程级缓存即可显著降低重复查询开销（Agent 循环中模型换词重查时尤其明显）。
-- **R4. cache.enabled=false 时限流完全失效缺警示 — `RateLimitMiddleware.php:37`**：跳过逻辑本身正确（本地开发体验优化），但生产若误关全局缓存会连带失去限流而毫无征兆。建议 worker 启动时检测到该组合打一条显式警告日志。
-- **R5. 清洗脚本对 forge/neoforge 的 admonition 处理依赖下载脚本串联执行**：单独手跑 `php scripts/clean_knowledge_docs.php` 无害（幂等已验证），但若未来新增知识库目录需记得同步 `UPSTREAM_DIRS` 白名单，否则上游 README 会被当内容索引。可在 README 的知识库维护节注明。
+#### M2. 生产 Compose 使用弱默认凭据/无密码 Redis
 
----
+- **位置：** `docker/compose.prod.yaml:42-45,65-66,83-84`；`docker/compose.yaml:30-35,65-66`
+- **问题：** 生产配置默认使用 `logshare`、`root`，Redis 密码可为空。
+- **影响：** 误部署或网络暴露时显著降低数据库和缓存安全性。
+- **建议：** `compose.prod.yaml` 使用 `${VAR:?required}` 强制要求密码，禁止生产 Redis 无密码；应用启动时拒绝 root/空密码组合，并在文档中明确 secrets 注入方式。
 
-## 改进建议（按优先级）
+#### M3. Docker Compose 默认启用 AI，但默认没有 API key
 
-1. **P0 — M1**：rerank 空结果兜底回退词法。一行修复 + 一条日志，消除语义管线的"归零"风险。
-2. **P1 — M2**：compose 补齐 AI_RAG_* 透传（与第八轮 AI_ENABLED 同模式），并在 README 说明 providers 列表的 env 边界。
-3. **P2 — R1/R2**：cosine 扫描瘦身 + 维度失配告警，语义开启后的每次搜索都受益。
-4. **P3 — R3-R5**：按需排期。
+- **位置：** `docker/compose.yaml:34-37`
+- **问题：** `AI_ENABLED` 默认值为 `true`，`AI_API_KEYS` 默认为空。
+- **影响：** 未配置 AI 的部署仍暴露 AI 路由，进入失败/错误流路径并产生误导性运行状态。
+- **建议：** 普通 Compose 默认 `AI_ENABLED=false`，或在启动时强制校验 API key；增加 AI 禁用时 404 的 smoke test。
+
+#### M4. 映射下载脚本失败时仍返回成功
+
+- **位置：** `scripts/download_mappings.sh:141-158`；`scripts/download_vanilla_mappings.py:43-49`
+- **问题：** 两个脚本统计失败数但始终以 0 退出。
+- **影响：** 自动化流程误以为映射完整，SpinYarn 运行时才暴露缺失文件。
+- **建议：** `failed/fail > 0` 时退出 1；下载到 `.part` 临时文件，校验 gzip/内容/大小后原子替换；不要仅按文件存在跳过损坏文件。
+
+#### M5. RAG 查询缺少 query 长度和 term 数量上限
+
+- **位置：** `app/Controller/RagController.php:120-126`、`app/Rag/RagSearch.php:282-372`
+- **问题：** `k` 有范围限制，但 query 未见明确最大字节数、token/bigram 数量限制；MCP 请求体本身不设应用层大小上限，这是为 MCP transport 保留的设计。
+- **影响：** 超长中文输入会生成很长 SQL/LIKE 条件并放大 embedding 输入、CPU 和内存消耗。
+- **建议：** 保持请求体无应用层大小限制，仅在 Controller 和 RagSearch 双重限制 query（如 512–2048 字节）、term/bigram 数量，归一化并去重；对超长 query 拒绝而非无限降级。
+
+#### M6. RAG 索引重建不是原子更新
+
+- **位置：** `app/Rag/RagSearch.php:116-211`
+- **问题：** 词法表事务完成后，embedding 写入在事务外进行；在线查询可能看到 docs 与向量的不同版本。
+- **影响：** 构建中断时留下半成品 embedding，语义结果不完整；常驻 worker 还可能持有旧 PDO/旧文件状态。
+- **建议：** 在临时 SQLite 数据库完成词法和 embedding，校验后原子切换；或引入 generation/ready 状态，查询只使用完整版本，并在切换后重建 worker 内连接。
+
+#### M7. AI/SSE/Agent 缺少全局并发和缓存击穿保护
+
+- **位置：** `app/Agent/LogAgent.php:45-51,680-697`；`app/Client/AIClient.php`
+- **问题：** 相同 cache key 并发 miss 时会同时发起 AI 请求；全局限流默认值为 36000/60s，不能作为昂贵 AI 调用的成本保护。
+- **影响：** 热门日志或多 IP 请求可放大 API key 消耗、SSE 连接和协程占用。
+- **建议：** 增加 Redis NX 锁/短等待或“生成中”响应；为 AI 设置每 IP、每日志、全局并发、key 配额和每日成本预算；为长 SSE 设置最大生命周期。
+
+#### M8. 出站/上游错误可能直接进入 SSE 客户端
+
+- **位置：** `app/Agent/LogAgent.php:147-150`；`app/Client/AIClient.php:254-265,312-315`；`app/Client/MCPClient.php:160-176`
+- **问题：** 异常消息可能包含上游 body、URL、provider、curl 错误或内部实现细节。
+- **影响：** 泄露部署信息、上游诊断和潜在敏感字段。
+- **建议：** 对外只返回稳定错误码/通用消息；详细原因写 Syslog，并统一做换行、token、Authorization、Cookie 和长度脱敏。
+
+#### M9. MCP JSON-RPC 响应校验和 SSE 解析不完整
+
+- **位置：** `app/Client/MCPClient.php:156-184,193-213`
+- **问题：** 未验证响应 `id`、`jsonrpc` 和 result/error 结构；SSE fallback 只识别 `data: `，并把多事件 data 直接拼接。
+- **影响：** 异常代理/服务端响应可能被错误当作当前请求结果，或合法的无空格/多事件 SSE 无法解析。
+- **建议：** 校验 request id、JSON-RPC 版本和 result/error 二选一；按空行解析 SSE 事件，同时接受 `data:` 和 `data: `，限制响应体大小；处理 session 失效时清除状态并只重握手一次。
+
+#### M10. `AIClient` 的流式 buffer 和工具参数缺少硬上限
+
+- **位置：** `app/Client/AIClient.php` 的 SSE 回调及 tool-call 累积逻辑
+- **问题：** `$buffer .= $data` 在上游长期不换行时可能持续增长；tool calls、arguments、content/reasoning 和 messages 总量也缺少独立上限。
+- **影响：** 异常或恶意上游可造成常驻 worker 内存增长和长时间占用。
+- **建议：** 增加单行/buffer、单 tool call、arguments、消息 JSON 和总输出字节限制，超限立即终止请求并返回稳定错误。
+
+#### M11. PHPStan 排除多个关键实现目录
+
+- **位置：** `phpstan.neon:8-12`
+- **问题：** `app/Client`、`Storage`、`Cache`、`Data` 整目录被排除，包含 AI/MCP、MariaDB、Filesystem、Redis 和 token 等关键代码。
+- **影响：** 类型错误和空值错误无法进入静态质量门禁。
+- **建议：** 逐步取消整目录排除，用 stub 或更窄的具体 ignore 处理第三方类型问题，优先纳入 `Token`、`MariaDbStorage`、`RedisCache` 和客户端公共路径。
+
+### 建议
+
+#### S1. FilesystemStorage 的 renew 会读写完整日志文件
+
+- **位置：** `app/Storage/FilesystemStorage.php:100-113`
+- **建议：** 将 created/expiry 等元数据独立存放并只更新 `.meta.json`，避免每次续期完整读取、解码和重写大日志。
+
+#### S2. FilesystemStorage 写入缺少原子替换
+
+- **位置：** `app/Storage/FilesystemStorage.php:54`
+- **建议：** 先写同目录临时文件并校验，再用 `rename`/`rename` 等原子替换，避免进程崩溃留下损坏 JSON。
+
+#### S3. UploadParser 文件数限制在加入结果后才检查
+
+- **位置：** `app/UploadParser.php:92-98`
+- **建议：** 在处理新文件前检查剩余 slot，避免超限文件已被读取和分配内存。
+
+#### S4. `ApiResponse` 对 `json_encode` 失败缺少统一处理
+
+- **位置：** `app/ApiResponse.php:82`
+- **建议：** 使用 `JSON_THROW_ON_ERROR` 或显式处理编码失败，返回稳定的内部错误 JSON；不要让 `false` 变成空响应。
+
+#### S5. AI 缓存 key 缺少 prompt/model/索引版本
+
+- **位置：** `app/Controller/AIController.php:31-38`、`app/Controller/AIAnalyseController.php:43-50`、`app/Agent/LogAgent.php:680-697`
+- **建议：** 将 prompt、模型、Agent/RAG/index 版本纳入 key，避免配置或知识库更新后命中旧结果。
+
+#### S6. `RagSearch` 语义缓存按条目数而非字节数限制
+
+- **位置：** `app/Rag/RagSearch.php` 语义缓存实现
+- **建议：** 增加总字节预算、query 归一化和更高效的 LRU/FIFO 结构；必要时使用短 TTL 共享缓存。
+
+#### S7. `SemanticClient` 响应向量校验可以更严格
+
+- **位置：** `app/Rag/SemanticClient.php:105-117`
+- **建议：** 校验 index 覆盖完整且不重复、向量维度一致、值为有限浮点数并限制最大维度；为响应体增加大小上限。
+
+#### S8. CI 覆盖率上传步骤与实际命令不一致
+
+- **位置：** `.github/workflows/ci.yaml:70-86`
+- **问题：** CI 执行 `composer test`，但上传 `coverage/clover.xml`；该文件由 `composer test:coverage` 生成。
+- **建议：** 单独执行 coverage 命令或删除无效上传步骤，并显式检查文件存在。
+
+#### S9. CI/Docker/测试质量门禁仍有缺口
+
+- **位置：** `.github/workflows/ci.yaml:207-216,226-256`；`tests/`
+- **建议：** PR 阶段至少构建 Docker；用轮询和 JSON 解析替代固定 `sleep`/`grep`，用 trap 清理服务；增加 Composer validate/audit/platform 检查、Compose 校验、OpenAPI 文档一致性检查，以及 ZIP 路径遍历、多文件、子文件、metadata、token、SSE/CORS、RAG 鉴权的 HTTP 集成测试。
+
+## 改进建议
+
+按优先级建议采用以下顺序：
+
+1. **P0 安全边界：** 关闭或保护 `/rag`；建立出站 URL/SSRF policy；收紧 SSE CORS；脱敏上游错误。
+2. **P1 部署安全：** 移除生产弱默认密码；普通 Compose 默认关闭 AI；修复两个映射下载脚本的失败退出码和非原子下载。
+3. **P1 资源保护：** 限制 RAG query、AI SSE buffer/tool arguments，并增加 AI/RAG 全局及 per-IP/per-log 并发预算。
+4. **P2 一致性与可靠性：** 临时库原子切换 RAG 索引；增加 cache lock；处理 MCP response id/session；修复文件存储原子写入和 renew 性能问题。
+5. **P2 质量门禁：** 收窄 PHPStan 排除范围，修复覆盖率流程，补充真实 HTTP 集成测试和 API 文档一致性检查。
 
 ## 正面亮点
 
-- **语义管线容错设计成体系**：多供应商顺序 failover（per-provider 模型 ID 处理了 BAAI/ 前缀差异）、`relevance_score/score` 字段名兼容、嵌入批处理失败自动降级逐条并预截断超长文本（实测 2250/2250 全覆盖）、词法/向量双路召回合并去重——除 M1 一处外，降级链路完整。
-- **检索降级三级体系闭环**：FTS AND → OR → LIKE AND → OR → CJK bigram 切分，配合语义增强共五层，任何形态的查询（英文签名 / 中文口语 / 混合）都有出路；测试覆盖到每一层的契约。
-- **reasoning_content 回传修复彻底**：AIClient 累积完整思维链经 onToolCalls 传出，LogAgent 按轮回填 assistant 消息——DeepSeek 思维模式的 400 问题根治，且 mock server 测试覆盖了多轮场景。
-- **tool_result summary 按工具定制**：read_log_file 只报「文件 + 行数」（原文是给模型的）、rag_search 输出命中清单、list_topics 折叠为主题目录——展示层第一次做到了"用户视角"而非"数据视角"。
-- **知识库清洗器工程质量高**：单遍行状态机、fenced code 完整保护（MiniMessage 标签零误伤）、幂等验证通过、元文件删除规则限定在上游目录保护了手写蒸馏库的 README。
-- **运维脚本健壮性**：下载脚本 fetch 失败保留旧版不误删、tarball/git 双通道、mdx 统一改名；compose 四服务 healthcheck 全覆盖。
-- **第八轮遗留零残留**：M1-M4、R1-R7 全部落地且修复质量经本轮复核确认（含 compose env、summary 定制、bigram 检索等新需求的自然延伸）。
-
----
-
-## 修复状态
-
-第九轮问题已全部修复并验证：
-
-- **M1**：`applySemanticEnhancement` 拆分为缓存壳 + `runSemanticPipeline`；rerank 返回空 results 时记录日志并回退词法排序，检索不再「归零」。
-- **M2**：compose 补齐 `AI_RAG_ENABLED / AI_RAG_BASE_URL / AI_RAG_API_KEY` 透传（注释说明 providers 多供应商列表需挂载配置）。
-- **R1**：cosine 扫描只物化 vec，命中 limit 后按 rowid 二次取元数据，省去每次查询的全表正文物化。
-- **R2**：向量维度失配时进程内一次性 warning，提示重跑 rag:build。
-- **R3**：语义结果 60s 进程级 FIFO 缓存（64 条），重复 query 免双次 API 往返。
-- **R4**：限流跳过时输出一次性显式警告（cache.enabled=false 会一并失去限流）。
-- **R5**：README 知识库维护节注明清洗白名单与复刷流程。
-
-测试隔离同步修正：RagSearchTest 在 beforeEach 强制关闭语义开关并与外部网关解耦，新增「网关不可达 → 回退词法」回归用例。
-
-## 验证结果
-
-- Pest：**144 passed, 3 skipped**（新增语义降级回归用例）。
-- PHPStan level 5：**No errors**。
-- `/rag` MCP 在线验证：语义管线返回正常（1505 字节含结构化正文）。
-
-*第九轮问题全部关闭。*
+- **分层架构清晰：** Controller、解析/过滤、领域模型、Storage、Cache、AI/RAG 职责边界明确，Composer PSR-4 入口简单可靠。
+- **输入安全处理较完整：** ContentParser 限制压缩编码链，LimitBytes/LimitLines 拒绝超限；UploadParser 对 ZIP 路径、文件数、总大小和实际解压大小有多层保护。
+- **敏感信息保护：** 删除 token 使用 SHA-256 存储并通过 `hash_equals` 比较；过滤链覆盖 IP、UUID、session/token、用户名等常见日志敏感数据。
+- **存储与缓存降级：** Redis 不可用时回退主存储；多文件超出 cache 大小会跳过缓存，不把大对象强行塞入 Redis。
+- **AI 流式兼容性：** AIClient 处理 HTTP 200 内嵌错误、无空格 SSE data、非流式 JSON fallback、空流和多 key failover，考虑了现实网关的不规范行为。
+- **Agent 最小权限：** `list_log_files`/`read_log_file` 绑定当前 `logId`，没有开放任意日志 ID 读取，并限制文件/工具结果大小。
+- **RAG 降级设计：** FTS AND/OR、LIKE、CJK bigram 与语义召回形成多级 fallback；语义服务失败通常不会破坏词法检索。
+- **测试基础较好：** Pest 单元、集成和架构测试覆盖过滤器、上传、存储、AIClient、MCP、LogAgent、RAG；CI 还覆盖 MariaDB/Redis、Hyperf boot 和 Docker smoke path。
+- **部署配置有实际运行考虑：** Swoole 常驻进程、SSE 反代参数、MariaDB/Redis healthcheck、SpinYarn 构建和映射 bind mount 均有明确配置。

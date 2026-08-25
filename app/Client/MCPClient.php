@@ -21,6 +21,18 @@ class MCPClient
 
     public function __construct(string $url, array $headers = [], int $timeout = 30, int $connectTimeout = 15)
     {
+        $parts = parse_url($url);
+        if (!is_array($parts) || !in_array(strtolower($parts['scheme'] ?? ''), ['http', 'https'], true) || ($parts['host'] ?? '') === '') {
+            throw new \InvalidArgumentException('MCP URL must use HTTP or HTTPS');
+        }
+        $host = strtolower((string) $parts['host']);
+        if (in_array($host, ['127.0.0.1', '::1', 'localhost'], true)) {
+            return;
+        }
+        $ip = filter_var($host, FILTER_VALIDATE_IP);
+        if ($ip !== false && !filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE)) {
+            throw new \InvalidArgumentException('MCP URL targets a private address');
+        }
         $this->url = $url;
         $this->headers = $headers;
         $this->timeout = $timeout;
@@ -197,11 +209,11 @@ class MCPClient
             return $decoded;
         }
 
-        // Fallback: extract JSON from SSE data lines
         $data = '';
-        foreach (explode("\n", $body) as $line) {
-            if (str_starts_with($line, 'data: ')) {
-                $data .= substr($line, 6);
+        foreach (preg_split("/\r?\n/", $body) ?: [] as $line) {
+            $line = ltrim($line);
+            if (str_starts_with($line, 'data:')) {
+                $data .= ltrim(substr($line, 5));
             }
         }
 

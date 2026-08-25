@@ -29,6 +29,7 @@ class RateLimitMiddleware implements MiddlewareInterface
         '#^(/v?1/log)/.+#',
         '#^(/v?1/insights)/.+#',
         '#^(/v?1/ai)/.+#',
+        '#^/rag(?:/.*)?$#',
     ];
 
     public function process(ServerRequestInterface $request, RequestHandlerInterface $handler): ResponseInterface
@@ -49,7 +50,7 @@ class RateLimitMiddleware implements MiddlewareInterface
         $window = (int) ($config['window'] ?? 60);
 
         $server = $request->getServerParams();
-        $ip = $server['remote_addr'] ?? 'unknown';
+        $ip = self::clientIp($server, $config);
         $path = self::normalizePath($request->getUri()->getPath());
         $key = "rl:{$request->getMethod()}:{$path}:{$ip}";
 
@@ -69,6 +70,22 @@ class RateLimitMiddleware implements MiddlewareInterface
         }
 
         return $handler->handle($request);
+    }
+
+    private static function clientIp(array $server, array $config): string
+    {
+        $remote = (string) ($server['remote_addr'] ?? 'unknown');
+        $trustedProxies = $config['trustedProxies'] ?? [];
+        if (!is_array($trustedProxies) || !in_array($remote, $trustedProxies, true)) {
+            return $remote;
+        }
+
+        $realIp = $server['http_x_real_ip'] ?? null;
+        if (is_string($realIp) && filter_var($realIp, FILTER_VALIDATE_IP) !== false) {
+            return $realIp;
+        }
+
+        return $remote;
     }
 
     /**

@@ -86,6 +86,12 @@ class UploadParser
                     $totalBytes += strlen($entry['data']);
                 }
             } else {
+                if (count($result) >= $maxFiles) {
+                    return new ApiError(413, "Too many files in upload. Maximum is {$maxFiles}.");
+                }
+                if ($totalBytes + strlen($content) > $maxTotalBytes) {
+                    return new ApiError(413, "Upload exceeds maximum total size of {$maxTotalBytes} bytes.");
+                }
                 if (!self::validateFileName($name)) {
                     return new ApiError(400, "Invalid file name: " . htmlspecialchars($name));
                 }

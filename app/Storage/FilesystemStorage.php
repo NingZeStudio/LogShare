@@ -51,9 +51,9 @@ class FilesystemStorage implements StorageInterface
             ));
         }
 
-        if (file_put_contents($basePath . $id->getRaw(), json_encode($document, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)) === false) {
-            throw new \Exception("Failed to write log file.");
-        }
+        $path = $basePath . $id->getRaw();
+        self::writeAtomically($path, $document);
+        self::writeAtomically($path . '.meta.json', ['created' => $document['created']]);
         return $id;
     }
 
@@ -81,10 +81,33 @@ class FilesystemStorage implements StorageInterface
             'token' => $document['token'] ?? null,
             'metadata' => $document['metadata'] ?? [],
             'source' => $document['source'] ?? null,
-            'created' => $document['created'] ?? null,
+            'created' => self::readCreated($basePath . $id->getRaw(), $document),
             // 与 MariaDbStorage 对称：includeContent=false 仅剥离附加文件内容
             'files' => self::normalizeFiles($document['files'] ?? [], $includeContent),
         ];
+    }
+
+    private static function readCreated(string $path, array $document): ?int
+    {
+        $meta = $path . '.meta.json';
+        if (is_file($meta)) {
+            $value = json_decode((string) file_get_contents($meta), true);
+            if (is_array($value) && isset($value['created'])) {
+                return (int) $value['created'];
+            }
+        }
+        return isset($document['created']) ? (int) $document['created'] : null;
+    }
+
+    private static function writeAtomically(string $path, array $document): bool
+    {
+        $json = json_encode($document, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR);
+        $temporary = $path . '.tmp.' . bin2hex(random_bytes(8));
+        if (file_put_contents($temporary, $json, LOCK_EX) === false || !rename($temporary, $path)) {
+            @unlink($temporary);
+            throw new \Exception('Failed to write log file.');
+        }
+        return true;
     }
 
     public static function Renew(\App\Id $id): bool
@@ -97,20 +120,18 @@ class FilesystemStorage implements StorageInterface
             return false;
         }
 
-        $content = file_get_contents($path);
-        if ($content === false) {
-            return false;
+        $metaPath = $path . '.meta.json';
+        $metadata = ['created' => time()];
+        if (file_exists($metaPath)) {
+            $content = file_get_contents($metaPath);
+            $metadata = $content === false ? [] : json_decode($content, true);
+            if (!is_array($metadata)) {
+                $metadata = [];
+            }
         }
+        $metadata['created'] = time();
 
-        $document = json_decode($content, true);
-        if (!is_array($document)) {
-            return false;
-        }
-
-        // Reset created to now, resetting the storage TTL.
-        $document['created'] = time();
-
-        return file_put_contents($path, json_encode($document, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)) !== false;
+        return self::writeAtomically($metaPath, $metadata);
     }
 
     /**
