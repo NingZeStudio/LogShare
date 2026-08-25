@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.7.2-hotfix.2 — 2026-08-25
+
+### 🐛 修复
+
+- **SSE 流式响应缺失 CORS 头**：`/v1/ai/*` 等流式端点经 `EventStream` 直写连接，绕过了 `CorsMiddleware` 对响应对象加头的流程，生产环境跨域调用 LogAgent 被浏览器拦截（空响应、status 0）。`SseWriter::begin()` 现于首帧下发前显式携带 CORS 头，并补发 `Cache-Control: no-cache` 与 `X-Accel-Buffering: no` 防止反代缓冲延迟首帧
+
 ## 1.7.2 — 2026-08-25
 
 ### 🐛 修复
