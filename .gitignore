@@ -8,3 +8,4 @@
 /.phpunit.cache/
 /rag/index.db
 /rag/public/
+/compose.prod.yaml
