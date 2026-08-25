@@ -176,8 +176,17 @@ class AIClient
                     }
                     continue;
                 }
-                if ($httpCode !== 200 && $httpCode !== 0) {
+                // httpCode=0 绝不是成功：连接中断/上游静默断流时 curlError 可能为空，
+                // 旧逻辑把 0 放行导致「空流 + 静默 done」的假成功
+                if ($httpCode !== 200) {
                     throw new \Exception('HTTP ' . $httpCode . ': ' . self::extractErrorDetail($responseBody));
+                }
+
+                // 空完成检测：既无正文也无工具调用也无思维链 = 上游异常（如超大
+                // payload 被网关静默吞掉）。视为失败，换 key 重试或向上抛错，
+                // 而不是给客户端一个空分析。
+                if (trim($fullContent) === '' && $toolCalls === [] && trim($fullReasoning) === '') {
+                    throw new \Exception('upstream returned an empty stream (HTTP ' . $httpCode . ', ' . strlen($responseBody) . ' bytes body)');
                 }
 
                 $success = true;
