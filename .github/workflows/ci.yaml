@@ -78,6 +78,22 @@ jobs:
           REDIS_HOST: 127.0.0.1
           REDIS_PORT: 6379
 
+      - name: Generate Coverage
+        if: matrix.php-version == '8.4'
+        run: composer test:coverage
+        env:
+          DB_HOST: 127.0.0.1
+          DB_PORT: 3306
+          DB_DATABASE: logshare
+          DB_USERNAME: logshare
+          DB_PASSWORD: logshare
+          REDIS_HOST: 127.0.0.1
+          REDIS_PORT: 6379
+
+      - name: Verify Coverage Report
+        if: matrix.php-version == '8.4'
+        run: test -s coverage/clover.xml
+
       - name: Upload Coverage
         uses: codecov/codecov-action@v4
         if: matrix.php-version == '8.4'
@@ -91,6 +107,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Validate Composer Configuration
+        run: composer validate --strict
 
       - name: Setup PHP
         uses: shivammathur/setup-php@v2
@@ -227,7 +246,7 @@ jobs:
     name: Docker Build
     runs-on: ubuntu-latest
     needs: [test, static-analysis, architecture, hyperf-boot]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -235,12 +254,15 @@ jobs:
       - name: Build Image
         run: docker compose -f docker/compose.yaml build
 
+      - name: Prepare Config for Smoke Test
+        run: cp Config.inc.example.php Config.inc.php
+
       - name: Test Image Starts
         run: |
           docker compose -f docker/compose.yaml up -d
           ready=0
           for i in $(seq 1 30); do
-            if curl -sf http://localhost:9300/v1/limits > /dev/null; then
+            if curl -sf http://localhost:9501/v1/limits > /dev/null; then
               ready=1
               break
             fi

@@ -72,6 +72,15 @@ class ApiResponse
             ->withBody(new SwooleStream($content));
     }
 
+    private static function encodeJson(mixed $data): string
+    {
+        try {
+            return json_encode($data, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR);
+        } catch (\JsonException $e) {
+            return '{"success":false,"error":"Unable to encode response.","code":500}';
+        }
+    }
+
     private static function jsonResponse(mixed $data, int $httpCode): ResponseInterface
     {
         $response = new \Hyperf\HttpMessage\Server\Response();
@@ -79,6 +88,6 @@ class ApiResponse
         return $response
             ->withStatus($httpCode)
             ->withHeader('Content-Type', 'application/json; charset=utf-8')
-            ->withBody(new SwooleStream(json_encode($data, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)));
+            ->withBody(new SwooleStream(self::encodeJson($data)));
     }
 }

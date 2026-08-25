@@ -8,6 +8,7 @@
 import json
 import os
 import sys
+import tempfile
 import urllib.request
 
 BASE = "https://launchermeta.mojang.com/mc/game/version_manifest_v2.json"
@@ -25,7 +26,7 @@ def main() -> int:
     for v in versions:
         vid = v["id"]
         target = os.path.join(OUT, f"{vid}.txt")
-        if os.path.exists(target):
+        if os.path.isfile(target) and os.path.getsize(target) > 0:
             skip += 1
             continue
         try:
@@ -37,15 +38,25 @@ def main() -> int:
             size = cm["size"] // 1024 // 1024
             print(f"[down] {vid} ({size}MB)")
             data = urllib.request.urlopen(url, timeout=120).read()
-            with open(target, "wb") as f:
-                f.write(data)
+            fd, part = tempfile.mkstemp(prefix=f".{vid}.", suffix=".part", dir=OUT)
+            try:
+                with os.fdopen(fd, "wb") as f:
+                    f.write(data)
+                os.replace(part, target)
+            except Exception:
+                os.close(fd)
+                try:
+                    os.unlink(part)
+                except FileNotFoundError:
+                    pass
+                raise
             ok += 1
         except Exception as e:  # noqa: BLE001
             print(f"[FAIL] {vid}: {e}")
             fail += 1
 
     print(f"完成: 下载 {ok}, 跳过 {skip}, 失败 {fail}")
-    return 0
+    return 1 if fail else 0
 
 
 if __name__ == "__main__":

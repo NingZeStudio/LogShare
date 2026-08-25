@@ -1,5 +1,28 @@
 # Changelog
 
+## 1.7.3 — 2026-08-25
+
+### 🐛 修复
+
+- **AI 首次请求空流**：新增 `CURLOPT_ACCEPT_ENCODING` 允许 curl 透明解压，根治上游 gzip SSE 导致 `data:` 行乱码误判为空流；空流失败后自动重试同 key 一次，避免偶发首次连接预热问题
+- **`/rag` 访问控制**：默认仅允许本机回环访问，可选 `ai.mcp.rag.authToken` Bearer 鉴权；LogAgent 自调用自动携带 Token
+- **出站 SSRF 防护**：MCPClient/SemanticClient 拒绝私网地址，未解析主机名不拦截；内置 RAG 仍可用回环
+- **限流中间件**：支持 `trustedProxies` 下的 `X-Real-IP`；`/rag` 纳入限流桶
+- **RAG 索引原子构建**：先写临时数据库，完成后原子 rename 替换，构建失败保留旧索引
+- **日志分析缓存锁**：Redis NX 锁 + 等待缓存，缓解 cache stampede
+- **上游错误脱敏**：SSE 统一返回 "AI service temporarily unavailable."，不再暴露上游细节
+- **MCP 响应校验**：私网拦截、`data:` 无空格 SSE 兼容、response id 校验
+- **PHPStan 排除收窄**：仅保留 `SpinYarnClient.php`
+- **文件存储原子写入**：临时文件 + rename 替换；renew 只更新 `.meta.json`
+
+### ✨ 改进
+
+- **Compose 统一**：`docker/compose.yaml` 同时满足开发与生产，移除 `docker/compose.prod.yaml`；挂载 `Config.inc.php` 注入业务配置
+- **Docker 编排**：移除内置 nginx，Hyperf 绑定回环 `127.0.0.1:9501` 由宿主机反代直连
+- **CI 增强**：Docker 构建覆盖 PR、Composer validate/audit、coverage 生成
+- **映射下载脚本**：失败返回非零、`.part` 临时文件原子替换、gzip/非空校验
+- **MariaDB 外键**：`log_files`/`log_metadata` 增加 `ON DELETE CASCADE`
+
 ## 1.7.2-hotfix.2 — 2026-08-25
 
 ### 🐛 修复

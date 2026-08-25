@@ -74,4 +74,9 @@ class RedisCache extends RedisClient implements CacheInterface
     {
         return self::opExpire($key, $seconds);
     }
+
+    public static function Acquire(string $key, int $seconds): bool
+    {
+        return self::opSetNxEx($key, $seconds);
+    }
 }

@@ -11,6 +11,8 @@ class AIClient
     private const DEFAULT_TIMEOUT = 120;
     private const DEFAULT_CONNECT_TIMEOUT = 15;
     private const CACHE_TTL = 1800;
+    // 非流式回退解析用的原始响应累积上限，超过后不再累积（正常回复远小于此值）
+    private const MAX_RAW_BODY_BYTES = 2097152;
 
     /**
      * Stream a chat completion with optional tools.
@@ -50,7 +52,9 @@ class AIClient
 
         foreach ($keys as $apiKey) {
             $emitted = false;
+            $retried = false;
 
+            retry:
             try {
                 $payload = self::buildPayload($messages, $config['model'], $tools);
                 $buffer = '';
@@ -59,6 +63,7 @@ class AIClient
                 $toolCalls = [];
                 $lastToolCallIndex = null;
                 $responseBody = '';
+                $rawBody = '';
 
                 $ch = curl_init($config['baseUrl']);
                 curl_setopt_array($ch, self::curlOptions($payload, $apiKey, $config['timeout']));
@@ -69,6 +74,7 @@ class AIClient
                     &$fullReasoning,
                     &$toolCalls,
                     &$responseBody,
+                    &$rawBody,
                     &$emitted,
                     &$lastToolCallIndex,
                     $onDelta,
@@ -80,16 +86,23 @@ class AIClient
                     if (strlen($responseBody) < 8192) {
                         $responseBody .= $data;
                     }
+                    if (strlen($rawBody) < self::MAX_RAW_BODY_BYTES) {
+                        $rawBody .= $data;
+                    }
 
                     while (($pos = strpos($buffer, "\n")) !== false) {
                         $line = rtrim(substr($buffer, 0, $pos), "\r");
                         $buffer = substr($buffer, $pos + 1);
 
-                        if (!str_starts_with($line, 'data: ')) {
+                        // 兼容「data: {json}」与「data:{json}」两种分隔风格
+                        if (str_starts_with($line, 'data: ')) {
+                            $lineData = substr($line, 6);
+                        } elseif (str_starts_with($line, 'data:')) {
+                            $lineData = substr($line, 5);
+                        } else {
                             continue;
                         }
 
-                        $lineData = substr($line, 6);
                         $trimmedData = trim($lineData);
 
                         if ($trimmedData === '[DONE]') {
@@ -99,6 +112,16 @@ class AIClient
                         $parsed = json_decode($lineData, true);
                         if (!is_array($parsed)) {
                             continue;
+                        }
+
+                        // 部分网关以 HTTP 200 + 流内 error 帧报告失败（如上下文
+                        // 超限、模型路由失败），必须显式失败换 key 重试，而不是
+                        // 静默忽略导致「空流假成功」
+                        if (isset($parsed['error'])) {
+                            $message = is_array($parsed['error'])
+                                ? ($parsed['error']['message'] ?? json_encode($parsed['error'], JSON_UNESCAPED_UNICODE))
+                                : (string) $parsed['error'];
+                            throw new \Exception('upstream stream error frame: ' . $message);
                         }
 
                         $delta = $parsed['choices'][0]['delta'] ?? [];
@@ -182,11 +205,34 @@ class AIClient
                     throw new \Exception('HTTP ' . $httpCode . ': ' . self::extractErrorDetail($responseBody));
                 }
 
-                // 空完成检测：既无正文也无工具调用也无思维链 = 上游异常（如超大
-                // payload 被网关静默吞掉）。视为失败，换 key 重试或向上抛错，
-                // 而不是给客户端一个空分析。
+                // 空完成检测：既无正文也无工具调用也无思维链 = 上游异常。视为
+                // 失败，换 key 重试或向上抛错，而不是给客户端一个空分析。
                 if (trim($fullContent) === '' && $toolCalls === [] && trim($fullReasoning) === '') {
-                    throw new \Exception('upstream returned an empty stream (HTTP ' . $httpCode . ', ' . strlen($responseBody) . ' bytes body)');
+                    // 非流式回退：部分网关在大上下文/工具循环下会忽略 stream=true，
+                    // 以 HTTP 200 返回一次性 JSON；按行 SSE 解析拿不到任何 data: 行。
+                    $fallback = self::extractNonStreamingResult($rawBody);
+                    if ($fallback !== null) {
+                        [$fbReasoning, $fbContent, $fbToolCalls] = $fallback;
+                        if ($fbReasoning !== '') {
+                            $emitted = true;
+                            $onReasoning($fbReasoning);
+                            $fullReasoning = $fbReasoning;
+                        }
+                        if ($fbContent !== '') {
+                            $emitted = true;
+                            $onDelta($fbContent);
+                            $fullContent = $fbContent;
+                        }
+                        if ($fbToolCalls !== []) {
+                            $emitted = true;
+                            $toolCalls = $fbToolCalls;
+                        }
+                    } else {
+                        // 留存响应体头部片段，便于定位上游到底回了什么
+                        \App\Syslog::error('AI Client', 'Empty stream diagnostics, body head: '
+                            . mb_substr(preg_replace('/\s+/', ' ', trim($responseBody)), 0, 300));
+                        throw new \Exception('upstream returned an empty stream (HTTP ' . $httpCode . ', ' . strlen($responseBody) . ' bytes body)');
+                    }
                 }
 
                 $success = true;
@@ -213,12 +259,18 @@ class AIClient
                     // 已向客户端 emit 了部分内容，换 key 重试会造成重复输出，直接失败
                     break;
                 }
+                // 空流/HTTP 0 等偶发故障：原 key 重试一次，避免首次连接预热问题
+                if (!$retried && str_contains($e->getMessage(), 'empty stream')) {
+                    $retried = true;
+                    \App\Syslog::error('AI Client', "Key {$keyPrefix} 空流，重试一次");
+                    goto retry;
+                }
                 continue;
             }
         }
 
         if (!$success) {
-            throw new \Exception('所有 API Key 均尝试失败: ' . ($lastException ? $lastException->getMessage() : '未知错误'));
+            throw new \Exception('AI service temporarily unavailable.');
         }
     }
 
@@ -235,6 +287,7 @@ class AIClient
         \App\Sse\SseWriter::begin($response);
 
         if ($cacheKey !== null) {
+            $cacheKey = 'analysis-v2:' . $cacheKey;
             $cached = self::checkCache($cacheKey);
             if ($cached !== null) {
                 \App\Sse\SseWriter::write("data: " . json_encode(['choices' => [['delta' => ['content' => $cached]]]], JSON_UNESCAPED_UNICODE) . "\n\n");
@@ -348,7 +401,80 @@ class AIClient
             ],
             CURLOPT_TIMEOUT => $timeout,
             CURLOPT_CONNECTTIMEOUT => self::DEFAULT_CONNECT_TIMEOUT,
+            // 允许 curl 透明解压，避免上游强制 gzip 时收到乱码导致解析全失败
+            CURLOPT_ACCEPT_ENCODING => '',
         ];
+    }
+
+    /**
+     * Parse a whole response body as a non-streaming chat completion.
+     *
+     * Some gateways ignore stream=true under large contexts / tool loops and
+     * answer with a single JSON object over HTTP 200; line-based SSE parsing
+     * then sees nothing and the stream looks empty.
+     *
+     * @param string $body Raw response body
+     * @return array{0:string,1:string,2:array}|null [reasoning, content, toolCalls] or null when not consumable
+     */
+    private static function extractNonStreamingResult(string $body): ?array
+    {
+        $trimmed = trim($body);
+        if ($trimmed === '' || !str_contains($trimmed, '{')) {
+            return null;
+        }
+
+        $decoded = json_decode($trimmed, true);
+        if (!is_array($decoded)) {
+            // 容忍前后夹杂的非 JSON 噪声字符
+            $start = strpos($trimmed, '{');
+            $end = strrpos($trimmed, '}');
+            if ($start === false || $end === false || $end <= $start) {
+                return null;
+            }
+            $decoded = json_decode(substr($trimmed, $start, $end - $start + 1), true);
+            if (!is_array($decoded)) {
+                return null;
+            }
+        }
+
+        $choice = $decoded['choices'][0] ?? null;
+        if (!is_array($choice)) {
+            return null;
+        }
+        $message = $choice['message'] ?? $choice['delta'] ?? null;
+        if (!is_array($message)) {
+            return null;
+        }
+
+        $content = isset($message['content']) && is_string($message['content']) ? $message['content'] : '';
+        $reasoning = isset($message['reasoning_content']) && is_string($message['reasoning_content'])
+            ? $message['reasoning_content']
+            : '';
+
+        $toolCalls = [];
+        if (isset($message['tool_calls']) && is_array($message['tool_calls'])) {
+            foreach ($message['tool_calls'] as $i => $call) {
+                $name = $call['function']['name'] ?? '';
+                if (!is_string($name) || $name === '') {
+                    continue;
+                }
+                $arguments = $call['function']['arguments'] ?? '{}';
+                $toolCalls[] = [
+                    'id' => isset($call['id']) && is_string($call['id']) && $call['id'] !== ''
+                        ? $call['id']
+                        : 'call_' . $i,
+                    'type' => 'function',
+                    'name' => $name,
+                    'arguments' => is_string($arguments) && $arguments !== '' ? $arguments : '{}',
+                ];
+            }
+        }
+
+        if ($content === '' && $reasoning === '' && $toolCalls === []) {
+            return null;
+        }
+
+        return [$reasoning, $content, $toolCalls];
     }
 
     /**

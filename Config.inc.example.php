@@ -71,6 +71,7 @@ return [
     'rateLimit' => [
         'limit' => 36000,
         'window' => 60,
+        'trustedProxies' => [],
     ],
 
     /* ─── Legal ────────────────────────────────────────────── */
@@ -135,6 +136,7 @@ return [
                 // （主 http server 的 /rag 路径，由 RagController 承载 MCP JSON-RPC）。
                 'url' => 'http://127.0.0.1:9501/rag',
                 'headers' => [],
+                'authToken' => '',
                 // SQLite 数据库路径（相对项目根）
                 'db' => 'rag/index.db',
             ],

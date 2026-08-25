@@ -42,12 +42,22 @@ class LogAgent
         // try 边界紧贴 begin()：SSE 开始输出后任何异常都必须以流内 error 收尾，
         // 不能逃逸到全局 JSON handler 造成坏帧。
         try {
+            $cacheLock = null;
             if ($cacheKey !== null) {
                 $cached = self::checkCache($cacheKey);
                 if ($cached !== null) {
                     self::emitContent($cached);
                     self::emitDone();
                     return;
+                }
+                $cacheLock = self::acquireCacheLock($cacheKey);
+                if ($cacheLock === null) {
+                    $cached = self::waitForCache($cacheKey);
+                    if ($cached !== null) {
+                        self::emitContent($cached);
+                        self::emitDone();
+                        return;
+                    }
                 }
             }
 
@@ -141,12 +151,13 @@ class LogAgent
 
             if ($cacheKey !== null && $fullAnswer !== '') {
                 self::writeCache($cacheKey, $fullAnswer, $cacheTTL);
+                self::releaseCacheLock($cacheKey);
             }
 
             self::emitDone();
         } catch (\Throwable $e) {
             \App\Syslog::error('LogAgent', '分析失败: ' . $e->getMessage());
-            self::emitError($e->getMessage());
+            self::emitError('AI service temporarily unavailable.');
         }
     }
 
@@ -299,6 +310,10 @@ class LogAgent
         $url = (string) ($endpoint['url'] ?? '');
         if (!isset($session->mcpClients[$url])) {
             $headers = is_array($endpoint['headers'] ?? null) ? $endpoint['headers'] : [];
+            // 内置 RAG 配置了 authToken 时随请求传递，保证自调用通过 /rag 的鉴权
+            if (($endpoint['authToken'] ?? '') !== '') {
+                $headers[] = 'Authorization: Bearer ' . $endpoint['authToken'];
+            }
             $timeout = (int) ($endpoint['timeout'] ?? 30);
             $session->mcpClients[$url] = new MCPClient($url, $headers, $timeout);
         }
@@ -686,6 +701,36 @@ PROMPT;
             }
         } catch (\Exception $e) {
             \App\Syslog::error('LogAgent Cache', '读取失败: ' . $e->getMessage());
+        }
+        return null;
+    }
+
+    private static function acquireCacheLock(string $cacheKey): ?string
+    {
+        try {
+            $lock = $cacheKey . ':lock:' . bin2hex(random_bytes(6));
+            return \App\Cache\RedisCache::Acquire($cacheKey . ':lock', 120) ? $lock : null;
+        } catch (\Throwable $e) {
+            return null;
+        }
+    }
+
+    private static function releaseCacheLock(string $cacheKey): void
+    {
+        try {
+            \App\Cache\RedisCache::Delete($cacheKey . ':lock');
+        } catch (\Throwable $e) {
+        }
+    }
+
+    private static function waitForCache(string $cacheKey): ?string
+    {
+        for ($i = 0; $i < 10; $i++) {
+            usleep(100000);
+            $cached = self::checkCache($cacheKey);
+            if ($cached !== null) {
+                return $cached;
+            }
         }
         return null;
     }
