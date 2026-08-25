@@ -16,6 +16,7 @@ parameters:
     - message: '#Call to an undefined method Aternos\\Codex\\Log\\Log::analyse#'
       path: app/Log.php
     # Hyperf\Response::getConnection() is dispatched via __call to the underlying
-    # Swoole response; the concrete method lives on the wrapped response.
-    - message: '#Call to an undefined method Hyperf\\HttpServer\\Response::getConnection#'
+    # Swoole response; withHeader() chains narrow the inferred type to
+    # ResponseInterface, so both shapes are ignored.
+    - message: '#Call to an undefined method (Hyperf\\HttpServer\\Response|Psr\\Http\\Message\\ResponseInterface)::getConnection\(\)#'
       path: app/Sse/SseWriter.php

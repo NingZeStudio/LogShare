@@ -44,6 +44,7 @@ return [
     /* ─── Filter ───────────────────────────────────────────── */
     'filter' => [
         'pre' => [
+            '\\App\\Filter\\EncodingFilter',
             '\\App\\Filter\\TrimFilter',
             '\\App\\Filter\\LimitBytesFilter',
             '\\App\\Filter\\LimitLinesFilter',

@@ -205,6 +205,20 @@ test('AccessTokenFilter masks X-Access-Token header', function () {
     expect($output)->toContain('X-Access-Token: ********');
 });
 
+
+test("EncodingFilter sanitizes invalid UTF-8 bytes", function () {
+    $dirty = "正常开头 " . "\xff\xfe\x80" . " GBK 残留行";
+    $clean = \App\Filter\EncodingFilter::filter($dirty);
+
+    expect(mb_check_encoding($clean, "UTF-8"))->toBeTrue();
+    expect($clean)->toContain("正常开头");
+    expect(json_encode(["c" => $clean], JSON_UNESCAPED_UNICODE))->not->toBeFalse();
+});
+
+test("EncodingFilter passes valid UTF-8 through unchanged", function () {
+    $ok = "合法内容 line2\n中文 English mixed 123";
+    expect(\App\Filter\EncodingFilter::filter($ok))->toBe($ok);
+});
 test('Filter chain applies all filters in order', function () {
     $input = 'Player Steve[/192.168.1.1:25565] UUID: 550e8400-e29b-41d4-a716-446655440000 at (100, 64, -200)';
     $output = applyPreFilters($input);
