@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.7.3-hotfix.1 — 2026-08-25
+
+### 🐛 修复
+
+- **AI 分析不可用**：修复内置 RAG 使用回环地址时 MCPClient 属性未初始化，导致 LogAgent 统一返回服务暂时不可用
+- **Docker 映射路径**：修正 `docker/compose.yaml` 中 mappings 目录的挂载路径
+
 ## 1.7.3 — 2026-08-25
 
 ### 🐛 修复
