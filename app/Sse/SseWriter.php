@@ -34,6 +34,15 @@ final class SseWriter
         self::store(null);
 
         if ($response !== null) {
+            // 流式响应经 EventStream 直写连接，不会经过 CorsMiddleware 对返回值的
+            // 加头流程；必须在首帧下发前手动携带 CORS 头，否则浏览器跨域拦截 SSE。
+            $response = $response
+                ->withHeader('Access-Control-Allow-Origin', '*')
+                ->withHeader('Access-Control-Allow-Headers', '*')
+                ->withHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS')
+                ->withHeader('Cache-Control', 'no-cache')
+                ->withHeader('X-Accel-Buffering', 'no');
+
             $connection = $response->getConnection();
             if ($connection !== null) {
                 self::store(new EventStream($connection, $response));
