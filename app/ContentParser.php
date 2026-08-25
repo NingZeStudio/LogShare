@@ -33,7 +33,7 @@ class ContentParser
     public function getContent(): string|ApiError|array
     {
         $config = \App\Config::Get('storage');
-        $limit = $config['maxLength'] * 2;
+        $limit = ((int) ($config['maxLength'] ?? (10 * 1024 * 1024))) * 2;
 
         $body = $this->request->getBody()->getContents();
         if (strlen($body) > $limit) {

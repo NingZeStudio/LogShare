@@ -20,7 +20,8 @@ return [
             'max_connections' => 10,
             'connect_timeout' => 10.0,
             'wait_timeout' => 3.0,
-            'heartbeat' => -1,
+            // 心跳保活：低流量实例长空闲后连接可能被 MySQL wait_timeout 断开
+            'heartbeat' => (float) env('DB_HEARTBEAT', 60),
             'max_idle_time' => (float) env('DB_MAX_IDLE_TIME', 60),
         ],
         'options' => [

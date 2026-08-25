@@ -12,6 +12,7 @@ class IndexController extends AbstractController
     #[GetMapping(path: '/')]
     public function index(): ResponseInterface
     {
+        // 端点清单为快照，仅作发现用途；新增端点时以 openapi.yaml 为唯一权威并同步此处。
         $endpoints = [
             'POST /1/log',
             'DELETE /1/log/{id}',

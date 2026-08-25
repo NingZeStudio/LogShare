@@ -165,10 +165,12 @@ class MariaDbStorage implements StorageInterface
                 ->pluck('id')
                 ->all();
 
-            foreach ($expiredIds as $logId) {
-                Db::table(self::TABLE_METADATA)->where('log_id', $logId)->delete();
-                Db::table(self::TABLE_FILES)->where('log_id', $logId)->delete();
+            if (empty($expiredIds)) {
+                return 0;
             }
+
+            Db::table(self::TABLE_METADATA)->whereIn('log_id', $expiredIds)->delete();
+            Db::table(self::TABLE_FILES)->whereIn('log_id', $expiredIds)->delete();
 
             return Db::table(self::TABLE_LOGS)->where('created', '<', $expireBefore)->delete();
         });

@@ -9,7 +9,7 @@ class LimitLinesFilter extends Filter
     public static function filter(string $data): string
     {
         $config = \App\Config::Get('storage');
-        $maxLines = $config['maxLines'];
+        $maxLines = (int) ($config['maxLines'] ?? 50_000);
         $lines = explode("\n", $data);
 
         if (count($lines) > $maxLines) {

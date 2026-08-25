@@ -55,7 +55,6 @@
         "test": "pest",
         "test:coverage": "pest --coverage",
         "test:architecture": "pest --group=architecture",
-        "stan": "phpstan analyse app --level=5",
-        "cs-fix": "php-cs-fixer fix"
+        "stan": "phpstan analyse app --level=5"
     }
 }

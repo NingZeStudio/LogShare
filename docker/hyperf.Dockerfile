@@ -12,14 +12,15 @@ FROM php:8.5-cli
 COPY --from=composer:2 /usr/bin/composer /usr/bin/composer
 
 # 扩展安装器：pdo_mysql / redis / zip（zip 供 composer 解压 dist 包）
-# pcntl / posix / sockets 为 Hyperf 注解扫描与 Swoole 所需
-COPY --from=mlocati/php-extension-installer /usr/bin/install-php-extensions /usr/local/bin/
-RUN install-php-extensions pdo_mysql redis zip pcntl posix sockets mbstring
+# pdo_sqlite 为内置 RAG（SQLite FTS5）必需；pcntl / posix / sockets 为 Hyperf 注解扫描与 Swoole 所需
+COPY --from=mlocati/php-extension-installer /usr/local/bin/install-php-extensions /usr/local/bin/
+RUN install-php-extensions pdo_mysql pdo_sqlite redis zip pcntl posix sockets mbstring
 
-# 编译 Swoole 6.2（PHP 8.5 需 Swoole 6.2+）
+# 编译 Swoole（固定版本，保证构建可复现且满足 Hyperf 3.2 + PHP 8.5 所需的 6.2+）
+ARG SWOOLE_VERSION=6.2.0
 RUN apt-get update && apt-get install -y --no-install-recommends \
         autoconf build-essential libcurl4-openssl-dev libssl-dev zlib1g-dev libc-ares-dev libbrotli-dev \
-    && pecl install swoole \
+    && pecl install swoole-${SWOOLE_VERSION} \
     && docker-php-ext-enable swoole \
     && rm -rf /var/lib/apt/lists/*
 

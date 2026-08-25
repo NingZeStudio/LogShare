@@ -57,7 +57,7 @@ class SpinYarnClient
             $deobfuscated = $result['deobfuscated'] ?? null;
             return is_string($deobfuscated) && $deobfuscated !== '' ? $deobfuscated : null;
         } catch (\Throwable $e) {
-            error_log("[SpinYarn] 反混淆失败: " . $e->getMessage());
+            \App\Syslog::error("SpinYarn", "反混淆失败: " . $e->getMessage());
             return null;
         }
     }
@@ -85,7 +85,7 @@ class SpinYarnClient
             try {
                 $handle = spinyarn_init($mappingsDir, $cacheMax, $cacheHigh, $cacheLow);
             } catch (\Throwable $e) {
-                error_log("[SpinYarn] 初始化失败: " . $e->getMessage());
+                \App\Syslog::error("SpinYarn", "初始化失败: " . $e->getMessage());
                 $handle = false;
             }
         }

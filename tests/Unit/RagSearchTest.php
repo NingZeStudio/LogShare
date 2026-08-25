@@ -6,6 +6,15 @@ beforeEach(function () {
     $this->dbPath = CORE_PATH . '/tmp/rag_test_' . uniqid() . '.db';
     $this->rag = new RagSearch($this->dbPath);
 
+    // 单元测试与外部语义网关隔离：词法契约用例不触发 embed/rerank
+    $cfgRef = new ReflectionClass(\App\Config::class);
+    $dataProp = $cfgRef->getProperty('data');
+    $orig = $dataProp->getValue();
+    $data = $orig;
+    $data['ai']['rag']['enabled'] = false;
+    $dataProp->setValue(null, $data);
+    $GLOBALS['ragTestOrigConfig'] = [$dataProp, $orig];
+
     $pdo = $this->rag->getPdo();
     $pdo->exec(
         "INSERT INTO docs(title, body, source) VALUES
@@ -17,6 +26,10 @@ beforeEach(function () {
 });
 
 afterEach(function () {
+    // 恢复全局配置（beforeEach 关闭了语义开关）
+    [$dataProp, $orig] = $GLOBALS['ragTestOrigConfig'];
+    $dataProp->setValue(null, $orig);
+
     if (file_exists($this->dbPath)) {
         unlink($this->dbPath);
     }
@@ -35,7 +48,8 @@ test('search finds English tokens with BM25 ranking', function () {
 test('search matches CJK phrases via LIKE fallback', function () {
     $results = $this->rag->search('服务器启动', 5);
 
-    expect($results)->toHaveCount(1);
+    // bigram 增强后 OR 降级可能召回含部分片段的其他文档，但整串命中的排首位
+    expect($results)->not->toBe([]);
     expect($results[0]['title'])->toBe('启动慢');
     expect($results[0]['score'])->toBe('fallback');
 });
@@ -51,34 +65,45 @@ test('LIKE fallback ranks title hits above body-only hits', function () {
     expect($results[0]['title'])->toBe('内存溢出专题');
 });
 
-test('search splits CJK multi-keyword queries with AND semantics', function () {
+test('search splits CJK multi-keyword queries: AND first, OR fallback ranks partial matches lower', function () {
     $pdo = $this->rag->getPdo();
     $pdo->exec("INSERT INTO docs(title, body, source) VALUES
         ('更换皮肤与披风', '支持微软账号更换皮肤，通过 Mojang API 上传', 'skin.md'),
         ('账号管理', '管理微软账号与离线账号', 'account.md')");
 
-    // Both terms appear only in skin.md
+    // skin.md matches both terms (AND), account.md only one (OR fallback)
     $results = $this->rag->search('更换皮肤 微软账号', 5);
-    expect($results)->toHaveCount(1);
+    expect(count($results))->toBeGreaterThanOrEqual(1);
     expect($results[0]['source'])->toBe('skin.md');
 });
 
-test('search split terms require all terms to match', function () {
+test('search degrades to OR when no doc contains all terms', function () {
     $pdo = $this->rag->getPdo();
     $pdo->exec("INSERT INTO docs(title, body, source) VALUES
         ('控制布局编辑器', '用于编辑控制布局', 'editor.md'),
         ('控件层', '承载控件的区域', 'layer.md')");
 
-    // "控制布局" only in editor.md, "控件层" only in layer.md -> no doc has both
+    // No doc has both terms: previously empty, now OR fallback surfaces both,
+    // ranked by matched-term count (title hit = 2)
     $results = $this->rag->search('控制布局 控件层', 5);
-    expect($results)->toBe([]);
+    expect(count($results))->toBe(2);
+    expect($results[0]['title'])->toBe('控制布局编辑器');
+    $scores = array_column($results, 'score');
+    expect($scores)->toContain('fallback-or');
 });
 
-test('splitTerms splits on whitespace and punctuation', function () {
+test('splitTerms splits on whitespace and punctuation, exploding CJK bigrams', function () {
     $ref = new ReflectionClass(RagSearch::class);
     $method = $ref->getMethod('splitTerms');
 
-    expect($method->invoke(null, '更换皮肤，微软账号、离线账号'))->toBe(['更换皮肤', '微软账号', '离线账号']);
+    // CJK runs keep the original term first, then overlapping 2-grams
+    $terms = $method->invoke(null, '更换皮肤，微软账号');
+    expect($terms[0])->toBe('更换皮肤');
+    expect($terms)->toContain('微软账号');
+    expect($terms)->toContain('更换');
+    expect($terms)->toContain('皮肤');
+
+    // short CJK (2 chars) stays as-is; ASCII terms get no bigrams
     expect($method->invoke(null, '  a  b  a  '))->toBe(['a', 'b']);
     expect($method->invoke(null, ''))->toBe([]);
     expect($method->invoke(null, 'Forge;Fabric:NeoForge'))->toBe(['Forge', 'Fabric', 'NeoForge']);
@@ -96,16 +121,17 @@ test('snippet centers on the first matching term for long bodies', function () {
     $ref = new ReflectionClass(RagSearch::class);
     $method = $ref->getMethod('extractSnippet');
 
-    // 命中词在中后段，snippet 应围绕它，且以省略号开头
-    $prefix = str_repeat('前置无关内容。', 60); // 420 字符
+    // 命中词在中段且两侧远超 ±800 窗口：snippet 应围绕它、以省略号收边
+    $prefix = str_repeat('前置无关内容。', 200); // 1400 字符
     $hit = '目标关键词';
-    $suffix = str_repeat('后置无关内容。', 60);
+    $suffix = str_repeat('后置无关内容。', 200);
     $body = $prefix . $hit . $suffix;
 
     $snippet = $method->invoke(null, $body, ['目标关键词']);
 
     expect($snippet)->toContain('目标关键词');
     expect($snippet)->toStartWith('…');
+    expect($snippet)->toEndWith('…');
     expect(mb_strlen($snippet))->toBeLessThan(mb_strlen($body));
 });
 
@@ -113,10 +139,12 @@ test('snippet returns leading fragment when term only matches title', function (
     $ref = new ReflectionClass(RagSearch::class);
     $method = $ref->getMethod('extractSnippet');
 
-    $body = str_repeat('正文里没有任何查询词。', 60); // 660 字符
+    // 超过 SNIPPET_FULL_BODY_LIMIT(1600) 才走窗口模式
+    $body = str_repeat('正文里没有任何查询词。', 260); // 1820 字符
     $snippet = $method->invoke(null, $body, ['标题词']);
 
     expect($snippet)->not->toContain('标题词');
+    expect(mb_strlen($snippet))->toBeLessThan(mb_strlen($body));
     expect($snippet)->toEndWith('…');
 });
 
@@ -234,4 +262,31 @@ test('topics groups docs by source directory', function () {
 
     $zl = array_values(array_filter($topics, fn($t) => $t['dir'] === 'zl_help'));
     expect($zl[0]['count'])->toBe(2);
+});
+test('semantic enhancement degrades to lexical when the gateway is unreachable', function () {
+    // 开启语义 + 指向不可达端口：search 不得抛异常，且必须返回词法结果
+    $cfgRef = new ReflectionClass(\App\Config::class);
+    $dataProp = $cfgRef->getProperty('data');
+    $orig = $dataProp->getValue();
+    $data = $orig;
+    $data['ai']['rag'] = [
+        'enabled' => true,
+        'providers' => [[
+            'name' => 'unreachable',
+            'baseUrl' => 'http://127.0.0.1:1',
+            'apiKey' => 'k',
+            'embeddingModel' => 'bge-m3',
+            'rerankModel' => 'bge-reranker-v2-m3',
+        ]],
+    ];
+    $dataProp->setValue(null, $data);
+
+    $results = $this->rag->search('OutOfMemoryError', 5);
+
+    $dataProp->setValue(null, $orig);
+
+    expect(count($results))->toBe(2);
+    $titles = array_column($results, 'title');
+    expect($titles)->toContain('OOM 排查');
+    expect($titles)->toContain('崩溃日志分析');
 });

@@ -208,7 +208,7 @@ GET /1/ai/{id}   （已弃用，保留兼容）
 GET /v1/ai/{id}
 ```
 
-SSE（Server-Sent Events）流式输出。LogAgent 模式下，Agent 可读取该日志 ID 下的所有文件（`list_log_files` / `read_log_file` 工具，作用域限定在当前 ID）。
+SSE（Server-Sent Events）流式输出。LogAgent 模式下，Agent 可读取该日志 ID 下的所有文件（`list_log_files` / `read_log_file` 工具，作用域限定在当前 ID）。`GET /v1/ai/{id}` 会绑定该 ID；`POST /v1/ai/analyse` 只有请求 JSON 提供 `id` 时才会开放文件工具。
 
 ### 直接提交内容
 
@@ -241,14 +241,48 @@ LogAgent 模式（`ai.agent.enabled`）会输出额外的 `event: status` 事件
 | `data:`（原有） | `{"choices":[{"delta":{"content":"..."}}]}` | 正文增量 |
 | `event: done` | `{"status":"completed"}` | 流结束 |
 
-**可注册的工具：**
+**前端 SSE 解析注意事项：** 一个 SSE 事件以空行（`\n\n`）结束；`event: status` 后紧跟其 `data:` JSON，未声明 `event:` 的 `data:` 行是正文增量。正文应拼接 `data.choices[0].delta.content`，思考内容拼接 `data.delta`。除 `done` 外还需处理 `event: error`（`data.error`）和 `event: status` 的 `tool`、`tool_result`、`limit`。
+**可注册的工具：** 工具会作为 OpenAI-compatible `tools` 字段发送给模型；只有满足注册条件时才会出现在该次会话中。工具调用过程本身不会作为客户端请求发送，前端只接收对应的 SSE 状态事件。
 
-| 工具 | 说明 | 注册条件 |
-|------|------|----------|
-| `web_search_exa` | Exa 网络搜索 | 配置 `ai.mcp.webSearch.url` |
-| `rag_search` | 内置 RAG 知识库检索（SQLite FTS5） | 配置 `ai.mcp.rag.url` |
-| `list_log_files` | 列出当前会话日志的文件 | 请求绑定日志 ID |
-| `read_log_file` | 读取文件指定行区间 | 请求绑定日志 ID |
+| 工具 | 注册条件 | 参数 | 返回给模型的内容 |
+|------|----------|------|------------------|
+| `web_search_exa` | `ai.mcp.webSearch.url` 非空 | `query: string`（必填，错误类名、报错关键词或 mod 名称） | Exa MCP 文本搜索结果，多个文本块以空行拼接 |
+| `rag_search` | `ai.mcp.rag.url` 非空 | `query: string`（必填）；`k: number`（可选，默认 5，服务端限制 1–20） | SQLite FTS5/BM25 知识库结果，包含标题、来源、片段和分数 |
+| `list_topics` | `ai.mcp.rag.url` 非空 | 无参数，`properties: {}` | 知识库主题目录、文档数量和示例文件名 |
+| `list_log_files` | 当前会话绑定日志 ID | 无参数，`properties: {}` | 主文件 `main` 及附加文件的名称、字节数、行数 |
+| `read_log_file` | 当前会话绑定日志 ID | `filename: string`（必填） | 返回该文件的**完整内容**（无行区间参数）；单次字节上限由 `ai.agent.maxFileBytes` 控制（默认 512 KiB），超出时截断并附提示；同一会话内重复读取同一文件会被拒绝并返回提示 |
+
+### 工具定义示例
+
+```json
+[
+  {"type":"function","function":{"name":"web_search_exa","description":"搜索互联网，查找 Minecraft 报错信息、mod 兼容性等解决方案。返回与查询相关的网页内容。","parameters":{"type":"object","properties":{"query":{"type":"string","description":"搜索关键词，使用错误类名或报错关键词"}},"required":["query"]}}},
+  {"type":"function","function":{"name":"rag_search","description":"在内部知识库中检索相关文档片段。用于查找已知错误与解决方案。","parameters":{"type":"object","properties":{"query":{"type":"string","description":"检索关键词"},"k":{"type":"number","description":"返回片段数量，默认 5"}},"required":["query"]}}},
+  {"type":"function","function":{"name":"list_topics","description":"列出内部知识库涵盖的主题与文档分布。在不知道检索方向、或搜索无结果时，先调用本工具了解知识库有什么，再针对性搜索。","parameters":{"type":"object","properties":{}}}},
+  {"type":"function","function":{"name":"list_log_files","description":"列出当前日志 ID 下的所有文件（含主文件与附加文件）。","parameters":{"type":"object","properties":{}}}},
+  {"type":"function","function":{"name":"read_log_file","description":"读取当前日志下指定文件的完整内容（不设行区间，直接返回全文）。为避免重复调用，仅对未读取过的文件调用；已读过的文件使用已内容进行分析，不要再次读取。主文件名为 main。","parameters":{"type":"object","properties":{"filename":{"type":"string","description":"文件名（主文件为 main，或使用 list_log_files 列出的名称）"}},"required":["filename"]}}}
+]
+```
+
+工具执行失败不会终止整个 Agent 循环：错误文本会作为 `role: tool` 消息返回模型，由模型决定重试、换工具或直接给出结论。
+
+**重复读取防护：** 同一分析会话内，模型对同一文件的第二次 `read_log_file` 调用不会返回文件内容，而是收到提示「文件 X 已读取（共 N 行，M 字节），其内容已在上文中提供，请直接基于已有内容进行分析，不要重复调用本工具」。`filename` 缺省与 `main` 视为同一文件。该机制在服务端强制执行，用于消除模型反复查看同一日志的循环行为。
+
+**工具结果截断规则：**
+
+- `read_log_file` 的全文结果**不受**通用 12KB 工具截断限制，完整进入模型上下文（仅受 `ai.agent.maxFileBytes` 字节上限约束，超限时有明确截断提示）。
+- 其他工具（搜索/知识库检索）的单次结果超过 12KB 时会截断，且截断处附带可见标记 `[...工具结果过长，已截断至 N 字节...]`，模型可据此决定调整参数重新查询。
+- 用户消息中的内联日志同样按 12KB 截断，并提示模型可用文件工具读取完整内容。
+
+**工具调用兼容细节：**
+
+- 服务端会过滤没有 `name` 的空工具调用，避免将无效 tool call 转发给模型网关。
+- 无参数工具（`list_topics`、`list_log_files`）发送给上游时，`function.arguments` 统一为 JSON 字符串 `{}`，不是空字符串。
+- `tool_call_id` 会原样用于后续 `role: tool` 消息；前端无需自行生成或修改该字段。
+- 同一 Agent 请求内，相同 MCP endpoint 会复用已初始化的 MCP 会话；不同请求不会共享会话。
+- `maxToolRounds` 是完整 Agent 轮次上限；达到上限时发送 `event: status`，其 `data` 为 `{"type":"limit","rounds":N}`，随后仍发送 `event: done`。
+- `reasoning_content` 只有上游模型实际返回时才会产生 `thinking` 事件；模型不返回推理增量时不会人为生成思考内容。
+
 
 > RAG 为内置服务（`rag/` 目录），SQLite FTS5 纯本地检索。构建索引 `php bin/hyperf.php rag:build`；RAG MCP server 整合进 Hyperf 主进程的 `/rag` 路径，默认 `ai.mcp.rag.url = http://127.0.0.1:9501/rag`，数据库路径由 `ai.mcp.rag.db` 指定。
 
@@ -439,6 +473,8 @@ GET /1/filters   （已弃用，保留兼容）
 GET /v1/filters
 ```
 
+过滤器清单由 `filter.pre` 配置动态生成，始终与实际上链路一致；以下为默认配置的完整输出。
+
 **响应：**
 
 ```json
@@ -454,8 +490,14 @@ GET /v1/filters
                 "patterns": [
                     { "pattern": "IPv4", "replacement": "**.**.**.**" },
                     { "pattern": "IPv6", "replacement": "****:****:****:****:****:****:****:****" },
-                    { "pattern": "Username", "replacement": "********" },
-                    { "pattern": "AccessToken", "replacement": "********" }
+                    { "pattern": "IPv6Short", "replacement": "****:****:****:****:****:****:****:****" },
+                    { "pattern": "Uuid", "replacement": "********-****-****-****-************" },
+                    { "pattern": "Xuid", "replacement": "xuid:\"****************\"" },
+                    { "pattern": "SessionToken", "replacement": "accessToken:\"********\"" },
+                    { "pattern": "ClientId", "replacement": "clientId:\"********\"" },
+                    { "pattern": "Coordinate", "replacement": "BlockPos(*****, *****, *****)" },
+                    { "pattern": "Username", "replacement": "C:\\Users\\********\\" },
+                    { "pattern": "AccessToken", "replacement": "accessToken:\"********\"" }
                 ]
             }
         }

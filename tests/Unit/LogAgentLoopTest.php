@@ -64,7 +64,6 @@ afterEach(function () {
 test('LogAgent runs a full tool loop and streams SSE events', function () {
     skipWithoutMockServer($GLOBALS['llm_url'] ?? null);
     ob_start();
-    ob_start();
     LogAgent::analyze('some minecraft crash log', ['logId' => 'aB3x9K']);
     $output = ob_get_clean();
 
@@ -94,7 +93,6 @@ test('LogAgent streams a plain answer when no tools are configured', function ()
     $data['ai']['mcp'] = [];
     $dataProp->setValue(null, $data);
 
-    ob_start();
     ob_start();
     LogAgent::analyze('hello log');
     $output = ob_get_clean();

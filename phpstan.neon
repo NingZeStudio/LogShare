@@ -18,4 +18,4 @@ parameters:
     # Hyperf\Response::getConnection() is dispatched via __call to the underlying
     # Swoole response; the concrete method lives on the wrapped response.
     - message: '#Call to an undefined method Hyperf\\HttpServer\\Response::getConnection#'
-      path: app/Agent/LogAgent.php
+      path: app/Sse/SseWriter.php

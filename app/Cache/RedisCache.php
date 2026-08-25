@@ -51,6 +51,19 @@ class RedisCache extends RedisClient implements CacheInterface
     }
 
     /**
+     * Initialize a counter key to 0 with a TTL, only if it does not exist
+     * (SET NX EX, used by the rate limiter).
+     *
+     * @param string $key
+     * @param int $seconds
+     * @return bool True when the key was newly created
+     */
+    public static function InitCounter(string $key, int $seconds): bool
+    {
+        return self::opSetNxEx($key, $seconds);
+    }
+
+    /**
      * Set a TTL on an existing key (used by the rate limiter).
      *
      * @param string $key

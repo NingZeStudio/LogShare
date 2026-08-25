@@ -1,4 +1,4 @@
-# LogShare v1.7.0
+# LogShare v1.7.1
 
 Minecraft / Hytale 日志分析与分享平台。基于 Aternos Codex 与 SpinYarn 构建，提供日志上传、自动诊断、敏感信息脱敏、多文件日志和大模型 AI 智能体（LogAgent）辅助分析能力。
 
@@ -48,7 +48,7 @@ php bin/hyperf.php start
 | 配置段 | 说明 |
 |---|---|
 | `storage` | 存储后端配置（MariaDB ↔ 文件系统二选一）、上传限制（`uploadFiles`） |
-| `cache` | Redis 缓存配置（开关、TTL、大小限制）及连接信息 |
+| `cache` | Redis 缓存配置（开关、TTL、大小限制）及连接信息（`password`/`database` 可选） |
 | `ai` | AI API Key 列表、接口地址、模型名称、`agent`（LogAgent 开关）、`mcp`（webSearch / rag 端点） |
 | `filter` | 预处理过滤链，按顺序执行 |
 | `id` | ID 字符集和长度（修改会破坏现有 ID） |
@@ -56,13 +56,21 @@ php bin/hyperf.php start
 | `rateLimit` | 限流配置（limit / window，Redis INCR） |
 | `spinyarn` | 反混淆扩展配置（映射目录、缓存水位） |
 
-> 支持环境变量覆盖：`REDIS_HOST`、`REDIS_PORT`、`REDIS_TIMEOUT`、`AI_API_KEYS`（逗号分隔）、`AI_BASE_URL`、`AI_MODEL`。数据库连接由 `DB_*` 环境变量提供（`config/autoload/databases.php`）。
+> 支持环境变量覆盖：`REDIS_HOST`、`REDIS_PORT`、`REDIS_TIMEOUT`、`REDIS_PASSWORD`、`AI_ENABLED`、`AI_API_KEYS`（逗号分隔）、`AI_BASE_URL`、`AI_MODEL`。数据库连接由 `DB_*` 环境变量提供（`config/autoload/databases.php`）。
 
 ### Docker 部署
 
 ```bash
 docker compose -f docker/compose.yaml up -d
 ```
+
+**生产推荐**：使用 `docker/compose.prod.yaml`——完整业务配置（主推理密钥、双供应商语义 RAG、生产域名）通过挂载项目根目录的 `Config.inc.php` 注入容器，服务器上放置好该文件后：
+
+```bash
+docker compose -f docker/compose.prod.yaml up -d --build
+```
+
+> `Config.inc.php` 含密钥，已被 Git 与 Docker 构建上下文排除——只需在服务器手动放置，切勿提交进仓库。挂载后 AI 配置以文件为准；`DB_*`/`REDIS_*` 容器网络寻址仍由 compose env 提供。
 
 服务监听 9300 端口（nginx 反向代理），包含以下容器：
 
@@ -233,7 +241,7 @@ ID 为 7 位字符，首字符编码存储后端类型。例如 `sAbCdEf`：
 
 ### 限速
 
-全局 `RateLimitMiddleware` 按 IP + method + path 做 Redis `INCR`+`EXPIRE` 限流（配置 `rateLimit`，默认 36000/60s），命中返回 HTTP 429；Redis 不可用时 fail-open。
+全局 `RateLimitMiddleware` 按 IP + method + **归一化路径** 做 Redis `INCR`+`EXPIRE` 限流（动态资源段如 `/v1/raw/{id}` 折叠为 `/v1/raw/*` 共享计数桶，防止随机 id 绕过限流；配置 `rateLimit`，默认 36000/60s），命中返回 HTTP 429；Redis 不可用时 fail-open。
 
 ## 开发说明
 
@@ -267,6 +275,8 @@ class ExampleController extends AbstractController
 ```bash
 php bin/hyperf.php rag:build   # 扫描 rag/knowledge/ 构建 SQLite FTS5 索引
 ```
+
+> **知识库维护：** Forge/NeoForge 文档用 `scripts/download_modloader_docs.sh` 刷新，服务端/代理端文档（PaperMC 全家桶、Purpur、Glowstone、Geyser、Quilt）用 `scripts/download_server_docs.sh`——两个脚本拉取后自动执行清洗（剥离 frontmatter/MDX/admonition/HTML）。新增机器拉取的知识库目录时需同步登记到 `scripts/clean_knowledge_docs.php` 的 `UPSTREAM_DIRS` 白名单；手写蒸馏目录不受元文件删除规则影响。语义 RAG 开启后需重跑 `rag:build` 生成分块向量。
 
 数据库路径由 `ai.mcp.rag.db` 指定（默认 `rag/index.db`）；Docker Compose 部署时随 hyperf 容器启动自动重建索引。
 

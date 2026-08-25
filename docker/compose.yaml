@@ -16,6 +16,8 @@ services:
     build:
       context: ..
       dockerfile: docker/hyperf.Dockerfile
+      args:
+        SWOOLE_VERSION: ${SWOOLE_VERSION:-6.2.0}
     volumes:
       - ./mappings:/app/mappings
     environment:
@@ -25,15 +27,33 @@ services:
       DB_PORT: "3306"
       DB_DATABASE: logshare
       DB_USERNAME: logshare
-      DB_PASSWORD: logshare
+      DB_PASSWORD: ${MARIADB_PASSWORD:-logshare}
       REDIS_HOST: redis
       REDIS_PORT: "6379"
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+      # AI 开关与密钥：不设置 AI_API_KEYS 时建议 AI_ENABLED=false，
+      # 否则 /v1/ai/* 会在分析时返回流内错误（镜像内 fallback 配置无密钥）
+      AI_ENABLED: ${AI_ENABLED:-true}
+      AI_API_KEYS: ${AI_API_KEYS:-}
+      # 语义 RAG 增强（bge-m3 / bge-reranker-v2-m3）：env 仅覆盖单主供应商场景，
+      # 多供应商 failover 列表请挂载自定义 Config.inc.php
+      AI_RAG_ENABLED: ${AI_RAG_ENABLED:-false}
+      AI_RAG_BASE_URL: ${AI_RAG_BASE_URL:-}
+      AI_RAG_API_KEY: ${AI_RAG_API_KEY:-}
     depends_on:
       - mariadb
       - redis
     networks:
       - mclogs-network
     restart: unless-stopped
+    healthcheck:
+      # 容器内不依赖 curl，用 PHP 本体探测 HTTP 端口；显式 3s 网络超时，
+      # 避免服务 hang 时探针阻塞到 PHP 默认 socket 超时
+      test: ["CMD", "php", "-r", "exit((int) (@file_get_contents('http://127.0.0.1:9501/v1/limits', false, stream_context_create(['http' => ['timeout' => 3]])) === false));"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 40s
 
   mariadb:
     image: mariadb:11
@@ -41,23 +61,40 @@ services:
     environment:
       MARIADB_DATABASE: logshare
       MARIADB_USER: logshare
-      MARIADB_PASSWORD: logshare
-      MARIADB_ROOT_PASSWORD: root
+      # 生产部署请通过宿主机环境变量覆盖默认密码
+      MARIADB_PASSWORD: ${MARIADB_PASSWORD:-logshare}
+      MARIADB_ROOT_PASSWORD: ${MARIADB_ROOT_PASSWORD:-root}
     volumes:
       - mariadb-data:/var/lib/mysql
       - ./mariadb-init.sql:/docker-entrypoint-initdb.d/init.sql:ro
     networks:
       - mclogs-network
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
 
   redis:
     image: redis:7-alpine
     container_name: mclogs-redis
+    # 与 hyperf 的 REDIS_PASSWORD 保持一致：设置密码时启用 requirepass，
+    # 未设置时以无密码模式启动（内网部署）
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+    command: sh -c 'if [ -n "$$REDIS_PASSWORD" ]; then exec redis-server --requirepass "$$REDIS_PASSWORD"; else exec redis-server; fi'
     volumes:
       - redis-data:/data
     networks:
       - mclogs-network
     restart: unless-stopped
+    healthcheck:
+      # 启用 requirepass 后未认证的 ping 会收到 NOAUTH，探测必须携带密码
+      test: ["CMD-SHELL", "redis-cli --no-auth-warning -a \"$$REDIS_PASSWORD\" ping | grep PONG"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
 
 volumes:
   redis-data:

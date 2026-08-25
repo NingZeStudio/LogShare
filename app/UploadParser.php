@@ -77,7 +77,7 @@ class UploadParser
             if (self::isZipName($name)) {
                 $remainingSlots = $maxFiles - count($result);
                 $remainingBudget = $maxTotalBytes - $totalBytes;
-                $expanded = self::expandZip($name, $content, $remainingBudget, $remainingSlots);
+                $expanded = self::expandZip($name, $content, $remainingBudget, $remainingSlots, $maxFiles);
                 if ($expanded instanceof ApiError) {
                     return $expanded;
                 }
@@ -116,9 +116,10 @@ class UploadParser
      * @param string $zipData Raw ZIP bytes
      * @param int $remainingBudget Remaining total size budget in bytes
      * @param int $remainingSlots Remaining file count budget
+     * @param int $maxFiles Configured file limit (for error messages)
      * @return array|ApiError
      */
-    private static function expandZip(string $zipName, string $zipData, int $remainingBudget, int $remainingSlots): array|ApiError
+    private static function expandZip(string $zipName, string $zipData, int $remainingBudget, int $remainingSlots, int $maxFiles): array|ApiError
     {
         $tmpDir = CORE_PATH . '/tmp';
         if (!is_dir($tmpDir)) {
@@ -153,6 +154,11 @@ class UploadParser
                     return new ApiError(400, "Invalid file name in archive: " . htmlspecialchars($entryName));
                 }
 
+                // 文件数配额先于解压检查，避免白耗一次解压
+                if ($remainingSlots <= 0) {
+                    return new ApiError(413, "Too many files in upload. Maximum is {$maxFiles}.");
+                }
+
                 // 预判条目声明解压大小，防止高压缩比 zip 炸弹在解压时 OOM
                 $stat = $zip->statIndex($i);
                 $declaredSize = is_array($stat) ? $stat['size'] : 0;
@@ -169,9 +175,6 @@ class UploadParser
                 if (strlen($entryContent) > $remainingBudget) {
                     return new ApiError(413, "Expanded upload exceeds maximum total size.");
                 }
-                if ($remainingSlots <= 0) {
-                    return new ApiError(413, "Too many files in upload. Maximum is " . self::DEFAULT_MAX_FILES . ".");
-                }
 
                 $result[] = ['name' => $entryName, 'data' => $entryContent];
                 $remainingBudget -= strlen($entryContent);
@@ -179,8 +182,6 @@ class UploadParser
             }
 
             return $result;
-        } catch (\Throwable $e) {
-            throw $e;
         } finally {
             if ($opened) {
                 $zip->close();

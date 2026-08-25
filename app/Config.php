@@ -36,10 +36,14 @@ class Config
      *  - REDIS_HOST         → cache.redis.host
      *  - REDIS_PORT         → cache.redis.port
      *  - REDIS_TIMEOUT      → cache.redis.timeout
+     *  - REDIS_PASSWORD     → cache.redis.password
      *  - AI_API_KEYS        → ai.apiKeys (comma-separated)
      *  - AI_BASE_URL        → ai.baseUrl
      *  - AI_MODEL           → ai.model
      *  - AI_ENABLED         → ai.enabled (1/true/on/yes = true)
+     *  - AI_RAG_ENABLED     → ai.rag.enabled (semantic RAG switch)
+     *  - AI_RAG_BASE_URL    → ai.rag.baseUrl
+     *  - AI_RAG_API_KEY     → ai.rag.apiKey
      *
      * @param array $data Config array by reference
      * @return void
@@ -54,6 +58,18 @@ class Config
         }
         if ($timeout = getenv('REDIS_TIMEOUT')) {
             $data['cache']['redis']['timeout'] = (float) $timeout;
+        }
+        if (($password = getenv('REDIS_PASSWORD')) !== false && $password !== '') {
+            $data['cache']['redis']['password'] = $password;
+        }
+        if (($enabled = getenv('AI_RAG_ENABLED')) !== false) {
+            $data['ai']['rag']['enabled'] = in_array(strtolower($enabled), ['1', 'true', 'on', 'yes'], true);
+        }
+        if (($url = getenv('AI_RAG_BASE_URL')) !== false && $url !== '') {
+            $data['ai']['rag']['baseUrl'] = $url;
+        }
+        if (($key = getenv('AI_RAG_API_KEY')) !== false && $key !== '') {
+            $data['ai']['rag']['apiKey'] = $key;
         }
 
         if ($keys = getenv('AI_API_KEYS')) {

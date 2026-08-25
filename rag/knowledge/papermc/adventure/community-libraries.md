@@ -1,0 +1,67 @@
+# Community libraries
+
+Adventure aims to provide the core libraries needed for interacting with chat components.
+However, with the limited resources and time of the Adventure team and the sheer number of possible use cases, we can't hope to provide direct solutions for every problem.
+
+Luckily, many of our community members have produced libraries that complement Adventure, providing additional features and integrations with other software.
+
+> **Note**
+
+This list of libraries is provided for reference only.
+The Adventure team does not endorse any specific library, and cannot provide any information or support beyond the provided links.
+
+If you have a library that you'd like included, please open a pull request on the [PaperMC/docs](https://github.com/PaperMC/docs) repository.
+
+{/* Elements in all of these tables should be alphabetized */}
+
+## Serializers
+
+These are libraries focused around providing additional serialization formats for chat components.
+They typically have no dependencies on a specific platform, just Adventure and potentially a library with which they integrate.
+
+{/* spellchecker:off */}
+Name                        | Description                                                           | Link
+----------------------------|-----------------------------------------------------------------------|-----------------------------------------------------------------------------------------------------
+EnhancedLegacyText          | Alternative input format that is legacy compatible with new features  | [Vankka/EnhancedLegacyText](https://github.com/Vankka/EnhancedLegacyText)
+MCDiscordReserializer       | Serializers for going between Minecraft & Discord                     | [Vankka/MCDiscordReserializer](https://github.com/Vankka/MCDiscordReserializer)
+Minedown                    | A markdown-style format for representing components                   | [Phoenix616/MineDown](https://github.com/Phoenix616/MineDown)
+{/* spellchecker:on */}
+
+## Platforms
+
+These are libraries that provide implementations of Adventure on different platforms that aren't officially integrated into the software or maintained by the Adventure team.
+
+{/* spellchecker:off */}
+Name                        | Description                                   | Link
+----------------------------|-----------------------------------------------|-----------------------------------------------------------------------------------------------------
+adventure-platform-hytale   | Adventure platform implementation for Hytale  | [ArikSquad/adventure-platform-hytale](https://github.com/ArikSquad/adventure-platform-hytale)
+{/* spellchecker:on */}
+
+## Expansions
+
+These are libraries that expand upon the core Adventure API, providing platform-agnostic additions that are not included or not suitable for inclusion in the main project.
+
+{/* spellchecker:off */}
+Name                | Description                                                           | Link
+--------------------|-----------------------------------------------------------------------|----------------------------------------------------
+MiniPlaceholders    | A platform-agnostic MiniMessage Component-based Placeholders library  | [MiniPlaceholders/MiniPlaceholders](https://github.com/MiniPlaceholders/MiniPlaceholders)
+{/* spellchecker:on */}
+
+## Additional user interface libraries
+
+These are libraries with a focus on something other than chat components, that use Adventure in their API.
+They provide support for using Adventure in user interface elements not supported by the core Adventure libraries.
+This includes, but is not limited to, commands, scoreboards, and inventories.
+These libraries will often depend on one or more specific platforms to support their functionality.
+
+{/* spellchecker:off */}
+Name                | Description                                                           | Link
+--------------------|-----------------------------------------------------------------------|----------------------------------------------------
+Cloud               | A general-purpose Java command dispatcher & framework                 | [Incendo/cloud](https://github.com/Incendo/cloud)
+Creative            | A resource-pack library for Minecraft: Java Edition                   | [unnamed/creative](https://github.com/unnamed/creative)
+Inventory Framework | An inventory framework for managing GUIs                              | [stefvanschie/IF](https://github.com/stefvanschie/IF)
+LiteCommands        | A annotation based command framework for Velocity, Bukkit, BungeeCord | [Rollczi/LiteCommands](https://github.com/Rollczi/LiteCommands)
+ProtocolSidebar     | An easy to use sidebar library for Paper/Spigot servers               | [CatCoderr/ProtocolSidebar](https://github.com/CatCoderr/ProtocolSidebar)
+ScoreboardLibrary   | A scoreboard library for Paper/Spigot servers                         | [MegavexNetwork/scoreboard-library](https://github.com/MegavexNetwork/scoreboard-library)
+Triumph GUI         | A library made to simplify the creation of inventory GUIs             | [TriumphTeam/triumph-gui](https://github.com/TriumphTeam/triumph-gui)
+{/* spellchecker:on */}

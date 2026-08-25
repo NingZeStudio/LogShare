@@ -1,0 +1,65 @@
+# Getting started
+
+## Requirements
+
+> **Tip**
+
+Paper requires at least **Java 25** to run, which [is easy to download and install](/misc/java-install).
+
+| Paper Version     | Recommended Java Version |
+|-------------------|--------------------------|
+| 1.7.10 to 1.11    | Java 8                   |
+| 1.12 to 1.16.4    | Java 11                  |
+| 1.16.5            | Java 16                  |
+| 1.17 to 1.19      | Java 17                  |
+| 1.20 to 1.21.11   | Java 21                  |
+| 26.1+             | Java 25                  |
+
+## Downloading Paper
+
+Paper provides runnable server JARs directly from our
+[website's downloads page](https://papermc.io/downloads).
+
+Click on the build number to download a file.
+
+## Running the server
+
+To run the server you will need to either create a startup script
+or run a command in your terminal.
+
+You can generate a startup script using our [Startup Script Generator](/misc/tools/start-script-gen).
+You can also obtain the optimized terminal command to run the server there.
+
+If you're just looking for a short command:
+```bash
+java -Xms4G -Xmx4G -jar paper.jar --nogui
+```
+Ensure you navigated your terminal to the directory of your server
+and that you have replaced `paper.jar` with the name of the JAR you have downloaded.
+
+The amount of RAM can be set by changing the numbers in the `Xmx` and `Xms` arguments.
+`--nogui` disables Vanilla's GUI, so you don't get double interfaces when using the command line.
+
+To configure your server, see the [Global Configuration](/paper/reference/global-configuration) and
+[Per World Configuration](/paper/reference/world-configuration) pages.
+
+## Updating the server
+
+Updating Paper is simple! See our [Update Tutorial](/paper/updating) for more information.
+
+## Migrating to Paper
+
+### From Vanilla
+
+Migrating from Vanilla is easy, but there are some differences, namely in world saves. Paper allows dimensions to have independent data (like gamerules).
+
+Paper will handle this conversion for you automatically. No additional consideration is required.
+
+### From CraftBukkit or Spigot
+
+Paper is a drop in replacement for both CraftBukkit and Spigot, you don't need to make any changes.
+
+## Next steps
+
+Take a look at our [Next Steps](/paper/next-steps) guide to get your server up and running with the best performance and
+features.

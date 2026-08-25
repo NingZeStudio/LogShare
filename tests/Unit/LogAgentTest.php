@@ -38,7 +38,10 @@ function agentCall(string $method, array $args = [])
 {
     $ref = new ReflectionClass(LogAgent::class);
     $m = $ref->getMethod($method);
-    return $m->invoke(null, ...$args);
+    if ($method === 'executeTool') {
+        $args[count($args) - 1] = new \App\Agent\ToolSession();
+    }
+    return $m->invokeArgs(null, $args);
 }
 
 test('buildTools returns empty when no mcp endpoints configured', function () {
@@ -87,35 +90,37 @@ test('truncateForModel keeps short text intact', function () {
     expect($result)->toBe(str_repeat('a', 500));
 });
 
-test('truncateForModel truncates long text', function () {
+test('truncateForModel truncates long text with a visible marker', function () {
     $result = agentCall('truncateForModel', [str_repeat('a', 20000)]);
     expect(strlen($result))->toBeLessThan(20000);
+    // 截断必须可见：模型需要知道结果不完整
+    expect($result)->toContain('已截断至');
 });
 
 test('executeTool returns unknown tool message', function () {
-    $result = agentCall('executeTool', ['nope_tool', [], [], null]);
+    $result = agentCall('executeTool', ['nope_tool', [], [], null, []]);
     expect($result)->toContain('未知工具');
 });
 
 test('executeTool returns not configured message for unset endpoints', function () {
-    $result = agentCall('executeTool', ['web_search_exa', ['query' => 'x'], [], null]);
+    $result = agentCall('executeTool', ['web_search_exa', ['query' => 'x'], [], null, []]);
     expect($result)->toContain('未配置');
 
-    $result = agentCall('executeTool', ['rag_search', ['query' => 'x'], [], null]);
+    $result = agentCall('executeTool', ['rag_search', ['query' => 'x'], [], null, []]);
     expect($result)->toContain('未配置');
 });
 
 test('executeTool degrades gracefully when MCP call fails', function () {
     $config = ['mcp' => ['webSearch' => ['url' => 'http://127.0.0.1:1']]];
-    $result = agentCall('executeTool', ['web_search_exa', ['query' => 'x'], $config, null]);
+    $result = agentCall('executeTool', ['web_search_exa', ['query' => 'x'], $config, null, []]);
     expect($result)->toContain('工具调用失败');
 });
 
 test('file tools return not-bound message without a log id', function () {
-    $result = agentCall('executeTool', ['list_log_files', [], [], null]);
+    $result = agentCall('executeTool', ['list_log_files', [], [], null, []]);
     expect($result)->toContain('未绑定日志文件');
 
-    $result = agentCall('executeTool', ['read_log_file', ['filename' => 'main'], [], null]);
+    $result = agentCall('executeTool', ['read_log_file', ['filename' => 'main'], [], null, []]);
     expect($result)->toContain('未绑定日志文件');
 });
 
@@ -133,35 +138,59 @@ test('list_log_files lists session files with metadata', function () {
     );
     $rawId = $id->get();
 
-    $result = agentCall('executeTool', ['list_log_files', [], [], $rawId]);
+    $result = agentCall('executeTool', ['list_log_files', [], [], $rawId, []]);
     expect($result)->toContain('main（主文件');
     expect($result)->toContain('crash-reports/crash-01.txt');
     expect($result)->toContain('debug.txt');
 });
 
-test('read_log_file reads main file with default range', function () {
+test('read_log_file returns full file content by default', function () {
     $log = new \App\Log();
     $id = $log->put("line1\nline2\nline3\n", null, [], null, null);
     $rawId = $id->get();
 
-    $result = agentCall('executeTool', ['read_log_file', ['filename' => 'main'], [], $rawId]);
+    $result = agentCall('executeTool', ['read_log_file', ['filename' => 'main'], [], $rawId, []]);
     expect($result)->toContain('共 3 行');
     expect($result)->toContain('line1');
     expect($result)->toContain('line3');
 });
 
-test('read_log_file supports line ranges', function () {
+test('read_log_file rejects duplicate reads of the same file', function () {
     $log = new \App\Log();
-    $id = $log->put(implode("\n", array_map(fn($i) => "line{$i}", range(1, 10))), null, [], null, null);
+    $id = $log->put("main\n", null, [], null, null);
     $rawId = $id->get();
 
-    $result = agentCall('executeTool', ['read_log_file', ['filename' => 'main', 'start_line' => 3, 'end_line' => 5], [], $rawId]);
-    expect($result)->toContain('第 3-5 行');
-    expect($result)->toContain('line3');
-    expect($result)->toContain('line4');
-    expect($result)->toContain('line5');
-    expect($result)->not->toContain('line1');
-    expect($result)->not->toContain('line6');
+    // Shared session across both calls (as within one analyze() run)
+    $session = new \App\Agent\ToolSession();
+    $ref = new ReflectionClass(LogAgent::class);
+    $m = $ref->getMethod('executeTool');
+
+    $first = $m->invoke(null, 'read_log_file', ['filename' => 'main'], [], $rawId, $session);
+    expect($first)->toContain('全文：');
+
+    // Second read with identical arguments: duplicate notice
+    $second = $m->invoke(null, 'read_log_file', ['filename' => 'main'], [], $rawId, $session);
+    expect($second)->toContain('已读取');
+    expect($second)->toContain('内容已在上文');
+    expect($second)->toContain('不要重复调用');
+});
+
+test('read_log_file dedup treats omitted filename and main as the same key', function () {
+    $log = new \App\Log();
+    $id = $log->put("body\n", null, [], null, null);
+    $rawId = $id->get();
+
+    $session = new \App\Agent\ToolSession();
+    $ref = new ReflectionClass(LogAgent::class);
+    $m = $ref->getMethod('executeTool');
+
+    $first = $m->invoke(null, 'read_log_file', ['filename' => 'main'], [], $rawId, $session);
+    expect($first)->toContain('全文：');
+
+    // Omitted filename resolves to main: must hit the duplicate guard
+    $second = $m->invoke(null, 'read_log_file', [], [], $rawId, $session);
+    expect($second)->toContain('已读取');
+    expect($second)->not->toContain('全文：');
 });
 
 test('read_log_file returns not found for missing files', function () {
@@ -169,7 +198,7 @@ test('read_log_file returns not found for missing files', function () {
     $id = $log->put("main\n", null, [], null, null);
     $rawId = $id->get();
 
-    $result = agentCall('executeTool', ['read_log_file', ['filename' => 'missing.log'], [], $rawId]);
+    $result = agentCall('executeTool', ['read_log_file', ['filename' => 'missing.log'], [], $rawId, []]);
     expect($result)->toContain('文件不存在');
 });
 
@@ -181,7 +210,7 @@ test('read_log_file does not leak other logs', function () {
     $idB = $logB->put("public from B\n", null, [], null, null)->get();
 
     // Reading "main" under id B must not return A's content
-    $result = agentCall('executeTool', ['read_log_file', ['filename' => 'main'], [], $idB]);
+    $result = agentCall('executeTool', ['read_log_file', ['filename' => 'main'], [], $idB, []]);
     expect($result)->toContain('public from B');
     expect($result)->not->toContain('secret from A');
 });

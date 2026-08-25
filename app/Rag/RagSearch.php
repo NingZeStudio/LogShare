@@ -14,15 +14,21 @@ namespace App\Rag;
 class RagSearch
 {
     /**
-     * 正文短于该长度（字符）时整段返回，优先保证上下文理解。
+     * 正文短于该长度（字符）时整段返回。
+     *
+     * 分块本身按 H2 语义单元切割，绝大多数在 1-2K 字符内——整段返回才能把
+     * 「签名 → 含义 → 修复步骤」这类结构完整交给模型；此前 600 的阈值导致
+     * 长文档几乎总是走窗口模式，解法部分被丢掉。
      */
-    private const SNIPPET_FULL_BODY_LIMIT = 600;
+    private const SNIPPET_FULL_BODY_LIMIT = 1600;
 
     /**
-     * 长正文围绕命中词向前/后各扩展的最大字符窗口；实际以句子边界为断点，
-     * 长度随内容自然变化，不固定。
+     * 超长正文围绕命中词向前/后扩展的最大字符窗口。
+     * 实际边界回退到最近的空白/句读（最多回看 200 字符），不硬性要求句子边界，
+     * 否则代码与术语密集的英文文档会因边界过密而被掐到几十个字符。
      */
-    private const SNIPPET_HALF_WINDOW = 250;
+    private const SNIPPET_HALF_WINDOW = 800;
+    private const SNIPPET_BOUNDARY_LOOKBACK = 200;
 
     private \PDO $pdo;
 
@@ -48,7 +54,7 @@ class RagSearch
      * Resolve the SQLite database path.
      *
      * Priority: RAG_DB_PATH env var (dev/tests override) > ai.mcp.rag.db in
-     * Config.inc.php > default <project>/rag/index.db.
+     * Config.inc.php (via the App\Config singleton) > default <project>/rag/index.db.
      *
      * @return string
      */
@@ -61,13 +67,9 @@ class RagSearch
             return $env;
         }
 
-        $configFile = $projectRoot . '/Config.inc.php';
-        if (file_exists($configFile)) {
-            $data = require $configFile;
-            $db = $data['ai']['mcp']['rag']['db'] ?? null;
-            if (is_string($db) && $db !== '') {
-                return str_starts_with($db, '/') ? $db : $projectRoot . '/' . $db;
-            }
+        $db = \App\Config::Get('ai')['mcp']['rag']['db'] ?? null;
+        if (is_string($db) && $db !== '') {
+            return str_starts_with($db, '/') ? $db : $projectRoot . '/' . $db;
         }
 
         return $projectRoot . '/rag/index.db';
@@ -83,17 +85,29 @@ class RagSearch
                 tokenize = 'porter unicode61'
             )"
         );
+        // 语义检索的向量存储：rowid 对应 docs 表 rowid；vec 为 packed float32。
+        // 语义增强未开启/嵌入失败时该表为空，检索自动退回纯词法。
+        $this->pdo->exec(
+            "CREATE TABLE IF NOT EXISTS doc_embeddings(
+                rowid INTEGER PRIMARY KEY,
+                vec BLOB NOT NULL
+            )"
+        );
     }
 
     /**
      * Index every supported file under a directory (recursively).
      *
      * The index is rebuilt from scratch so stale chunks never linger.
+     * When a configured SemanticClient is supplied, chunk embeddings are
+     * generated in batches after the lexical insert; failures leave
+     * doc_embeddings empty and search transparently falls back to lexical.
      *
      * @param string $knowledgeDir
-     * @return array{files: int, chunks: int}
+     * @param SemanticClient|null $semantic
+     * @return array{files: int, chunks: int, embedded: int}
      */
-    public function buildIndex(string $knowledgeDir): array
+    public function buildIndex(string $knowledgeDir, ?SemanticClient $semantic = null): array
     {
         if (!is_dir($knowledgeDir)) {
             throw new \RuntimeException("Knowledge directory does not exist: {$knowledgeDir}");
@@ -103,9 +117,14 @@ class RagSearch
 
         try {
             $this->pdo->exec("DELETE FROM docs");
+            $this->pdo->exec("DELETE FROM doc_embeddings");
 
             $files = 0;
             $chunks = 0;
+            /** @var array<int, int> $chunkRowids rowid of each inserted chunk, in order */
+            $chunkRowids = [];
+            /** @var array<int, string> $chunkBodies bodies matching $chunkRowids */
+            $chunkBodies = [];
             $insert = $this->pdo->prepare("INSERT INTO docs(title, body, source) VALUES (?, ?, ?)");
 
             $iterator = new \RecursiveIteratorIterator(new \RecursiveDirectoryIterator($knowledgeDir, \FilesystemIterator::SKIP_DOTS));
@@ -120,6 +139,8 @@ class RagSearch
 
                 foreach (self::chunkMarkdown($relative, $content) as $chunk) {
                     $insert->execute([$chunk['title'], $chunk['body'], $relative]);
+                    $chunkRowids[] = (int) $this->pdo->lastInsertId();
+                    $chunkBodies[] = $chunk['title'] . "\n" . $chunk['body'];
                     $chunks++;
                 }
                 $files++;
@@ -131,7 +152,65 @@ class RagSearch
             throw $e;
         }
 
-        return ['files' => $files, 'chunks' => $chunks];
+        // Embeddings are written outside the lexical transaction so that an API
+        // outage degrades to lexical-only instead of failing the whole rebuild.
+        // Text is pre-truncated (embedding models cap input tokens) and a failed
+        // batch falls back to per-chunk embedding so one bad chunk never costs
+        // its whole batch.
+        $embedded = 0;
+        if ($semantic !== null && $semantic->isConfigured() && $chunks > 0) {
+            $embedStmt = $this->pdo->prepare("INSERT OR REPLACE INTO doc_embeddings(rowid, vec) VALUES (?, ?)");
+
+            $storeEmbedding = function (int $rowid, array $vec) use ($embedStmt, &$embedded): void {
+                $embedStmt->bindValue(1, $rowid, \PDO::PARAM_INT);
+                $embedStmt->bindValue(2, self::packVector($vec), \PDO::PARAM_LOB);
+                $embedStmt->execute();
+                $embedded++;
+            };
+
+            $embedSingle = function (int $rowid, string $text) use ($semantic, $storeEmbedding): bool {
+                $text = trim(mb_strcut($text, 0, 4000));
+                if ($text === '') {
+                    return false;
+                }
+                try {
+                    $vec = $semantic->embed([$text])[0] ?? null;
+                    if ($vec === null) {
+                        return false;
+                    }
+                    $storeEmbedding($rowid, $vec);
+                    return true;
+                } catch (\Throwable) {
+                    return false;
+                }
+            };
+
+            $batchSize = 16;
+            $pairs = array_map(null, $chunkRowids, $chunkBodies);
+            foreach (array_chunk($pairs, $batchSize) as $i => $batch) {
+                // 预截断：embedding 模型有 token 上限，超长文本直接 400
+                $texts = array_map(fn($p) => trim(mb_strcut((string) $p[1], 0, 4000)), $batch);
+
+                try {
+                    $vectors = $semantic->embed($texts);
+                    foreach ($batch as $j => [$rowid,]) {
+                        if (!isset($vectors[$j]) || trim($texts[$j]) === '') {
+                            continue;
+                        }
+                        $storeEmbedding($rowid, $vectors[$j]);
+                    }
+                } catch (\Throwable $e) {
+                    \App\Syslog::error('RAG', 'embedding batch #' . $i . ' failed (' . $e->getMessage() . '), retrying per chunk');
+                    foreach ($batch as $j => [$rowid, $body]) {
+                        if (!$embedSingle($rowid, $body)) {
+                            \App\Syslog::error('RAG', "chunk rowid={$rowid} skipped: unembeddable");
+                        }
+                    }
+                }
+            }
+        }
+
+        return ['files' => $files, 'chunks' => $chunks, 'embedded' => $embedded];
     }
 
     /**
@@ -208,85 +287,370 @@ class RagSearch
             return [];
         }
 
+        // 候选池：语义精排前多召回一些；纯词法路径仍只输出 k 条
+        $pool = max(20, $k * 4);
+
         $terms = self::splitTerms($query);
         $results = [];
         $seen = [];
 
-        // 1. FTS5 BM25 over English / code tokens with prefix matching
+        // 1. FTS5 BM25 over English / code tokens with prefix matching.
+        //    Strict AND first; when it yields nothing (over-constrained multi-word
+        //    queries), degrade to OR ranked by bm25 so partial matches still surface.
         preg_match_all('/[0-9A-Za-z_]+/', $query, $tokenMatches);
         $tokens = array_values(array_unique(array_map('strtolower', $tokenMatches[0])));
 
         if (!empty($tokens)) {
-            $match = implode(' AND ', array_map(fn($t) => $t . '*', $tokens));
-            $stmt = $this->pdo->prepare(
-                "SELECT title, body, source, bm25(docs, 10.0, 1.0, 1.0) AS rank
-                 FROM docs WHERE docs MATCH ? ORDER BY rank LIMIT " . $k
-            );
-            $stmt->execute([$match]);
-            foreach ($stmt->fetchAll() as $row) {
-                $key = $row['source'] . '#' . $row['title'];
-                $seen[$key] = true;
-                $results[] = [
-                    'title' => $row['title'],
-                    'body' => $row['body'],
-                    'source' => $row['source'],
-                    'score' => $row['rank'],
-                    'snippet' => self::extractSnippet($row['body'], $terms),
-                ];
+            $ftsMatches = [implode(' AND ', array_map(fn($t) => $t . '*', $tokens))];
+            if (count($tokens) > 1) {
+                $ftsMatches[] = implode(' OR ', array_map(fn($t) => $t . '*', $tokens));
+            }
+            foreach ($ftsMatches as $match) {
+                if ($results !== []) {
+                    break;
+                }
+                $stmt = $this->pdo->prepare(
+                    "SELECT rowid, title, body, source, bm25(docs, 10.0, 1.0, 1.0) AS rank
+                     FROM docs WHERE docs MATCH ? ORDER BY rank LIMIT " . $pool
+                );
+                $stmt->execute([$match]);
+                foreach ($stmt->fetchAll() as $row) {
+                    $key = $row['source'] . '#' . $row['title'];
+                    if (isset($seen[$key])) {
+                        continue;
+                    }
+                    $seen[$key] = true;
+                    $results[] = [
+                        'title' => $row['title'],
+                        'body' => $row['body'],
+                        'source' => $row['source'],
+                        'score' => $row['rank'],
+                        'snippet' => self::extractSnippet($row['body'], $terms),
+                    ];
+                }
             }
         }
 
-        // 2. LIKE fallback with term splitting (AND semantics for CJK multi-keyword queries).
-        //    Each term must appear in the title or body; title hits rank above body hits.
+        // 2. LIKE fallback for CJK / substring matching. AND semantics first;
+        //    empty result degrades to OR ranked by number of matched terms
+        //    (title hit = 2, body hit = 1).
         if (!empty($terms)) {
-            $rankParts = [];
-            $rankParams = [];
-            $whereParts = [];
-            $whereParams = [];
+            foreach ([true, false] as $requireAll) {
+                if (($results !== [] && $requireAll === false && !empty($tokens)) || ($results !== [] && $requireAll)) {
+                    break;
+                }
+                $rankParts = [];
+                $rankParams = [];
+                $whereParts = [];
+                $whereParams = [];
 
-            foreach ($terms as $term) {
-                $like = '%' . str_replace(['\\', '%', '_'], ['\\\\', '\%', '\_'], $term) . '%';
-                $rankParts[] = "(CASE WHEN title LIKE ? ESCAPE '\\' THEN 2 ELSE 0 END + CASE WHEN body LIKE ? ESCAPE '\\' THEN 1 ELSE 0 END)";
-                $rankParams[] = $like;
-                $rankParams[] = $like;
-                $whereParts[] = "(title LIKE ? ESCAPE '\\' OR body LIKE ? ESCAPE '\\')";
-                $whereParams[] = $like;
-                $whereParams[] = $like;
+                foreach ($terms as $term) {
+                    $like = '%' . str_replace(['\\', '%', '_'], ['\\\\', '\%', '\_'], $term) . '%';
+                    $rankParts[] = "(CASE WHEN title LIKE ? ESCAPE '\\' THEN 2 ELSE 0 END + CASE WHEN body LIKE ? ESCAPE '\\' THEN 1 ELSE 0 END)";
+                    $rankParams[] = $like;
+                    $rankParams[] = $like;
+                    $wherePart = "(title LIKE ? ESCAPE '\\' OR body LIKE ? ESCAPE '\\')";
+                    if ($requireAll) {
+                        $whereParts[] = $wherePart;
+                        $whereParams = array_merge($whereParams, [$like, $like]);
+                    } else {
+                        $whereParts[] = $wherePart;
+                        $whereParams = array_merge($whereParams, [$like, $like]);
+                    }
+                }
+
+                if (!$requireAll) {
+                    $whereSql = '(' . implode(' OR ', $whereParts) . ')';
+                } else {
+                    $whereSql = implode(' AND ', $whereParts);
+                }
+
+                $sql = "SELECT rowid, title, body, source, (" . implode(' + ', $rankParts) . ") AS rank
+                        FROM docs WHERE {$whereSql}
+                        ORDER BY rank DESC, length(body) ASC LIMIT " . ($results === [] ? $pool : max(5, $pool - count($results)));
+                $stmt = $this->pdo->prepare($sql);
+                $stmt->execute(array_merge($rankParams, $whereParams));
+
+                foreach ($stmt->fetchAll() as $row) {
+                    $key = $row['source'] . '#' . $row['title'];
+                    if (isset($seen[$key])) {
+                        continue;
+                    }
+                    $seen[$key] = true;
+                    $results[] = [
+                        'title' => $row['title'],
+                        'body' => $row['body'],
+                        'source' => $row['source'],
+                        'score' => $requireAll ? 'fallback' : 'fallback-or',
+                        'snippet' => self::extractSnippet($row['body'], $terms),
+                    ];
+                }
+            }
+        }
+
+        // 3. Semantic enhancement: vector recall widens the candidate pool,
+        // then the bge-reranker-v2-m3 decides the final order.
+        return $this->applySemanticEnhancement($query, $results, $k);
+    }
+
+    /**
+     * Vector-recall extra candidates, merge them into the lexical ones and let
+     * the reranker decide the final order. Any failure logs and returns the
+     * lexical-only slice — semantic search must never break retrieval.
+     *
+     * @param array<int, array{title: string, body: string, source: string, score: mixed, snippet: string}> $lexical
+     * @return array<int, array{title: string, body: string, source: string, score: mixed, snippet: string}>
+     */
+    /**
+     * Process-level cache for semantic enhancement results (query+k → final list).
+     *
+     * Agent loops re-query with tweaked keywords and users retry the same
+     * question; a short TTL avoids paying the embed+rerank double round trip
+     * (200-500ms plus tokens) for identical calls. FIFO-capped.
+     *
+     * @var array<string, array{expires: int, results: array}>
+     */
+    private static array $semanticCache = [];
+    private const SEMANTIC_CACHE_TTL = 60;
+    private const SEMANTIC_CACHE_MAX = 64;
+
+    private function applySemanticEnhancement(string $query, array $lexical, int $k): array
+    {
+        $client = self::semanticClientFromConfig();
+        if ($client === null || !$client->isConfigured()) {
+            return array_slice($lexical, 0, $k);
+        }
+
+        $cacheKey = md5($query) . ':' . $k;
+        $cached = self::$semanticCache[$cacheKey] ?? null;
+        if ($cached !== null && $cached['expires'] > time()) {
+            return $cached['results'];
+        }
+
+        try {
+            $results = $this->runSemanticPipeline($query, $lexical, $k, $client);
+        } catch (\Throwable $e) {
+            \App\Syslog::error('RAG', 'semantic enhancement failed, falling back to lexical: ' . $e->getMessage());
+            return array_slice($lexical, 0, $k);
+        }
+
+        if (count(self::$semanticCache) >= self::SEMANTIC_CACHE_MAX) {
+            array_shift(self::$semanticCache);
+        }
+        self::$semanticCache[$cacheKey] = ['expires' => time() + self::SEMANTIC_CACHE_TTL, 'results' => $results];
+
+        return $results;
+    }
+
+    /**
+     * Vector-recall extra candidates, merge them into the lexical ones and let
+     * the reranker decide the final order. Any failure logs and returns the
+     * lexical-only slice — semantic search must never break retrieval.
+     *
+     * @param array<int, array{title: string, body: string, source: string, score: mixed, snippet: string}> $lexical
+     * @return array<int, array{title: string, body: string, source: string, score: mixed, snippet: string}>
+     */
+    private function runSemanticPipeline(string $query, array $lexical, int $k, SemanticClient $client): array
+    {
+        try {
+            $queryVec = $client->embed([$query])[0] ?? null;
+            if ($queryVec === null) {
+                throw new \RuntimeException('empty query embedding');
             }
 
-            $sql = "SELECT title, body, source, (" . implode(' + ', $rankParts) . ") AS rank
-                    FROM docs WHERE " . implode(' AND ', $whereParts) . "
-                    ORDER BY rank DESC, length(body) ASC LIMIT " . $k;
-            $stmt = $this->pdo->prepare($sql);
-            $stmt->execute(array_merge($rankParams, $whereParams));
+            // 向量召回：与全库嵌入算余弦，补足词法漏掉的同义表述
+            $vectorHits = $this->topByCosine($queryVec, max(20, $k * 4));
+            $mergedKeys = [];
+            foreach ($lexical as $r) {
+                $mergedKeys[$r['source'] . '#' . $r['title']] = true;
+            }
+            foreach ($vectorHits as $hit) {
+                $key = $hit['source'] . '#' . $hit['title'];
+                if (!isset($mergedKeys[$key])) {
+                    $mergedKeys[$key] = true;
+                    $lexical[] = $hit;
+                }
+            }
+            $merged = array_values($lexical);
 
-            foreach ($stmt->fetchAll() as $row) {
-                $key = $row['source'] . '#' . $row['title'];
-                if (isset($seen[$key])) {
+            if (count($merged) <= 1) {
+                return array_slice($merged, 0, $k);
+            }
+
+            $docs = array_map(fn($r) => $r['title'] . "\n" . $r['body'], $merged);
+            $ranked = $client->rerank($query, $docs, $k);
+
+            $out = [];
+            foreach ($ranked as $entry) {
+                $idx = $entry['index'];
+                if (!isset($merged[$idx])) {
                     continue;
                 }
-                $seen[$key] = true;
-                $results[] = [
-                    'title' => $row['title'],
-                    'body' => $row['body'],
-                    'source' => $row['source'],
-                    'score' => 'fallback',
-                    'snippet' => self::extractSnippet($row['body'], $terms),
-                ];
+                $merged[$idx]['score'] = round($entry['score'], 4);
+                $out[] = $merged[$idx];
+            }
+
+            // 兜底：网关偶发返回空 results（限流/异常 query）时不抛异常也不清空，
+            // 词法召回的结果必须保住 —— 语义增强绝不能让检索「归零」。
+            if ($out === []) {
+                \App\Syslog::error('RAG', 'rerank returned no results, falling back to lexical order');
+                return array_slice($lexical, 0, $k);
+            }
+
+            return $out;
+        } catch (\Throwable $e) {
+            \App\Syslog::error('RAG', 'semantic pipeline failed, falling back to lexical: ' . $e->getMessage());
+            return array_slice($lexical, 0, $k);
+        }
+    }
+
+    /**
+     * Cosine-similarity scan over stored chunk embeddings.
+     *
+     * Only vec blobs are materialised for scoring (bodies would cost ~MBs per
+     * query); metadata for the top hits is fetched in a second round trip.
+     * Chunks without an embedding (semantic was off at build time) are skipped.
+     *
+     * @param array<int, float> $queryVec
+     * @return array<int, array{title: string, body: string, source: string, score: mixed, snippet: string}>
+     */
+    private function topByCosine(array $queryVec, int $limit): array
+    {
+        $rows = $this->pdo->query(
+            "SELECT e.rowid, e.vec FROM doc_embeddings e"
+        )->fetchAll();
+
+        $qNorm = self::norm($queryVec);
+        $dim = count($queryVec);
+        $scored = [];
+        $dimensionMismatchSeen = false;
+        foreach ($rows as $row) {
+            $vec = self::unpackVector((string) $row['vec']);
+            if ($vec === []) {
+                continue;
+            }
+            if (count($vec) !== $dim) {
+                // 历史向量与当前 embedding 模型维度不一致（如切换模型后未重建索引）
+                $dimensionMismatchSeen = true;
+                continue;
+            }
+            $dot = 0.0;
+            foreach ($queryVec as $i => $qv) {
+                $dot += $qv * $vec[$i];
+            }
+            $vNorm = self::norm($vec);
+            if ($qNorm == 0.0 || $vNorm == 0.0) {
+                continue;
+            }
+            $scored[] = ['rowid' => (int) $row['rowid'], 'sim' => $dot / ($qNorm * $vNorm)];
+        }
+
+        if ($dimensionMismatchSeen) {
+            static $warnedOnce = false;
+            if (!$warnedOnce) {
+                $warnedOnce = true;
+                \App\Syslog::error('RAG', "stored embeddings have a different dimension than the current model ({$dim}) — they are being ignored; re-run rag:build to re-embed");
             }
         }
 
-        return array_slice($results, 0, $k);
+        usort($scored, fn($a, $b) => $b['sim'] <=> $a['sim']);
+
+        $hits = [];
+        foreach (array_slice($scored, 0, $limit) as $s) {
+            $meta = $this->pdo->prepare("SELECT title, body, source FROM docs WHERE rowid = ?");
+            $meta->execute([$s['rowid']]);
+            $row = $meta->fetch();
+            if ($row === false) {
+                continue;
+            }
+            $hits[] = [
+                'title' => $row['title'],
+                'body' => $row['body'],
+                'source' => $row['source'],
+                'score' => 'vector:' . round($s['sim'], 4),
+                'snippet' => self::extractSnippet($row['body'], []),
+            ];
+        }
+        return $hits;
+    }
+
+    /**
+     * Build a SemanticClient from the ai.rag config section; null when disabled.
+     * Public: RagBuildCommand uses it to decide whether to embed at build time.
+     *
+     * Supports the `providers` list (ordered failover) and, for backwards
+     * compatibility, a flat top-level baseUrl/apiKey pair.
+     */
+    public static function semanticClientFromConfig(): ?SemanticClient
+    {
+        $cfg = \App\Config::Get('ai')['rag'] ?? [];
+        if (($cfg['enabled'] ?? false) !== true) {
+            return null;
+        }
+
+        $providers = [];
+        foreach ((array) ($cfg['providers'] ?? []) as $p) {
+            if (!is_array($p) || ($p['baseUrl'] ?? '') === '') {
+                continue;
+            }
+            $providers[] = SemanticClient::provider(
+                (string) ($p['name'] ?? $p['baseUrl']),
+                (string) $p['baseUrl'],
+                (string) ($p['apiKey'] ?? ''),
+                (string) ($p['embeddingModel'] ?? ($cfg['embeddingModel'] ?? 'bge-m3')),
+                (string) ($p['rerankModel'] ?? ($cfg['rerankModel'] ?? 'bge-reranker-v2-m3')),
+            );
+        }
+
+        // legacy flat config → single provider
+        if ($providers === [] && ($cfg['baseUrl'] ?? '') !== '') {
+            $providers[] = SemanticClient::provider(
+                'default',
+                (string) $cfg['baseUrl'],
+                (string) ($cfg['apiKey'] ?? ''),
+                (string) ($cfg['embeddingModel'] ?? 'bge-m3'),
+                (string) ($cfg['rerankModel'] ?? 'bge-reranker-v2-m3'),
+            );
+        }
+
+        return new SemanticClient($providers, (int) ($cfg['timeout'] ?? 30));
+    }
+
+    /**
+     * @param array<int, float> $vec
+     */
+    private static function packVector(array $vec): string
+    {
+        return pack('g*', ...array_map('floatval', $vec));
+    }
+
+    private static function unpackVector(string $blob): array
+    {
+        $count = intdiv(strlen($blob), 4);
+        return $count === 0 ? [] : array_values(unpack('g' . $count, $blob));
+    }
+
+    /**
+     * @param array<int, float> $vec
+     */
+    private static function norm(array $vec): float
+    {
+        $sum = 0.0;
+        foreach ($vec as $v) {
+            $sum += $v * $v;
+        }
+        return sqrt($sum);
     }
 
     /**
      * 围绕命中词提取上下文片段。
      *
      * 取舍策略：
-     *  - 短正文（≤ SNIPPET_FULL_BODY_LIMIT）整段返回，保上下文理解；
-     *  - 长正文围绕第一个命中词，向前/后扩展到最近的句子边界
-     *    （句号/问号/叹号/换行），命中词始终位于片段中央，保搜索细度；
-     *  - 窗口以句子边界为自然断点，长度随内容变化，不硬编码固定字节数。
+     *  - 短正文（≤ SNIPPET_FULL_BODY_LIMIT）整段返回——分块按 H2 切割，
+     *    整段才能保住「签名 → 含义 → 修复步骤」这类结构完整性；
+     *  - 超长正文围绕第一个命中词取 ±SNIPPET_HALF_WINDOW 硬窗口，
+     *    再向内回退到最近的空白/句读做整洁断点；找不到边界时用硬窗口，
+     *    绝不允许出现几十字符的过短片段。
      *
      * @param string $body
      * @param array<int, string> $terms
@@ -306,6 +670,9 @@ class RagSearch
         $hitPos = null;
         $hitLen = 0;
         foreach ($terms as $term) {
+            if (mb_strlen($term) < 2) {
+                continue; // bigram 噪声项不作为窗口锚点
+            }
             $pos = mb_stripos($body, $term);
             if ($pos !== false && ($hitPos === null || $pos < $hitPos)) {
                 $hitPos = $pos;
@@ -318,35 +685,56 @@ class RagSearch
             return mb_substr($body, 0, self::SNIPPET_HALF_WINDOW) . '…';
         }
 
-        $start = $hitPos;
-        while ($start > 0 && $hitPos - $start < self::SNIPPET_HALF_WINDOW) {
-            if (self::isSentenceBoundary(mb_substr($body, $start - 1, 1))) {
-                break;
-            }
-            $start--;
-        }
+        // 硬窗口 + 向内找最近的空白/句读做整洁断点（最多回看 BOUNDARY_LOOKBACK）
+        $start = max(0, $hitPos - self::SNIPPET_HALF_WINDOW);
+        $start = self::retreatToBoundary($body, $start, min($hitPos, $start + self::SNIPPET_BOUNDARY_LOOKBACK));
 
-        $end = $hitPos + $hitLen;
-        while ($end < $bodyLen && $end - $hitPos < self::SNIPPET_HALF_WINDOW) {
-            $end++;
-            if (self::isSentenceBoundary(mb_substr($body, $end - 1, 1))) {
-                break;
-            }
-        }
+        $end = min($bodyLen, $hitPos + $hitLen + self::SNIPPET_HALF_WINDOW);
+        $end = self::advanceToBoundary($body, max($end - self::SNIPPET_BOUNDARY_LOOKBACK, $hitPos + $hitLen), $end);
 
         return ($start > 0 ? '…' : '')
-            . mb_substr($body, $start, $end - $start)
-            . ($end < $bodyLen ? '…' : '');
+            . trim(mb_substr($body, $start, $end - $start))
+            . ($end < $bodyLen ? "\n…" : '');
     }
 
-    private static function isSentenceBoundary(string $ch): bool
+    /**
+     * From $from, walk forward to the first blank/sentence boundary at or before
+     * $to. Returns $to when no boundary is found in range.
+     */
+    private static function retreatToBoundary(string $body, int $from, int $to): int
     {
-        // 仅句末标点作为句子边界；换行不作边界（Markdown 列表项/行内换行不代表句子结束）
-        return in_array($ch, ['。', '！', '？', '；', '.', '!', '?', ';'], true);
+        for ($i = $from; $i < $to; $i++) {
+            if (self::isSnippetBreak(mb_substr($body, $i, 1))) {
+                return $i;
+            }
+        }
+        return $to;
+    }
+
+    private static function advanceToBoundary(string $body, int $from, int $to): int
+    {
+        for ($i = $to - 1; $i >= max($from, 0); $i--) {
+            if (self::isSnippetBreak(mb_substr($body, $i, 1))) {
+                return $i;
+            }
+        }
+        return $to;
+    }
+
+    private static function isSnippetBreak(string $ch): bool
+    {
+        // 空白与句读都可作为断点：保留换行即保留 Markdown 列表结构
+        return trim($ch) === '' || in_array($ch, ['。', '！', '？', '；', '.', '!', '?', ';'], true);
     }
 
     /**
      * Split a query into distinct non-empty terms on whitespace and punctuation.
+     *
+     * CJK runs of 3+ characters are additionally exploded into overlapping
+     * bigrams (数据包导致失败 → 数据/据包/包导/...): there is no CJK word
+     * segmentation, so the original run as a single LIKE term almost never
+     * matches; bigrams let the OR-fallback rank documents by how many
+     * fragments they contain, which correlates well with relevance.
      *
      * @param string $query
      * @return array<int, string>
@@ -358,7 +746,25 @@ class RagSearch
             return [];
         }
 
-        return array_values(array_unique(array_filter(array_map('trim', $terms), fn($t) => $t !== '')));
+        $terms = array_values(array_unique(array_filter(array_map('trim', $terms), fn($t) => $t !== '')));
+
+        $withBigrams = [];
+        foreach ($terms as $term) {
+            $withBigrams[] = $term;
+            if (preg_match_all('/[\x{4e00}-\x{9fff}]{2,}/u', $term, $runs) !== 0) {
+                foreach ($runs[0] as $run) {
+                    $len = mb_strlen($run);
+                    if ($len < 3) {
+                        continue;
+                    }
+                    for ($i = 0; $i + 2 <= $len; $i++) {
+                        $withBigrams[] = mb_substr($run, $i, 2);
+                    }
+                }
+            }
+        }
+
+        return array_values(array_unique($withBigrams));
     }
 
     /**

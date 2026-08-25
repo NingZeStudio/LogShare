@@ -992,7 +992,8 @@ paths:
       tags: [Meta]
       summary: List active pre-filters
       description: |
-        Returns the ordered list of active pre-filters (type + config)
+        Returns the ordered list of active pre-filters (type + config).
+        Derived from the `filter.pre` config, so it always reflects what is actually applied.
         
         (Deprecated; use /v1/filters instead)
       operationId: getFilters
@@ -1022,10 +1023,22 @@ paths:
                           replacement: "**.**.**.**"
                         - pattern: IPv6
                           replacement: "****:****:****:****:****:****:****:****"
+                        - pattern: IPv6Short
+                          replacement: "****:****:****:****:****:****:****:****"
+                        - pattern: Uuid
+                          replacement: "********-****-****-****-************"
+                        - pattern: Xuid
+                          replacement: "xuid:\"****************\""
+                        - pattern: SessionToken
+                          replacement: "accessToken:\"********\""
+                        - pattern: ClientId
+                          replacement: "clientId:\"********\""
+                        - pattern: Coordinate
+                          replacement: "BlockPos(*****, *****, *****)"
                         - pattern: Username
-                          replacement: "********"
+                          replacement: "C:\\Users\\********\\"
                         - pattern: AccessToken
-                          replacement: "********"
+                          replacement: "accessToken:\"********\""
         '429':
           $ref: '#/components/responses/RateLimited'
   /v1/filters:
@@ -1033,7 +1046,8 @@ paths:
       tags: [Meta]
       summary: List active pre-filters
       description: |
-        Returns the ordered list of active pre-filters (type + config)
+        Returns the ordered list of active pre-filters (type + config).
+        Derived from the `filter.pre` config, so it always reflects what is actually applied.
       operationId: getFiltersV1
       responses:
         '200':
@@ -1060,10 +1074,22 @@ paths:
                           replacement: "**.**.**.**"
                         - pattern: IPv6
                           replacement: "****:****:****:****:****:****:****:****"
+                        - pattern: IPv6Short
+                          replacement: "****:****:****:****:****:****:****:****"
+                        - pattern: Uuid
+                          replacement: "********-****-****-****-************"
+                        - pattern: Xuid
+                          replacement: "xuid:\"****************\""
+                        - pattern: SessionToken
+                          replacement: "accessToken:\"********\""
+                        - pattern: ClientId
+                          replacement: "clientId:\"********\""
+                        - pattern: Coordinate
+                          replacement: "BlockPos(*****, *****, *****)"
                         - pattern: Username
-                          replacement: "********"
+                          replacement: "C:\\Users\\********\\"
                         - pattern: AccessToken
-                          replacement: "********"
+                          replacement: "accessToken:\"********\""
         '429':
           $ref: '#/components/responses/RateLimited'
   /1/errors/rate:

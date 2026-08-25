@@ -1,0 +1,13 @@
+# Start script generator
+
+<details>
+  <summary>What flags do I choose?</summary>
+  If you're running on a modern JVM, i.e. 17, 21 or higher, try with no flags first.
+  Modern JVMs are very good at handling various applications with default GC settings.
+
+  If you have GC problems or are running an older version of Minecraft/an older version of Java,
+  try [Aikar's flags](/paper/aikars-flags), which are optimized specifically for Minecraft.
+
+  If you're generating a script for starting [Velocity](https://papermc.io/software/velocity), choose "Velocity".
+</details>
+

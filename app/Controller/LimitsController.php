@@ -15,9 +15,9 @@ class LimitsController extends AbstractController
         $config = \App\Config::Get('storage');
 
         return $this->respondJson([
-            'storageTime' => $config['storageTime'],
-            'maxLength' => $config['maxLength'],
-            'maxLines' => $config['maxLines'],
+            'storageTime' => (int) ($config['storageTime'] ?? (7 * 24 * 60 * 60)),
+            'maxLength' => (int) ($config['maxLength'] ?? (10 * 1024 * 1024)),
+            'maxLines' => (int) ($config['maxLines'] ?? 50_000),
         ]);
     }
 }

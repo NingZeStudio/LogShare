@@ -2,8 +2,6 @@
 
 namespace App\Client;
 
-use Hyperf\Context\Context;
-use Hyperf\Engine\Http\EventStream;
 use Hyperf\HttpServer\Response;
 
 class AIClient
@@ -14,36 +12,15 @@ class AIClient
     private const DEFAULT_CONNECT_TIMEOUT = 15;
     private const CACHE_TTL = 1800;
 
-    private const SSE_CONTEXT_KEY = 'logshare_sse_stream';
-
-    /** CLI fallback storage (no Swoole coroutine, so a static is safe). */
-    private static ?EventStream $stream = null;
-
-    private static function setStream(?EventStream $stream): void
-    {
-        if (extension_loaded('swoole')) {
-            Context::set(self::SSE_CONTEXT_KEY, $stream);
-        } else {
-            self::$stream = $stream;
-        }
-    }
-
-    private static function getStream(): ?EventStream
-    {
-        if (extension_loaded('swoole')) {
-            $stream = Context::get(self::SSE_CONTEXT_KEY);
-            return $stream instanceof EventStream ? $stream : null;
-        }
-        return self::$stream;
-    }
-
     /**
      * Stream a chat completion with optional tools.
      *
      * The response is forwarded to the provided callbacks as SSE-style chunks arrive:
      *  - $onDelta(string):  text content delta
      *  - $onReasoning(string): reasoning_content delta (thinking trace)
-     *  - $onToolCalls(array): complete tool_calls once the stream finishes
+     *  - $onToolCalls(array, string): complete tool_calls + this round's full
+     *    reasoning_content once the stream finishes (reasoning models require it
+     *    to be passed back with the assistant message on the next round)
      *  - $onDone(string, bool): full text content + whether tool calls were present
      *
      * Multiple API keys are tried in order; a 429 or failed request switches to the next key.
@@ -78,7 +55,9 @@ class AIClient
                 $payload = self::buildPayload($messages, $config['model'], $tools);
                 $buffer = '';
                 $fullContent = '';
+                $fullReasoning = '';
                 $toolCalls = [];
+                $lastToolCallIndex = null;
                 $responseBody = '';
 
                 $ch = curl_init($config['baseUrl']);
@@ -87,9 +66,11 @@ class AIClient
                 curl_setopt($ch, CURLOPT_WRITEFUNCTION, function ($ch, $data) use (
                     &$buffer,
                     &$fullContent,
+                    &$fullReasoning,
                     &$toolCalls,
                     &$responseBody,
                     &$emitted,
+                    &$lastToolCallIndex,
                     $onDelta,
                     $onReasoning
                 ) {
@@ -129,13 +110,28 @@ class AIClient
                         }
 
                         if (isset($delta['reasoning_content']) && is_string($delta['reasoning_content'])) {
+                            $fullReasoning .= $delta['reasoning_content'];
                             $emitted = true;
                             $onReasoning($delta['reasoning_content']);
                         }
 
                         if (isset($delta['tool_calls']) && is_array($delta['tool_calls'])) {
                             foreach ($delta['tool_calls'] as $toolCall) {
-                                $index = $toolCall['index'] ?? 0;
+                                // index 归属：正规流携带 index 直接用；部分网关省略 index，
+                                // 此时以「新 id 或新 name」判定开启新桶，纯 arguments 分片
+                                // 归属最近打开的桶，避免多个并行调用被串接到同一桶。
+                                $index = isset($toolCall['index']) && is_numeric($toolCall['index'])
+                                    ? (int) $toolCall['index']
+                                    : null;
+                                if ($index === null) {
+                                    if (!empty($toolCall['id']) || !empty($toolCall['function']['name'])) {
+                                        $index = count($toolCalls);
+                                    } else {
+                                        $index = $lastToolCallIndex ?? 0;
+                                    }
+                                }
+                                $lastToolCallIndex = $index;
+
                                 if (!isset($toolCalls[$index])) {
                                     $toolCalls[$index] = [
                                         'id' => null,
@@ -144,10 +140,15 @@ class AIClient
                                         'arguments' => '',
                                     ];
                                 }
-                                if (isset($toolCall['id'])) {
+                                // 注意：部分网关的后续分片会携带空字符串的 id/name，
+                                // isset('') 为 true，不能直接覆盖首片的真实值
+                                if (!empty($toolCall['id'])) {
                                     $toolCalls[$index]['id'] = $toolCall['id'];
                                 }
-                                if (isset($toolCall['function']['name'])) {
+                                if (
+                                    isset($toolCall['function']['name'])
+                                    && $toolCall['function']['name'] !== ''
+                                ) {
                                     $toolCalls[$index]['name'] = $toolCall['function']['name'];
                                 }
                                 if (isset($toolCall['function']['arguments'])) {
@@ -168,7 +169,11 @@ class AIClient
                     throw new \Exception('CURL error: ' . $curlError);
                 }
                 if ($httpCode === 429) {
-                    error_log("[AI Client] Stream rate limited, switching key");
+                    \App\Syslog::error('AI Client', 'Stream rate limited, switching key');
+                    if ($emitted) {
+                        // 已向客户端 emit 了部分内容，换 key 重试会造成重复输出，直接失败
+                        break;
+                    }
                     continue;
                 }
                 if ($httpCode !== 200 && $httpCode !== 0) {
@@ -176,15 +181,24 @@ class AIClient
                 }
 
                 $success = true;
-                $toolCalls = array_values($toolCalls);
-                $onToolCalls($toolCalls);
+                // 防御：部分网关的分片中 name 可能为空、arguments 可能缺省，
+                // 空 name 的 tool_call 回传给上游会被 400 拒绝（name cannot be empty）
+                $toolCalls = array_values(array_filter($toolCalls, fn($c) => !empty($c['name'])));
+                foreach ($toolCalls as &$call) {
+                    if ($call['arguments'] === '') {
+                        $call['arguments'] = '{}';
+                    }
+                }
+                unset($call);
+                $onToolCalls($toolCalls, $fullReasoning);
                 $onDone($fullContent, !empty($toolCalls));
                 break;
 
             } catch (\Exception $e) {
                 $lastException = $e;
-                $keyPrefix = substr($apiKey, 0, 16) . '...';
-                error_log("[AI Client] Stream Key {$keyPrefix} 失败: " . $e->getMessage());
+                // 只记录 key 指纹，避免可识别前缀进入日志
+                $keyPrefix = substr(md5($apiKey), 0, 8);
+                \App\Syslog::error('AI Client', "Stream Key {$keyPrefix} 失败: " . $e->getMessage());
 
                 if ($emitted) {
                     // 已向客户端 emit 了部分内容，换 key 重试会造成重复输出，直接失败
@@ -209,14 +223,14 @@ class AIClient
      */
     public static function analyzeStream(string $content, ?string $cacheKey = null, int $cacheTTL = self::CACHE_TTL, ?Response $response = null): void
     {
-        self::startSSE($response);
+        \App\Sse\SseWriter::begin($response);
 
         if ($cacheKey !== null) {
             $cached = self::checkCache($cacheKey);
             if ($cached !== null) {
-                self::write("data: " . json_encode(['choices' => [['delta' => ['content' => $cached]]]], JSON_UNESCAPED_UNICODE) . "\n\n");
-                self::write("event: done\ndata: {\"status\":\"completed\"}\n\n");
-                self::end();
+                \App\Sse\SseWriter::write("data: " . json_encode(['choices' => [['delta' => ['content' => $cached]]]], JSON_UNESCAPED_UNICODE) . "\n\n");
+                \App\Sse\SseWriter::write("event: done\ndata: {\"status\":\"completed\"}\n\n");
+                \App\Sse\SseWriter::end();
                 return;
             }
         }
@@ -226,7 +240,7 @@ class AIClient
                 self::analysisMessages($content),
                 [],
                 function (string $delta) {
-                    self::write("data: " . json_encode(['choices' => [['delta' => ['content' => $delta]]]], JSON_UNESCAPED_UNICODE) . "\n\n");
+                    \App\Sse\SseWriter::write("data: " . json_encode(['choices' => [['delta' => ['content' => $delta]]]], JSON_UNESCAPED_UNICODE) . "\n\n");
                 },
                 function (string $reasoning) {
                     // Legacy plain analysis does not forward the thinking trace
@@ -238,13 +252,13 @@ class AIClient
                     if ($cacheKey !== null && $fullContent !== '') {
                         self::writeCache($cacheKey, $fullContent, $cacheTTL);
                     }
-                    self::write("event: done\ndata: {\"status\":\"completed\"}\n\n");
-                    self::end();
+                    \App\Sse\SseWriter::write("event: done\ndata: {\"status\":\"completed\"}\n\n");
+                    \App\Sse\SseWriter::end();
                 }
             );
         } catch (\Exception $e) {
-            self::write("event: error\ndata: " . json_encode(['error' => $e->getMessage()], JSON_UNESCAPED_UNICODE) . "\n\n");
-            self::end();
+            \App\Sse\SseWriter::write("event: error\ndata: " . json_encode(['error' => $e->getMessage()], JSON_UNESCAPED_UNICODE) . "\n\n");
+            \App\Sse\SseWriter::end();
         }
     }
 
@@ -257,51 +271,9 @@ class AIClient
     public static function analysisMessages(string $content): array
     {
         return [
-            ['role' => 'user', 'content' => "这怎么回事\n\n" . $content]
+            ['role' => 'system', 'content' => '你是一个专业的 Minecraft 服务器日志分析助手。基于用户提供的日志定位问题原因，给出结论并附可行的解决步骤。回答使用简体中文，结构清晰，全程禁止使用 emoji 或表情符号。'],
+            ['role' => 'user', 'content' => "请分析以下日志：\n\n" . $content],
         ];
-    }
-
-    private static function startSSE(?Response $response): void
-    {
-        self::setStream(null);
-
-        if ($response !== null) {
-            $connection = $response->getConnection();
-            if ($connection !== null) {
-                self::setStream(new EventStream($connection, $response));
-                return;
-            }
-        }
-
-        header('Content-Type: text/event-stream');
-        header('Cache-Control: no-cache');
-        header('Connection: keep-alive');
-        header('X-Accel-Buffering: no');
-
-        if (ob_get_level() > 0) {
-            ob_end_flush();
-        }
-        flush();
-    }
-
-    private static function write(string $data): void
-    {
-        $stream = self::getStream();
-        if ($stream instanceof EventStream) {
-            $stream->write($data);
-        } else {
-            echo $data;
-            flush();
-        }
-    }
-
-    private static function end(): void
-    {
-        $stream = self::getStream();
-        if ($stream instanceof EventStream) {
-            $stream->end();
-            self::setStream(null);
-        }
     }
 
     private static function checkCache(string $cacheKey): ?string
@@ -312,7 +284,7 @@ class AIClient
                 return $cached;
             }
         } catch (\Exception $e) {
-            error_log("[AI Cache] 读取失败: " . $e->getMessage());
+            \App\Syslog::error('AI Cache', '读取失败: ' . $e->getMessage());
         }
         return null;
     }
@@ -405,7 +377,7 @@ class AIClient
         try {
             \App\Cache\RedisCache::Set($cacheKey, $fullContent, $cacheTTL);
         } catch (\Exception $e) {
-            error_log("[AI Cache] 写入失败: " . $e->getMessage());
+            \App\Syslog::error('AI Cache', '写入失败: ' . $e->getMessage());
         }
     }
 }

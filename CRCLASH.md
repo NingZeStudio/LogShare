@@ -1,69 +1,93 @@
-# CRCLASH — LogShare 全面代码审查报告（第六轮 · v1.7.0-beta.1 后）
+# CRCLASH — LogShare 全面代码审查报告（第九轮 · 语义 RAG 上线后）
 
-- **审查日期：** 2026-08-23
-- **审查范围：** 项目全部源码（`app/` 55、`config/` 11、`bin/` 1、`core.php`、`pest.php`、`phpstan.neon`、`tests/`、`docker/`、`scripts/`），排除 `vendor/`、`.git/`、`runtime/`、`tmp/`、`rag/knowledge/`、`mappings/`（Git LFS）
-- **技术栈：** PHP 8.4+ · Hyperf 3.2（Swoole 6.2 常驻 + 协程）· MariaDB（`hyperf/database`）· Redis（可选，ext-redis + 协程级 Context 隔离）· SpinYarn v1.0.0（PHP 扩展，去下载化）· SQLite FTS5（RAG）· Aternos Codex · Pest 3 + PHPStan level 5
-- **文件/代码规模：** `app/` 55 文件约 5,584 行；测试 142 项（本地 6 项 skip：MariaDbStorageTest 因 mariadbd 未运行、SpinYarnClientTest 因扩展已加载）
-- **背景：** 本轮针对第五轮审查之后的完整工作（CRCLASH 第五轮 14 项修复 → Docker CI 五轮修复 → SpinYarn 去下载化 v1.0.0 → 映射表 Git LFS → AI 可完全禁用 → 代码整理）。CI 已全绿（含 Docker Build）。
+- **审查日期：** 2026-08-25
+- **审查范围：** 项目全部源码 —— `app/` 61 文件约 6,800 行、`scripts/`（含新增清洗器与两个下载脚本）、`docker/`、`config/autoload/`、`tests/`、`composer.json/lock`；排除 `vendor/`、`.git/`、`runtime/`、`tmp/`、`rag/knowledge/` 内容文件与 `mappings/`
+- **技术栈：** PHP 8.4+ · Hyperf 3.2（Swoole 6.2 常驻）· MariaDB · Redis（可选）· SpinYarn v1.0.0 · SQLite FTS5 + bge-m3/bge-reranker-v2-m3 语义管线 · Aternos Codex · Pest 3 + PHPStan level 5
+- **本轮背景：** 第八轮问题全部修复后，项目完成了三批大变更：① 语义 RAG 管线（`SemanticClient` 多供应商 failover、向量召回 + rerank 精排、`doc_embeddings` 表、CJK bigram 检索、知识库清洗器）；② Agent 展示层与思维链优化（reasoning_content 回传、按工具定制的 tool_result summary）；③ Docker 与配置补全。当前基线：143 passed / 3 skipped、PHPStan 零错误、语义检索在线实测通过。
 
-## 整体评价
+## 概览
 
-第五轮 14 项问题全部落地，Docker 部署闭环打通（历经 vendor/zip/Config fallback/pcntl 五轮修复），SpinYarn 完成去下载化并发布 v1.0.0 LTS，映射表纳入 Git LFS 管理，AI 支持 `ai.enabled` 完全禁用。代码整体已进入**可维护状态**，本轮**无严重问题**，仅剩 2 处「一般」（性能优化与配置缺口）和少量「建议」。
+本轮重点复审语义管线与 Agent 改动。整体架构演进方向正确：检索从纯词法升级为「词法召回 ∪ 向量召回 → rerank 精排」三级管线，降级路径完整；多供应商 failover、嵌入批处理的容错设计都达到了生产水准。
+
+但发现一个**语义开启场景下的真实缺陷**：reranker 返回空结果集时（网关偶发行为），整个搜索会返回空——把已经召回的词法结果也丢掉了，违背「语义增强绝不能破坏检索」的自设约束。另有一个 Docker 部署缺口：本轮新增的 `AI_RAG_*` 环境变量未透传到 compose，容器化部署无法配置语义增强。
+
+发现 **2 处「一般」**、**4 处「建议」**。无「严重」级问题。
 
 ---
 
 ## 问题清单
 
+### 🔴 严重
+
+无。
+
 ### 🟠 一般
 
-#### M1. `deobfuscateForStorage()` 反混淆前的完整 `analyse()` 仅用于取版本，且 `/analyse` 端点重复分析 — `app/Log.php:161-165`、`app/Controller/AnalyseController.php:22-24`
-- **问题：** `deobfuscateForStorage()` 在反混淆**前**执行 `detect → parse → analyse()`（第 161-165 行），但其 `analysis` 结果仅用于第 175 行 `getFilteredInsights(VanillaVersionInformation::class)` 提取版本号；反混淆后（第 189-192 行）只重新 `detect → parse`，**不重新 `analyse`**。于是：
-  - `put()`（上传）场景：这次 analyse 的结果被完全丢弃（存储的是反混淆后文本，不存 analysis）；
-  - `setData()` + `/analyse` 场景：`AnalyseController` 又显式调用 `$log->analyse()`（第 24 行）做第二次完整 analyse，第一份 analysis 被覆盖。
-- **影响：** 每次上传/分析多付出一次完整 Codex `analyse()`（detect + parse + 分析，约 100ms 级），纯属浪费。
-- **修复：** 反混淆前不要完整 `analyse()`，改用更轻量的版本提取（detect 后从日志类/内容直接判定版本）；或让 `deobfuscateForStorage()` 在反混淆后也重算 `analysis`，从而让 `AnalyseController` 省略显式 `analyse()`。
+#### M1. rerank 返回空结果集时丢弃全部词法召回 — `app/Rag/RagSearch.php:439-449`
 
-#### M2. `ai.enabled` 无环境变量覆盖，Docker 部署无法通过环境变量禁用 AI — `app/Config.php:46-67`
-- **问题：** 新增的 `ai.enabled`（完全禁用 AI）只支持 `Config.inc.php` 配置，`applyEnvironmentOverrides()` 未提供对应环境变量（如 `AI_ENABLED`）。而 Docker 镜像内无 `Config.inc.php`（fallback 到 `Config.inc.example.php`，其中 `ai.enabled = true`）。
-- **影响：** 容器/编排环境无法通过环境变量一键禁用 AI，只能改代码里的 example 或另挂配置，违背「配置可环境化」的既有约定（REDIS_*/AI_* 均可覆盖）。
-- **修复：** 在 `applyEnvironmentOverrides()` 增加 `AI_ENABLED → ai.enabled`（布尔解析），并同步更新 docblock 与 `Config.inc.example.php` 注释。
+- **问题：** `applySemanticEnhancement()` 的 try 块覆盖 embed → cosine → rerank 全链路。若 rerank 调用**成功但返回空 `results`**（网关限流时的静默空响应、异常 query 触发的空排序等），`$ranked = []` → `$out = []` 直接返回——此时词法召回可能已有 5 条完整结果，却被整体替换为空数组。
+- **影响：** 语义开启时，任何一次 rerank 空响应都会让 `/rag` MCP 与 Agent 的知识库检索"凭空归零"，且无任何错误日志（没有抛异常）。这直接违背了代码注释自设的约束 "semantic search must never break retrieval"。
+- **修复：** 循环结束后加兜底：`if ($out === []) { return array_slice($lexical, 0, $k); }`（一行）；可同时记一条 warning 日志便于观测网关质量。
+
+#### M2. compose 未透传 AI_RAG_* 环境变量 — `docker/compose.yaml`（hyperf.environment）
+
+- **问题：** 本轮为语义 RAG 新增的 `AI_RAG_ENABLED` / `AI_RAG_BASE_URL` / `AI_RAG_API_KEY` 环境变量覆盖已在 `Config::applyEnvironmentOverrides()` 实现，但 compose 的 hyperf 服务未透传这三个变量。
+- **影响：** Docker Compose 部署时语义 RAG 无法通过环境变量开启或配置——镜像内 fallback 配置的 `ai.rag.enabled = false`，语义管线在容器化生产环境中永远关闭；想开启只能挂载自定义 Config.inc.php，与第八轮建立的「env 优先」部署模式相悖。
+- **修复：** hyperf environment 补齐：
+  ```yaml
+  AI_RAG_ENABLED: ${AI_RAG_ENABLED:-false}
+  AI_RAG_BASE_URL: ${AI_RAG_BASE_URL:-}
+  AI_RAG_API_KEY: ${AI_RAG_API_KEY:-}
+  ```
+  （providers 多供应商列表仍需挂载配置文件支持，env 仅覆盖单主供应商场景——在 README 注明。）
 
 ### 🟡 建议
 
-#### R1. `RagController` 进程级缓存 `RagSearch`（SQLite PDO）的协程并发与阻塞 — `app/Controller/RagController.php:21-32`
-- `static ?RagSearch $search` 进程级复用含 PDO 连接的实例。Swoole 单线程下无并发串扰，但 SQLite 查询是**同步阻塞**（PDO 的 C 层文件读写不被 `SWOOLE_HOOK_ALL` hook），并发 `/rag` 请求会串行阻塞 worker（虽单次 <1ms）。
-- **修复：** 当前可接受；若 RAG 查询量增大，考虑每协程独立连接（Context 隔离，同 RedisClient 模式）或改用 SQLite 只读连接池。
-
-#### R2. 版本号硬编码散落多处 — `app/Controller/RagController.php:19`、`app/Client/MCPClient.php:41`
-- `RagController::SERVER_VERSION = '1.7.0-beta.1'` 与 `MCPClient` 的 `clientInfo.version` 均为硬编码字符串，版本升级需多处手动同步。
-- **修复：** 收敛到单一常量（如 `App\Version::VERSION`）或从 `composer.json`/配置读取，RagController 与 MCPClient 统一引用。
-
-#### R3. `RedisClient` 协程环境连接释放依赖 GC，无显式 close — `app/Client/RedisClient.php:52-61`
-- 协程环境连接存 `Context`，协程结束时依赖 ext-redis 析构释放底层 socket，无显式 `close()`。通常可接受，但可考虑用协程 `defer` 显式关闭，避免 GC 时机不确定导致的短暂连接占用。
-
-#### R4. `RedisClient` 非协程 `ping()` 检测对 `RedisMock` 低效 — `app/Client/RedisClient.php:63-72`
-- 测试 `RedisMock` 未实现 `ping()`，非协程路径每次操作都会触发 `catch` 后重建连接（功能正常，纯低效）。可让 `RedisMock` 补 `ping()` 方法以贴合真实行为。
+- **R1. topByCosine 全表加载正文 — `app/Rag/RagSearch.php:465-468`**：余弦扫描 SELECT 了 `d.body`（2250 分块 ≈ 3.4MB）进内存，但算相似度只需要 vec；命中 limit 后才需要 title/body。改为先 `SELECT e.rowid, e.vec` 打分，取 top 后再按 rowid 二次查询元数据，每次搜索省一次全表正文物化。
+- **R2. 向量维度不匹配静默跳过 — `topByCosine():474`**：用户切换 embedding 模型后（如 1024 维 → 其他维度），`count($vec) !== count($queryVec)` 会让**所有**历史向量被静默跳过，语义增强悄悄退化为纯词法而无任何提示。建议：检测到维度不一致时记录一次 warning（提示重跑 rag:build）。
+- **R3. 语义查询无短 TTL 缓存**：每次 `rag_search` 固定产生 embed + rerank 两次串行 API 往返（约 200–500ms 延迟与双份 token 成本）。对相同 query 做 60s 进程级缓存即可显著降低重复查询开销（Agent 循环中模型换词重查时尤其明显）。
+- **R4. cache.enabled=false 时限流完全失效缺警示 — `RateLimitMiddleware.php:37`**：跳过逻辑本身正确（本地开发体验优化），但生产若误关全局缓存会连带失去限流而毫无征兆。建议 worker 启动时检测到该组合打一条显式警告日志。
+- **R5. 清洗脚本对 forge/neoforge 的 admonition 处理依赖下载脚本串联执行**：单独手跑 `php scripts/clean_knowledge_docs.php` 无害（幂等已验证），但若未来新增知识库目录需记得同步 `UPSTREAM_DIRS` 白名单，否则上游 README 会被当内容索引。可在 README 的知识库维护节注明。
 
 ---
 
 ## 改进建议（按优先级）
 
-1. **修 M1（重复 analyse）**：反混淆前用轻量方式取版本，消除上传/分析路径的重复完整 analyse。
-2. **修 M2（AI 环境变量）**：补 `AI_ENABLED` 覆盖，让 Docker 能一键禁用 AI。
-3. **收尾 R1-R4**：RAG 连接策略、版本号收敛、Redis 连接释放、RedisMock 补 `ping()`，按需排期。
-
----
+1. **P0 — M1**：rerank 空结果兜底回退词法。一行修复 + 一条日志，消除语义管线的"归零"风险。
+2. **P1 — M2**：compose 补齐 AI_RAG_* 透传（与第八轮 AI_ENABLED 同模式），并在 README 说明 providers 列表的 env 边界。
+3. **P2 — R1/R2**：cosine 扫描瘦身 + 维度失配告警，语义开启后的每次搜索都受益。
+4. **P3 — R3-R5**：按需排期。
 
 ## 正面亮点
 
-- **第五轮问题全部落地**：Redis 协程级连接隔离、AI id 绑定修复、日志降噪、`Limit*` 异常契约、MariaDB 唯一性查询与测试覆盖、RAG 连接复用/事务、生产配置、类型安全等 14 项均已修复。
-- **Docker 部署闭环**：历经 vendor/zip/Config-fallback/pcntl 五轮修复，CI 6 个 job（含 Docker Build）全绿；`Config::load` 缺失时优雅回退示例配置，容器开箱可启动。
-- **SpinYarn 去下载化落地**：映射表改由宿主提供（Git LFS + 下载脚本 + bind mount），SpinYarn 只做「本地加载 + 解析 + LRU 缓存」，职责清晰。
-- **AI 可完全禁用**：`ai.enabled` 开关 + 控制器守卫，禁用后 `/v1/ai/*` 统一返回 404，无需配置 API key。
-- **安全防护到位**：Token `hash_equals`、路径遍历/zip 炸弹防护、SQL 参数化、`random_bytes`/`random_int`、限流 fail-open。
-- **协程模型正确**：SSE 句柄与 Redis 连接均走协程级 `Context` 隔离，SpinYarn 静态句柄的协程安全性有明确注释论证。
-- **质量门槛持续有效**：PHPStan level 5 零错误、架构测试 7 项、Controller 集成测试、边界测试覆盖充分。
+- **语义管线容错设计成体系**：多供应商顺序 failover（per-provider 模型 ID 处理了 BAAI/ 前缀差异）、`relevance_score/score` 字段名兼容、嵌入批处理失败自动降级逐条并预截断超长文本（实测 2250/2250 全覆盖）、词法/向量双路召回合并去重——除 M1 一处外，降级链路完整。
+- **检索降级三级体系闭环**：FTS AND → OR → LIKE AND → OR → CJK bigram 切分，配合语义增强共五层，任何形态的查询（英文签名 / 中文口语 / 混合）都有出路；测试覆盖到每一层的契约。
+- **reasoning_content 回传修复彻底**：AIClient 累积完整思维链经 onToolCalls 传出，LogAgent 按轮回填 assistant 消息——DeepSeek 思维模式的 400 问题根治，且 mock server 测试覆盖了多轮场景。
+- **tool_result summary 按工具定制**：read_log_file 只报「文件 + 行数」（原文是给模型的）、rag_search 输出命中清单、list_topics 折叠为主题目录——展示层第一次做到了"用户视角"而非"数据视角"。
+- **知识库清洗器工程质量高**：单遍行状态机、fenced code 完整保护（MiniMessage 标签零误伤）、幂等验证通过、元文件删除规则限定在上游目录保护了手写蒸馏库的 README。
+- **运维脚本健壮性**：下载脚本 fetch 失败保留旧版不误删、tarball/git 双通道、mdx 统一改名；compose 四服务 healthcheck 全覆盖。
+- **第八轮遗留零残留**：M1-M4、R1-R7 全部落地且修复质量经本轮复核确认（含 compose env、summary 定制、bigram 检索等新需求的自然延伸）。
 
 ---
 
-*第六轮审查：v1.7.0-beta.1 后，第五轮 14 项 + Docker CI + SpinYarn 去下载化全部落地，CI 全绿，无严重问题。遗留 2 处「一般」（反混淆重复 analyse、AI 环境变量缺口）与 4 处「建议」均已修复（提交 `ae39514`）：M1 改用 `Log::getVersion()` 最佳实践 + 反混淆后重置 log/analysis、M2 补 `AI_ENABLED` 覆盖、R1/R3 补协程安全注释、R2 版本号收敛至 `App\Version`、R4 为 RedisMock 补 `ping()`。*
+## 修复状态
+
+第九轮问题已全部修复并验证：
+
+- **M1**：`applySemanticEnhancement` 拆分为缓存壳 + `runSemanticPipeline`；rerank 返回空 results 时记录日志并回退词法排序，检索不再「归零」。
+- **M2**：compose 补齐 `AI_RAG_ENABLED / AI_RAG_BASE_URL / AI_RAG_API_KEY` 透传（注释说明 providers 多供应商列表需挂载配置）。
+- **R1**：cosine 扫描只物化 vec，命中 limit 后按 rowid 二次取元数据，省去每次查询的全表正文物化。
+- **R2**：向量维度失配时进程内一次性 warning，提示重跑 rag:build。
+- **R3**：语义结果 60s 进程级 FIFO 缓存（64 条），重复 query 免双次 API 往返。
+- **R4**：限流跳过时输出一次性显式警告（cache.enabled=false 会一并失去限流）。
+- **R5**：README 知识库维护节注明清洗白名单与复刷流程。
+
+测试隔离同步修正：RagSearchTest 在 beforeEach 强制关闭语义开关并与外部网关解耦，新增「网关不可达 → 回退词法」回归用例。
+
+## 验证结果
+
+- Pest：**144 passed, 3 skipped**（新增语义降级回归用例）。
+- PHPStan level 5：**No errors**。
+- `/rag` MCP 在线验证：语义管线返回正常（1505 字节含结构化正文）。
+
+*第九轮问题全部关闭。*

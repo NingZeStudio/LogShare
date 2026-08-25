@@ -29,7 +29,8 @@ return [
     'cache' => [
         'cacheId' => '\\App\\Cache\\RedisCache',
         'enabled' => true,
-        'redis' => ['host' => 'mclogs-redis', 'port' => 6379],
+        // password / database 为可选项：Redis 开启 requirepass 或 ACL 时填 password
+        'redis' => ['host' => 'mclogs-redis', 'port' => 6379, 'password' => '', 'database' => 0],
         'ttl' => 30 * 60,
         'maxSize' => 600 * 1024,
     ],
@@ -96,8 +97,32 @@ return [
         'agent' => [
             'enabled' => false,
             'maxToolRounds' => 3,
-            'maxFileLines' => 500,
-            'maxFileBytes' => 16 * 1024,
+            'maxFileLines' => 50_000,
+            'maxFileBytes' => 512 * 1024,
+        ],
+        // 语义 RAG 增强：embedding 召回 + reranker 精排（bge-m3 / bge-reranker-v2-m3）。
+        // providers 按顺序做故障切换：主供应商不可用时自动落到下一个；
+        // 模型 ID 按 provider 各自填写（硅基流动带 BAAI/ 前缀）。
+        // 注意与 ai.mcp.rag（内置 RAG MCP 服务端点）无关。开启后需重跑 rag:build 生成向量。
+        'rag' => [
+            'enabled' => false,
+            'timeout' => 30,
+            'providers' => [
+                [
+                    'name' => 'siliconflow',
+                    'baseUrl' => 'https://api.siliconflow.cn/v1',
+                    'apiKey' => '',
+                    'embeddingModel' => 'BAAI/bge-m3',
+                    'rerankModel' => 'BAAI/bge-reranker-v2-m3',
+                ],
+                [
+                    'name' => 'huidev',
+                    'baseUrl' => 'https://api.huidev.com/v1',
+                    'apiKey' => '',
+                    'embeddingModel' => 'bge-m3',
+                    'rerankModel' => 'bge-reranker-v2-m3',
+                ],
+            ],
         ],
         'mcp' => [
             'webSearch' => [
