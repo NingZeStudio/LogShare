@@ -59,6 +59,14 @@ jobs:
       - name: Copy Config
         run: cp Config.inc.example.php Config.inc.php
 
+      - name: Initialize MariaDB Schema
+        run: |
+          php -r '
+          $pdo = new PDO("mysql:host=127.0.0.1;dbname=logshare", "logshare", "logshare", [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]);
+          $pdo->exec(file_get_contents("docker/mariadb-init.sql"));
+          echo "schema initialized\n";
+          '
+
       - name: Run Tests
         run: composer test
         env:
