@@ -11,10 +11,12 @@ FROM php:8.5-cli
 # Composer（安装项目依赖用）
 COPY --from=composer:2 /usr/bin/composer /usr/bin/composer
 
-# 扩展安装器：pdo_mysql / redis / zip（zip 供 composer 解压 dist 包）
+# 扩展安装器：pdo_mysql / pdo_sqlite / redis / zip（zip 供 composer 解压 dist 包）
 # pdo_sqlite 为内置 RAG（SQLite FTS5）必需；pcntl / posix / sockets 为 Hyperf 注解扫描与 Swoole 所需
-COPY --from=mlocati/php-extension-installer /usr/local/bin/install-php-extensions /usr/local/bin/
-RUN install-php-extensions pdo_mysql pdo_sqlite redis zip pcntl posix sockets mbstring
+# 直接拉取官方 release 脚本——镜像 tag 内部路径曾变动导致 COPY not found，此方式不受上游打包影响
+ADD https://github.com/mlocati/docker-php-extension-installer/releases/latest/download/install-php-extensions /usr/local/bin/install-php-extensions
+RUN chmod +x /usr/local/bin/install-php-extensions \
+    && install-php-extensions pdo_mysql pdo_sqlite redis zip pcntl posix sockets mbstring
 
 # 编译 Swoole（固定版本，保证构建可复现且满足 Hyperf 3.2 + PHP 8.5 所需的 6.2+）
 ARG SWOOLE_VERSION=6.2.0
