@@ -247,8 +247,15 @@ class LogAgent
     {
         $system = $config['systemPrompt'] ?? self::defaultSystemPrompt($logId);
 
+        $system .= "\n\n强制执行规则（优先级高于其他分析习惯）：\n"
+            . "- 任何日志分析都必须先调用一次 rag_search；不得仅凭日志内容直接给出最终结论。\n"
+            . "- rag_search 返回无关或无结果时，必须换用错误关键词、异常类名、模组名或版本号再次调用。\n"
+            . "- 内部知识库仍无法确认时，必须调用 web_search_exa；只有检索完成后才能输出最终分析。\n"
+            . "- list_topics 仅用于了解知识库范围，不能替代 rag_search。\n"
+            . "- read_log_file 返回的主日志和附加日志均已经过与上传主日志相同的脱敏过滤；不得声称附加日志未脱敏，也不得要求用户重新提供其中的敏感信息。";
+
         if ($topicsText !== '') {
-            $system .= "\n\n以下是你可检索的内部知识库所涵盖的主题（帮助判断检索方向，搜索前先浏览）：\n" . $topicsText;
+            $system .= "\n\n以下是你可检索的内部知识库所涵盖的主题（帮助判断检索方向）：\n" . $topicsText;
         }
 
         // 用户消息截断使用专属提示（不用工具结果的标记文案）
