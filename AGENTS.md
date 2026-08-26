@@ -131,6 +131,7 @@ When `ai.enabled` is false (`AI_ENABLED` env overrides), all `/v1/ai/*` routes r
 - Diagnostic logging goes through `App\Syslog::error(component, message)` (uniform `[Component] message` format over `error_log`), not raw `error_log()` calls.
 - Session-scoped file tools `list_log_files` / `read_log_file` operate only on the bound log id (`logId`), so the agent cannot read other logs.
 - SSE contract: `event: status` with `type` = thinking / tool / tool_result / limit, plus legacy `data:` content deltas and `event: done`. See `API.md`.
+- Tool invocation remains model-controlled by design: even though the system prompt asks the model to search RAG first, `LogAgent` does not enforce a mandatory tool call in code. If the model returns no `tool_calls`, it may answer directly. Do not add a hard interception for this, because it could interfere with the model's reasoning chain and reduce maximum availability.
 
 ## Docker
 
