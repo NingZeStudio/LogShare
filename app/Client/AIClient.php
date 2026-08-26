@@ -410,11 +410,11 @@ class AIClient
                 'Content-Type: application/json',
                 'Authorization: Bearer ' . $apiKey,
                 'Accept: text/event-stream',
+                'Accept-Encoding: identity',
             ],
             CURLOPT_TIMEOUT => $timeout,
             CURLOPT_CONNECTTIMEOUT => self::DEFAULT_CONNECT_TIMEOUT,
-            // 允许 curl 透明解压，避免上游强制 gzip 时收到乱码导致解析全失败
-            CURLOPT_ACCEPT_ENCODING => '',
+            CURLOPT_ACCEPT_ENCODING => 'identity',
         ];
     }
 
