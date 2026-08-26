@@ -81,7 +81,7 @@ class AIClient
                     $onReasoning
                 ) {
                     $bytesReceived = strlen($data);
-                    $buffer .= $data;
+                    $buffer .= str_replace(["\r\n", "\r"], "\n", $data);
 
                     if (strlen($responseBody) < 8192) {
                         $responseBody .= $data;
@@ -439,6 +439,14 @@ class AIClient
             if (!is_array($decoded)) {
                 return null;
             }
+        }
+
+        if (isset($decoded['error'])) {
+            $error = $decoded['error'];
+            $message = is_array($error)
+                ? ($error['message'] ?? json_encode($error, JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE))
+                : (string) $error;
+            throw new \Exception('upstream response error: ' . $message);
         }
 
         $choice = $decoded['choices'][0] ?? null;
