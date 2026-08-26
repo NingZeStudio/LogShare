@@ -68,7 +68,7 @@ class AIClient
                 $ch = curl_init($config['baseUrl']);
                 curl_setopt_array($ch, self::curlOptions($payload, $apiKey, $config['timeout']));
                 curl_setopt($ch, CURLOPT_RETURNTRANSFER, false);
-                curl_setopt($ch, CURLOPT_WRITEFUNCTION, function ($ch, $data) use (
+                $writeCallback = function ($ch, $data) use (
                     &$buffer,
                     &$fullContent,
                     &$fullReasoning,
@@ -182,9 +182,13 @@ class AIClient
                     }
 
                     return strlen($data);
-                });
+                };
 
+                curl_setopt($ch, CURLOPT_WRITEFUNCTION, $writeCallback);
                 curl_exec($ch);
+                if ($buffer !== '') {
+                    $writeCallback($ch, "\n");
+                }
                 $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
                 $curlError = curl_error($ch);
 
