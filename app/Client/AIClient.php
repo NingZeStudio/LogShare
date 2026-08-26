@@ -233,8 +233,16 @@ class AIClient
                         }
                     } else {
                         // 留存响应体头部片段，便于定位上游到底回了什么
-                        \App\Syslog::error('AI Client', 'Empty stream diagnostics, body head: '
-                            . mb_substr(preg_replace('/\s+/', ' ', trim($responseBody)), 0, 300));
+                        $bodyHead = substr($responseBody, 0, 512);
+                        $bodyText = mb_check_encoding($bodyHead, 'UTF-8')
+                            ? preg_replace('/\s+/', ' ', trim($bodyHead))
+                            : '[non-UTF8]';
+                        $contentType = curl_getinfo($ch, CURLINFO_CONTENT_TYPE) ?: 'unknown';
+                        \App\Syslog::error('AI Client', 'Empty stream diagnostics: HTTP ' . $httpCode
+                            . ', content-type=' . $contentType
+                            . ', body-bytes=' . strlen($responseBody)
+                            . ', body-text=' . mb_substr((string) $bodyText, 0, 300)
+                            . ', body-hex=' . bin2hex($bodyHead));
                         throw new \Exception('upstream returned an empty stream (HTTP ' . $httpCode . ', ' . strlen($responseBody) . ' bytes body)');
                     }
                 }
