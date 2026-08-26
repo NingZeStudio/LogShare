@@ -228,13 +228,15 @@ class LogAgent
                 'type' => 'function',
                 'function' => [
                     'name' => 'read_log_file',
-                    'description' => '读取当前日志下指定文件的内容。首次读取可省略 offset；如果结果提示已截断，使用相同 filename 和返回的 next_offset 继续读取剩余内容。主文件名为 main。',
+                    'description' => '读取当前日志下指定文件的内容。默认返回完整文件；需要控制范围时可使用 line_start/line_end 指定行区间，或使用 offset/max_bytes 指定字节区间。主文件名为 main。',
                     'parameters' => [
                         'type' => 'object',
                         'properties' => [
                             'filename' => ['type' => 'string', 'description' => '文件名（主文件为 main，或使用 list_log_files 列出的名称）'],
-                            'offset' => ['type' => 'integer', 'description' => '字节起始位置，续读时使用上次结果的 next_offset，默认为 0'],
-                            'max_bytes' => ['type' => 'integer', 'description' => '本次最多读取字节数，默认使用系统上限'],
+                            'line_start' => ['type' => 'integer', 'description' => '起始行号，从 1 开始；省略则从第 1 行开始'],
+                            'line_end' => ['type' => 'integer', 'description' => '结束行号，包含该行；省略则读取到文件末尾'],
+                            'offset' => ['type' => 'integer', 'description' => '字节起始位置；使用行区间时不要设置'],
+                            'max_bytes' => ['type' => 'integer', 'description' => '字节读取模式下的最大字节数；使用行区间时不要设置'],
                         ],
                         'required' => ['filename'],
                     ],
@@ -335,7 +337,7 @@ class LogAgent
 你是一个专业的 Minecraft 服务器日志分析助手。你的任务是分析玩家提交的日志，定位问题并提供解决方案。
 
 工作方式：
-1. 如需查看日志文件，先用 `list_log_files` 查看有哪些文件，然后调用 `read_log_file` 读取内容。若结果提示内容已截断，必须使用相同 filename 和返回的 `next_offset` 继续读取，直到获取与当前问题相关的完整片段或工具明确提示文件已读取完毕。
+1. 如需查看日志文件，先用 `list_log_files` 查看有哪些文件，然后调用 `read_log_file`。默认不传范围参数以读取完整文件；需要聚焦局部内容时，由你传入 `line_start` 和 `line_end` 指定行区间。超大内容需要续读时，使用返回的 `next_offset`。
 2. 调用 `rag_search` 之前，必须先调用 `list_topics` 了解知识库涵盖的主题与文档分布，据此选择贴合知识库的关键词检索；首次检索无结果时也应回看主题列表换词重试。知识库查不到的公开问题，再用 `web_search_exa` 搜索网络。
 3. 若知识库检索结果被截断（出现"…"或"已截断"标记），基于被截断处再次检索补全，不需要重复读取文件。
 
@@ -511,34 +513,43 @@ PROMPT;
             }
         }
 
-        $agentConfig = \App\Config::Get('ai')['agent'] ?? [];
-        $defaultMaxBytes = (int) ($agentConfig['maxFileBytes'] ?? (512 * 1024));
-        $maxBytes = (int) ($arguments['max_bytes'] ?? $defaultMaxBytes);
-        $maxBytes = max(1024, min($maxBytes, $defaultMaxBytes));
-        $offset = max(0, (int) ($arguments['offset'] ?? 0));
         $length = strlen($content);
+        $total = substr_count($content, "\n") + 1;
+        $hasLineRange = isset($arguments['line_start']) || isset($arguments['line_end']);
+
+        if ($hasLineRange) {
+            $lineStart = max(1, (int) ($arguments['line_start'] ?? 1));
+            $lineEnd = isset($arguments['line_end']) ? max($lineStart, (int) $arguments['line_end']) : $total;
+            $lines = explode("\n", $content);
+            $text = implode("\n", array_slice($lines, $lineStart - 1, $lineEnd - $lineStart + 1));
+            $session->readFiles[$sessionKey] = true;
+            return sprintf(
+                "文件 %s（共 %d 行，%d 字节；本次行区间=%d-%d）\n内容：\n%s",
+                $sessionKey,
+                $total,
+                $length,
+                $lineStart,
+                min($lineEnd, $total),
+                $text
+            );
+        }
+
+        $offset = max(0, (int) ($arguments['offset'] ?? 0));
         if ($offset >= $length) {
             return sprintf('文件 %s 已读取完毕（文件总大小 %d 字节，next_offset=%d）。', $sessionKey, $length, $length);
         }
 
-        $total = substr_count($content, "\n") + 1;
+        $maxBytes = isset($arguments['max_bytes']) ? max(1024, (int) $arguments['max_bytes']) : $length - $offset;
         $text = mb_strcut(substr($content, $offset), 0, $maxBytes);
-        $bytesRead = strlen($text);
-        $nextOffset = $offset + $bytesRead;
+        $nextOffset = $offset + strlen($text);
         $session->readFiles[$sessionKey] = true;
-
         $tail = $nextOffset < $length
             ? "\n[内容已截断；请使用 offset={$nextOffset} 继续读取，next_offset={$nextOffset}]"
             : "\n[文件已读取完毕，next_offset={$nextOffset}]";
 
         return sprintf(
             "文件 %s（共 %d 行，%d 字节；本次 offset=%d）\n内容：\n%s%s",
-            $sessionKey,
-            $total,
-            $length,
-            $offset,
-            $text,
-            $tail
+            $sessionKey, $total, $length, $offset, $text, $tail
         );
     }
 
