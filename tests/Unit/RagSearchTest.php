@@ -269,16 +269,15 @@ test('semantic enhancement degrades to lexical when the gateway is unreachable',
     $dataProp = $cfgRef->getProperty('data');
     $orig = $dataProp->getValue();
     $data = $orig;
-    $data['ai']['rag'] = [
-        'enabled' => true,
-        'providers' => [[
-            'name' => 'unreachable',
-            'baseUrl' => 'http://127.0.0.1:1',
-            'apiKey' => 'k',
-            'embeddingModel' => 'bge-m3',
-            'rerankModel' => 'bge-reranker-v2-m3',
-        ]],
-    ];
+$data['ai']['rag'] = [
+            'enabled' => true,
+            'providers' => [[
+                'name' => 'unreachable',
+                'baseUrl' => 'http://203.0.113.1:1',
+                'apiKey' => 'k',
+                'embeddingModel' => 'bge-m3',
+            ]],
+        ];
     $dataProp->setValue(null, $data);
 
     $results = $this->rag->search('OutOfMemoryError', 5);

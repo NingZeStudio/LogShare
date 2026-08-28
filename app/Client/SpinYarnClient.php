@@ -81,9 +81,12 @@ class SpinYarnClient
             $cacheMax = (int) ($config['cache_max_entries'] ?? 44);
             $cacheHigh = (int) ($config['cache_high_watermark'] ?? 40);
             $cacheLow = (int) ($config['cache_low_watermark'] ?? 30);
+            $redisUrl = self::resolveRedisUrl();
 
             try {
-                $handle = spinyarn_init($mappingsDir, $cacheMax, $cacheHigh, $cacheLow);
+                $handle = $redisUrl !== null
+                    ? spinyarn_init($mappingsDir, $cacheMax, $cacheHigh, $cacheLow, $redisUrl)
+                    : spinyarn_init($mappingsDir, $cacheMax, $cacheHigh, $cacheLow);
             } catch (\Throwable $e) {
                 \App\Syslog::error("SpinYarn", "初始化失败: " . $e->getMessage());
                 $handle = false;
@@ -91,6 +94,24 @@ class SpinYarnClient
         }
 
         return $handle;
+    }
+
+    private static function resolveRedisUrl(): ?string
+    {
+        $cache = \App\Config::Get('cache');
+        if (($cache['enabled'] ?? false) !== true) {
+            return null;
+        }
+        $redis = $cache['redis'] ?? [];
+        $host = trim((string) ($redis['host'] ?? ''));
+        if ($host === '') {
+            return null;
+        }
+        $port = (int) ($redis['port'] ?? 6379);
+        $database = (int) ($redis['database'] ?? 0);
+        $password = (string) ($redis['password'] ?? '');
+        $auth = $password === '' ? '' : ':' . rawurlencode($password) . '@';
+        return 'redis://' . $auth . $host . ':' . $port . '/' . $database;
     }
 
     /**

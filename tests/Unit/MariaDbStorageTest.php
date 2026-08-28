@@ -112,12 +112,43 @@ class MariaDbStorageTest extends HttpTestCase
     {
         $this->requireDb();
 
-        $id = MariaDbStorage::Put('expired', new Token());
-        // 将 created 回拨到远超 storageTime 之前，确保被判定为过期
-        Db::table('logs')->where('id', $id->getRaw())->update(['created' => time() - 99999999]);
+        $expired = MariaDbStorage::Put('expired', new Token());
+        $fresh = MariaDbStorage::Put('fresh', new Token());
+        Db::table('logs')->where('id', $expired->getRaw())->update(['created' => time() - 99999999]);
 
         $deleted = MariaDbStorage::CleanupExpired();
         expect($deleted)->toBeGreaterThanOrEqual(1);
-        expect(MariaDbStorage::Get($id))->toBeNull();
+        expect(MariaDbStorage::Get($expired))->toBeNull();
+        expect(MariaDbStorage::Get($fresh))->not->toBeNull();
+
+        MariaDbStorage::Delete($fresh);
+    }
+
+    public function testRenewedLogIsNotRemovedAsExpired(): void
+    {
+        $this->requireDb();
+
+        $id = MariaDbStorage::Put('renewed', new Token());
+        Db::table('logs')->where('id', $id->getRaw())->update(['created' => time() - 99999999]);
+        expect(MariaDbStorage::Renew($id))->toBeTrue();
+
+        MariaDbStorage::CleanupExpired();
+        expect(MariaDbStorage::Get($id))->not->toBeNull();
+
+        MariaDbStorage::Delete($id);
+    }
+
+    public function testCleanupEventIsEnabledWhenConfigured(): void
+    {
+        $this->requireDb();
+
+        $event = Db::selectOne("SELECT EVENT_NAME, STATUS, EVENT_INTERVAL_VALUE, EVENT_INTERVAL_FIELD FROM information_schema.EVENTS WHERE EVENT_SCHEMA = DATABASE() AND EVENT_NAME = 'cleanup_expired_logs'");
+        if ($event === null) {
+            $this->markTestSkipped('cleanup_expired_logs event is not installed');
+        }
+
+        expect($event->STATUS)->toBe('ENABLED');
+        expect($event->EVENT_INTERVAL_VALUE)->toBe('1');
+        expect($event->EVENT_INTERVAL_FIELD)->toBe('HOUR');
     }
 }

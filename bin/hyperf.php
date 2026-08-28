@@ -8,7 +8,7 @@ ini_set('display_errors', $isProduction ? 'off' : 'on');
 ini_set('display_startup_errors', $isProduction ? 'off' : 'on');
 ini_set('memory_limit', '1G');
 
-error_reporting(E_ALL);
+error_reporting(E_ALL & ~E_DEPRECATED & ~E_USER_DEPRECATED);
 
 ! defined('BASE_PATH') && define('BASE_PATH', dirname(__DIR__, 1));
 ! defined('SWOOLE_HOOK_FLAGS') && define('SWOOLE_HOOK_FLAGS', SWOOLE_HOOK_ALL);

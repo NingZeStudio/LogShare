@@ -1,6 +1,6 @@
 # RAG 检索（SQLite FTS5 本地知识库）
 
-LogShare 的内置 RAG 实现：基于 SQLite FTS5（BM25）的纯本地知识库检索，可选的 bge-m3 向量召回 + bge-reranker-v2-m3 精排增强。已整合进 Hyperf 进程，作为 MCP 服务在主 server 的 `/rag` 路径承载（JSON-RPC 2.0 协议）。该端点默认仅允许本机回环调用；通过反向代理或外部 MCP 客户端访问时需配置 `ai.mcp.rag.authToken` 并携带 Bearer Token。
+LogShare 的内置 RAG 实现：基于 SQLite FTS5（BM25）的纯本地知识库检索，可选的 bge-m3 向量召回增强，向量结果优先、词法结果补充。已整合进 Hyperf 进程，作为 MCP 服务在主 server 的 `/rag` 路径承载（JSON-RPC 2.0 协议）。该端点默认仅允许本机回环调用；通过反向代理或外部 MCP 客户端访问时需配置 `ai.mcp.rag.authToken` 并携带 Bearer Token。
 
 ## 组成
 

@@ -399,14 +399,12 @@ class RagSearch
             }
         }
 
-        // 3. Semantic enhancement: vector recall widens the candidate pool,
-        // then the bge-reranker-v2-m3 decides the final order.
+        // 3. Semantic enhancement: vector recall is primary, lexical results supplement it.
         return $this->applySemanticEnhancement($query, $results, $k);
     }
 
     /**
-     * Vector-recall extra candidates, merge them into the lexical ones and let
-     * the reranker decide the final order. Any failure logs and returns the
+     * Vector-recall candidates are primary and lexical results supplement them. Any failure logs and returns the
      * lexical-only slice — semantic search must never break retrieval.
      *
      * @param array<int, array{title: string, body: string, source: string, score: mixed, snippet: string}> $lexical
@@ -458,8 +456,7 @@ class RagSearch
     }
 
     /**
-     * Vector-recall extra candidates, merge them into the lexical ones and let
-     * the reranker decide the final order. Any failure logs and returns the
+     * Vector-recall candidates are primary and lexical results supplement them. Any failure logs and returns the
      * lexical-only slice — semantic search must never break retrieval.
      *
      * @param array<int, array{title: string, body: string, source: string, score: mixed, snippet: string}> $lexical
@@ -475,41 +472,18 @@ class RagSearch
 
             // 向量召回：与全库嵌入算余弦，补足词法漏掉的同义表述
             $vectorHits = $this->topByCosine($queryVec, max(20, $k * 4));
-            $mergedKeys = [];
-            foreach ($lexical as $r) {
-                $mergedKeys[$r['source'] . '#' . $r['title']] = true;
-            }
-            foreach ($vectorHits as $hit) {
-                $key = $hit['source'] . '#' . $hit['title'];
-                if (!isset($mergedKeys[$key])) {
-                    $mergedKeys[$key] = true;
-                    $lexical[] = $hit;
-                }
-            }
-            $merged = array_values($lexical);
-
-            if (count($merged) <= 1) {
-                return array_slice($merged, 0, $k);
-            }
-
-            $docs = array_map(fn($r) => $r['title'] . "\n" . $r['body'], $merged);
-            $ranked = $client->rerank($query, $docs, $k);
-
+            $seen = [];
             $out = [];
-            foreach ($ranked as $entry) {
-                $idx = $entry['index'];
-                if (!isset($merged[$idx])) {
+            foreach (array_merge($vectorHits, $lexical) as $result) {
+                $key = $result['source'] . '#' . $result['title'];
+                if (isset($seen[$key])) {
                     continue;
                 }
-                $merged[$idx]['score'] = round($entry['score'], 4);
-                $out[] = $merged[$idx];
-            }
-
-            // 兜底：网关偶发返回空 results（限流/异常 query）时不抛异常也不清空，
-            // 词法召回的结果必须保住 —— 语义增强绝不能让检索「归零」。
-            if ($out === []) {
-                \App\Syslog::error('RAG', 'rerank returned no results, falling back to lexical order');
-                return array_slice($lexical, 0, $k);
+                $seen[$key] = true;
+                $out[] = $result;
+                if (count($out) >= $k) {
+                    break;
+                }
             }
 
             return $out;
@@ -613,7 +587,6 @@ class RagSearch
                 (string) $p['baseUrl'],
                 (string) ($p['apiKey'] ?? ''),
                 (string) ($p['embeddingModel'] ?? ($cfg['embeddingModel'] ?? 'bge-m3')),
-                (string) ($p['rerankModel'] ?? ($cfg['rerankModel'] ?? 'bge-reranker-v2-m3')),
             );
         }
 
@@ -624,7 +597,6 @@ class RagSearch
                 (string) $cfg['baseUrl'],
                 (string) ($cfg['apiKey'] ?? ''),
                 (string) ($cfg['embeddingModel'] ?? 'bge-m3'),
-                (string) ($cfg['rerankModel'] ?? 'bge-reranker-v2-m3'),
             );
         }
 

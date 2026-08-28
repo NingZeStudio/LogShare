@@ -31,7 +31,7 @@ docker exec mclogs-php curl -sS -N -D - -o /dev/null --max-time 15 'http://nginx
 ### 4. 服务器容器到上游的网络延迟
 
 ```bash
-docker exec mclogs-php curl -sS -o /dev/null -w 'ttfb=%{time_starttransfer}\n' --max-time 30 'https://token.sensenova.cn/v1/chat/completions' -H 'Content-Type: application/json' -H 'Authorization: Bearer sk-7xV6rszgwKRzsGU3CPwwn55LP2AwoWBb' -H 'Accept: text/event-stream' --data-binary '{"model":"deepseek-v4-flash","stream":true,"messages":[{"role":"user","content":"hi"}]}'
+docker exec mclogs-hyperf sh -c 'curl -sS -o /dev/null -w "ttfb=%{time_starttransfer}\n" --max-time 30 "$AI_BASE_URL" -H "Content-Type: application/json" -H "Authorization: Bearer $AI_API_KEYS" -H "Accept: text/event-stream" --data-binary '{"model":"deepseek-v4-flash","stream":true,"messages":[{"role":"user","content":"hi"}]}'
 ```
 
 ## 结果解读

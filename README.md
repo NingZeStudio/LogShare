@@ -10,7 +10,7 @@ Minecraft / Hytale 日志分析与分享平台。基于 Aternos Codex 与 SpinYa
 - **结构化分析**：基于 Codex-Minecraft 和 Codex-Hytale 解析引擎，提取错误堆栈、崩溃原因、性能问题
 - **多文件日志**：同一 ID 下可上传多个文件或 `.zip` 压缩包（自动展开），子文件按路径读取
 - **LogAgent（AI 智能体）**：模型驱动工具循环，LLM 自主调用网络搜索（Exa MCP）、内置 RAG（SQLite FTS5）与日志文件工具，SSE 流式透传思维链
-- **内置 RAG**：SQLite FTS5（BM25）知识库检索，默认纯本地运行；可选 bge-m3 向量召回与 reranker 精排，整合进主进程 `/rag` 路径
+- **内置 RAG**：SQLite FTS5（BM25）知识库检索，默认纯本地运行；可选 bge-m3 向量召回主排序（词法结果补充），整合进主进程 `/rag` 路径
 - **RESTful API**：同时提供 `/1/`（已弃用）和 `/v1/` 路径，支持单 ID 和多 ID（逗号分隔）操作，删除采用 Bearer Token 鉴权
 - **Redis 缓存**：可配置开关、TTL 和大小限制，超过阈值自动跳过缓存直读 MariaDB
 
@@ -56,7 +56,7 @@ php bin/hyperf.php start
 | `rateLimit` | 限流配置（limit / window，Redis INCR） |
 | `spinyarn` | 反混淆扩展配置（映射目录、缓存水位） |
 
-> 支持环境变量覆盖：`REDIS_HOST`、`REDIS_PORT`、`REDIS_TIMEOUT`、`REDIS_PASSWORD`、`AI_ENABLED`、`AI_API_KEYS`（逗号分隔）、`AI_BASE_URL`、`AI_MODEL`。数据库连接由 `DB_*` 环境变量提供（`config/autoload/databases.php`）。
+> `.env` 统一保存敏感配置与 AI 配置：`AI_ENABLED`、`AI_API_KEYS`（逗号分隔）、`AI_BASE_URL`、`AI_MODEL`、`AI_RAG_PROVIDERS`（JSON 数组）。数据库和 Redis 凭据也由 `.env` 提供。
 
 ### Docker 部署
 
@@ -64,7 +64,7 @@ php bin/hyperf.php start
 docker compose -f docker/compose.yaml up -d
 ```
 
-生产部署同样使用 `docker/compose.yaml`。完整业务配置（主推理密钥、双供应商语义 RAG、生产域名）通过挂载项目根目录的 `Config.inc.php` 注入容器，服务器上放置好该文件后：
+生产部署同样使用 `docker/compose.yaml`。启动前复制 `.env.example` 为 `.env` 并填写密码/API Key；`.env` 由 Hyperf 读取，同时供 Compose 初始化 MariaDB/Redis。AI 默认关闭，只有同时设置 `AI_ENABLED=true`、`AI_API_KEYS`、`AI_BASE_URL` 和 `AI_MODEL` 后才会启用；语义 RAG 启用时还会校验 `AI_RAG_PROVIDERS`。Docker 构建已固定 PHP、Rust、Composer、扩展安装器及 SpinYarn 版本；完整业务配置（主推理密钥、双供应商语义 RAG、生产域名）通过挂载项目根目录的 `Config.inc.php` 注入容器，服务器上放置好该文件后：
 
 ```bash
 docker compose -f docker/compose.yaml up -d --build
@@ -74,11 +74,36 @@ docker compose -f docker/compose.yaml up -d --build
 >
 > 内置 `/rag` MCP 端点默认仅允许 Hyperf 本机回环调用。若通过反向代理或外部 MCP 客户端访问，在 `Config.inc.php` 的 `ai.mcp.rag.authToken` 设置随机强 token，并使用 `Authorization: Bearer <authToken>`；不要将未配置 token 的 `/rag` 端点暴露到公网。
 
-Hyperf 常驻进程监听 9501 端口，包含以下容器：
+Nginx 对外监听 80/443，Hyperf 仅在 Compose 内部网络监听 9501，包含以下容器：
 
+- **nginx**：Nginx 反向代理；配置文件为 `docker/nginx/default.conf`，证书放在 `docker/certs/`
+- **mariadb**：启用 Event Scheduler，每小时由数据库直接删除超过 7 天 TTL 的日志
 - **hyperf**：Hyperf 常驻进程（Swoole 6.2 + SpinYarn + pdo_mysql + redis），启动命令会先构建 RAG 索引；索引完成后原子替换，构建失败不会破坏旧索引
 - **mariadb**：MariaDB 11，schema 由 `docker/mariadb-init.sql` 自动创建
 - **redis**：Redis 7 Alpine，缓存层与限流
+
+将 `docker/nginx/default.conf` 中两个 `server_name` 改为实际域名，并将 HTTPS 证书路径中的域名同步修改。首次签发前，需先临时注释 HTTPS server，启动 Nginx 后执行：
+
+```bash
+docker compose -f docker/compose.yaml run --rm acme certonly --webroot -w /var/www/acme -d api.example.com --email admin@example.com --agree-tos --no-eff-email
+```
+
+恢复 HTTPS 配置后重新加载 Nginx：
+
+```bash
+docker compose -f docker/compose.yaml up -d nginx
+docker compose -f docker/compose.yaml exec nginx nginx -s reload
+```
+
+`acme` 容器每 12 小时检查续期；续期完成后需执行一次 Nginx reload 使新证书生效。证书目录不会提交到 Git，域名解析须指向服务器且公网开放 80 端口。MariaDB 的 Event Scheduler 每小时清理超过 `Config.inc.php` 中 `storage.storageTime` 秒的日志，默认值为 604800 秒（7 天）。首次部署或修改 TTL 后，先执行 `php scripts/sync_mariadb_events.php` 生成 SQL，再重启 `mariadb-events` 服务；生成文件不会提交到 Git。可用以下命令检查 Event 是否启用及下次执行时间：
+
+```bash
+docker compose -f docker/compose.yaml exec mariadb mariadb -uroot -p"$MARIADB_ROOT_PASSWORD" logshare -e "SHOW EVENTS LIKE 'cleanup_expired_logs'\\G"
+```
+
+MariaDB healthcheck 也会验证该 Event 存在且状态为 `ENABLED`。
+
+MariaDB 使用固定名称的 Docker 卷 `logshare-mariadb-data`。生产环境禁止使用默认密码，建议通过部署环境或 Docker secrets 注入凭据，重建容器不会删除数据。首次部署时，`mariadb` 会初始化表结构，`mariadb-events` 会在数据库可用后创建清理 Event；修改 `Config.inc.php` 中的 TTL 后重新运行同步脚本并重启 `mariadb-events`。不要执行 `docker compose down -v`，否则会删除持久化卷。
 
 ### 手动部署
 

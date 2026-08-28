@@ -1,6 +1,7 @@
 {
     "name": "yansui/logshare",
     "description": "Modern Minecraft server log analysis and sharing platform",
+    "license": "proprietary",
     "authors": [
         {
             "name": "YanSui",
