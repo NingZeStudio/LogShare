@@ -30,9 +30,9 @@ return [
         'cacheId' => '\\App\\Cache\\RedisCache',
         'enabled' => true,
         // password / database 为可选项：Redis 开启 requirepass 或 ACL 时填 password
-        'redis' => ['host' => 'mclogs-redis', 'port' => 6379, 'password' => '', 'database' => 0],
+        'redis' => ['host' => 'redis', 'port' => 6379, 'password' => '${REDIS_PASSWORD}', 'database' => 0],
         'ttl' => 30 * 60,
-        'maxSize' => 600 * 1024,
+        'maxSize' => 5 * 1024 * 1024,
     ],
 
     /* ─── ID ───────────────────────────────────────────────── */
@@ -68,11 +68,6 @@ return [
     ],
 
     /* ─── Rate limit（Redis INCR 限流，按 IP + method + path）── */
-    'rateLimit' => [
-        'limit' => 36000,
-        'window' => 60,
-        'trustedProxies' => [],
-    ],
 
     /* ─── Legal ────────────────────────────────────────────── */
     'legal' => [
@@ -89,12 +84,12 @@ return [
     /* ─── AI ───────────────────────────────────────────────── */
     'ai' => [
         // 完全禁用 AI 分析（/v1/ai/* 返回 404）。设为 false 时无需配置 apiKeys。
-        'enabled' => true,
+        'enabled' => false,
         'apiKeys' => [
-            // Add your API key(s) here
+            // Configure AI_API_KEYS in .env to enable AI.
         ],
-        'baseUrl' => 'https://api.huidev.com/v1/chat/completions',
-        'model' => 'deepseek-v4-pro',
+        'baseUrl' => '',
+        'model' => '',
         'timeout' => 180,
         'agent' => [
             'enabled' => false,
@@ -102,29 +97,14 @@ return [
             'maxFileLines' => 50_000,
             'maxFileBytes' => 512 * 1024,
         ],
-        // 语义 RAG 增强：embedding 召回 + reranker 精排（bge-m3 / bge-reranker-v2-m3）。
+        // 语义 RAG 增强：bge-m3 向量召回作为主排序，词法结果补充。
         // providers 按顺序做故障切换：主供应商不可用时自动落到下一个；
         // 模型 ID 按 provider 各自填写（硅基流动带 BAAI/ 前缀）。
         // 注意与 ai.mcp.rag（内置 RAG MCP 服务端点）无关。开启后需重跑 rag:build 生成向量。
         'rag' => [
             'enabled' => false,
             'timeout' => 30,
-            'providers' => [
-                [
-                    'name' => 'siliconflow',
-                    'baseUrl' => 'https://api.siliconflow.cn/v1',
-                    'apiKey' => '',
-                    'embeddingModel' => 'BAAI/bge-m3',
-                    'rerankModel' => 'BAAI/bge-reranker-v2-m3',
-                ],
-                [
-                    'name' => 'huidev',
-                    'baseUrl' => 'https://api.huidev.com/v1',
-                    'apiKey' => '',
-                    'embeddingModel' => 'bge-m3',
-                    'rerankModel' => 'bge-reranker-v2-m3',
-                ],
-            ],
+            'providers' => [],
         ],
         'mcp' => [
             'webSearch' => [
@@ -149,9 +129,9 @@ return [
         // 映射表由下载脚本（scripts/download_mappings.sh + download_vanilla_mappings.py）
         // 预先生成并提交进仓库；Docker 部署时 bind mount 宿主机 ./mappings。
         'mappings_dir' => 'mappings',
-        'cache_max_entries' => 44,
-        'cache_high_watermark' => 40,
-        'cache_low_watermark' => 30,
+        'cache_max_entries' => 10,
+        'cache_high_watermark' => 10,
+        'cache_low_watermark' => 7,
     ],
 
 ];

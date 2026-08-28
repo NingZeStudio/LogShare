@@ -642,7 +642,7 @@ class Log
     private function shouldCacheToRedis(string $data, int $filesBytes = 0): bool
     {
         $config = Config::Get('cache');
-        $maxCacheSize = $config['maxSize'] ?? (600 * 1024);
+        $maxCacheSize = $config['maxSize'] ?? (5 * 1024 * 1024);
         return strlen($data) + $filesBytes <= $maxCacheSize;
     }
 

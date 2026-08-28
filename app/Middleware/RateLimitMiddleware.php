@@ -46,12 +46,11 @@ class RateLimitMiddleware implements MiddlewareInterface
         }
 
         $config = \App\Config::Get('rateLimit');
-        $limit = (int) ($config['limit'] ?? 36000);
-        $window = (int) ($config['window'] ?? 60);
+        $path = self::normalizePath($request->getUri()->getPath());
+        [$limit, $window] = self::limitsFor($request->getMethod(), $path, $config);
 
         $server = $request->getServerParams();
         $ip = self::clientIp($server, $config);
-        $path = self::normalizePath($request->getUri()->getPath());
         $key = "rl:{$request->getMethod()}:{$path}:{$ip}";
 
         try {
@@ -65,11 +64,25 @@ class RateLimitMiddleware implements MiddlewareInterface
         } catch (ApiError $e) {
             throw $e;
         } catch (\Throwable $e) {
-            // fail-open: skip rate limiting when Redis is unavailable
             \App\Syslog::error('RateLimit', '限流检查失败: ' . $e->getMessage());
+            throw new ApiError(503, '限流服务暂时不可用，请稍后重试。');
         }
 
         return $handler->handle($request);
+    }
+
+    private static function limitsFor(string $method, string $path, array $config): array
+    {
+        $defaults = [(int) ($config['limit'] ?? 600), (int) ($config['window'] ?? 60)];
+        foreach ((array) ($config['routes'] ?? []) as $prefix => $route) {
+            if (is_array($route) && str_starts_with($path, (string) $prefix)) {
+                return [
+                    (int) ($route['limit'] ?? $defaults[0]),
+                    (int) ($route['window'] ?? $defaults[1]),
+                ];
+            }
+        }
+        return $defaults;
     }
 
     private static function clientIp(array $server, array $config): string

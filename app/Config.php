@@ -24,6 +24,7 @@ class Config
         $data = require $path;
         if (is_array($data)) {
             self::applyEnvironmentOverrides($data);
+            self::validate($data);
             self::$data = $data;
             self::$loaded = true;
         }
@@ -42,14 +43,16 @@ class Config
      *  - AI_MODEL           → ai.model
      *  - AI_ENABLED         → ai.enabled (1/true/on/yes = true)
      *  - AI_RAG_ENABLED     → ai.rag.enabled (semantic RAG switch)
-     *  - AI_RAG_BASE_URL    → ai.rag.baseUrl
-     *  - AI_RAG_API_KEY     → ai.rag.apiKey
+     *  - AI_RAG_PROVIDERS   → ai.rag.providers (JSON array)
      *
      * @param array $data Config array by reference
      * @return void
      */
     private static function applyEnvironmentOverrides(array &$data): void
     {
+        if (($storageTime = getenv('STORAGE_TIME')) !== false && ctype_digit($storageTime) && (int) $storageTime > 0) {
+            $data['storage']['storageTime'] = (int) $storageTime;
+        }
         if ($host = getenv('REDIS_HOST')) {
             $data['cache']['redis']['host'] = $host;
         }
@@ -65,11 +68,11 @@ class Config
         if (($enabled = getenv('AI_RAG_ENABLED')) !== false) {
             $data['ai']['rag']['enabled'] = in_array(strtolower($enabled), ['1', 'true', 'on', 'yes'], true);
         }
-        if (($url = getenv('AI_RAG_BASE_URL')) !== false && $url !== '') {
-            $data['ai']['rag']['baseUrl'] = $url;
-        }
-        if (($key = getenv('AI_RAG_API_KEY')) !== false && $key !== '') {
-            $data['ai']['rag']['apiKey'] = $key;
+        if (($providers = getenv('AI_RAG_PROVIDERS')) !== false && $providers !== '') {
+            $decoded = json_decode($providers, true);
+            if (is_array($decoded)) {
+                $data['ai']['rag']['providers'] = $decoded;
+            }
         }
 
         if ($keys = getenv('AI_API_KEYS')) {
@@ -83,6 +86,46 @@ class Config
         }
         if (($enabled = getenv('AI_ENABLED')) !== false) {
             $data['ai']['enabled'] = in_array(strtolower($enabled), ['1', 'true', 'on', 'yes'], true);
+        }
+        if (empty($data['ai']['apiKeys']) || !$data['ai']['enabled']) {
+            $data['ai']['enabled'] = false;
+        }
+    }
+
+    private static function validate(array $data): void
+    {
+        $storage = $data['storage'] ?? [];
+        $storageTime = (int) ($storage['storageTime'] ?? 0);
+        if ($storageTime <= 0) {
+            throw new \InvalidArgumentException('storage.storageTime must be greater than zero');
+        }
+
+        $cache = $data['cache'] ?? [];
+        $redis = $cache['redis'] ?? [];
+        if (($redis['host'] ?? '') === '' || (int) ($redis['port'] ?? 0) <= 0) {
+            throw new \InvalidArgumentException('cache.redis host and port are required');
+        }
+
+        $ai = $data['ai'] ?? [];
+        if (($ai['enabled'] ?? false) === true) {
+            if (empty($ai['apiKeys']) || !is_array($ai['apiKeys'])) {
+                throw new \InvalidArgumentException('AI_API_KEYS is required when AI is enabled');
+            }
+            if (!filter_var($ai['baseUrl'] ?? '', FILTER_VALIDATE_URL) || ($ai['model'] ?? '') === '') {
+                throw new \InvalidArgumentException('AI_BASE_URL and AI_MODEL are required when AI is enabled');
+            }
+        }
+
+        if (($ai['rag']['enabled'] ?? false) === true) {
+            $providers = $ai['rag']['providers'] ?? [];
+            if (!is_array($providers) || $providers === []) {
+                throw new \InvalidArgumentException('AI_RAG_PROVIDERS is required when semantic RAG is enabled');
+            }
+            foreach ($providers as $provider) {
+                if (!is_array($provider) || ($provider['name'] ?? '') === '' || !filter_var($provider['baseUrl'] ?? '', FILTER_VALIDATE_URL) || ($provider['apiKey'] ?? '') === '' || ($provider['embeddingModel'] ?? '') === '') {
+                    throw new \InvalidArgumentException('Each AI_RAG_PROVIDERS entry requires name, baseUrl, apiKey and embeddingModel');
+                }
+            }
         }
     }
 

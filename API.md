@@ -325,7 +325,7 @@ LogAgent 模式（`ai.agent.enabled`）会输出额外的 `event: status` 事件
 
 内置于 Hyperf 主进程的 **Streamable HTTP MCP 服务**（JSON-RPC 2.0），提供本地知识库检索。知识库覆盖：Forge/NeoForge/Fabric 官方开发者文档、PaperMC 全家桶（Paper/Velocity/Waterfall/Folia）、Purpur/Glowstone/Geyser/Quilt、Android 启动器生态实战案例库与错误签名模式库。
 
-检索管线：词法召回（FTS5 BM25 + LIKE，AND→OR 逐级降级，CJK 自动二元切分）∪ 可选向量召回（bge-m3）→ bge-reranker-v2-m3 精排。数据库路径由 `ai.mcp.rag.db` 指定（默认 `rag/index.db`），构建索引：`php bin/hyperf.php rag:build`。
+检索管线：词法召回（FTS5 BM25 + LIKE，AND→OR 逐级降级，CJK 自动二元切分）∪ 可选 bge-m3 向量召回；向量结果按余弦相似度优先，词法结果去重后补充。数据库路径由 `ai.mcp.rag.db` 指定（默认 `rag/index.db`），构建索引：`php bin/hyperf.php rag:build`。
 
 ### 端点
 

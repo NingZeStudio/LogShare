@@ -3,6 +3,11 @@
 /vendor/
 /backup/
 /Config.inc.php
+/.env
+/docker/certs/*
+!/docker/certs/.gitkeep
+/docker/acme/*
+!/docker/acme/.gitkeep
 /tmp/
 /runtime/
 /.phpunit.cache/

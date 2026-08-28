@@ -1,151 +1,47 @@
-# LogShare — AGENTS.md
+# LogShare — Agent Guide
 
-## Overview
+## Stack and entrypoints
 
-Minecraft / Hytale log analysis and sharing platform (v1.7.2). Hyperf 3.2 (Swoole 6.2 resident + coroutine) app with `bin/hyperf.php` entrypoint, `app/` classes under the `App\` namespace, and `Config.inc.php` (business config) + `config/autoload/` (framework config) at root.
+- PHP 8.4+, Hyperf 3.2, Swoole 6.2 resident/coroutine server; `bin/hyperf.php` is the CLI entrypoint and `core.php` bootstraps configuration.
+- PSR-4 maps `App\` to `app/`; controllers use Hyperf annotation routes. `App\Controller\AbstractController` provides request parsing and response helpers.
+- HTTP listens on `0.0.0.0:9501`; both deprecated `/1/` and current `/v1/` API routes are supported. The `/rag` MCP endpoint is served by the same process.
+- Storage is selected by `storage.storageId`: MariaDB (`s`) or filesystem (`f`). Redis is an optional cache/rate-limit dependency.
 
-## Entrypoint & routing
-
-`bin/hyperf.php` → Hyperf `Application` → annotation-based routing.  
-Routes are declared on `App\Controller\*` classes via `#[Controller(prefix: ...)]` + `#[GetMapping]/#[PostMapping]/#[DeleteMapping]/#[RequestMapping]`. Register a new endpoint by adding a method to a Controller.
-
-Both `/1/` (deprecated) and `/v1/` paths share one Controller via the `/{version:v?1}` prefix regex; `AbstractController::apiPrefix()` reads the request path to return the matching `raw` URL.
-
-## Commands
+## Setup and verification
 
 ```bash
-composer install                  # vendor/ (gitignored)
-composer test                     # Pest suite (php vendor/bin/pest on Termux)
-composer test:architecture        # Pest architecture rules
-composer stan                     # PHPStan level 5
-php bin/hyperf.php start          # start the Swoole HTTP server (9501, RAG served on /rag)
-php bin/hyperf.php rag:build      # (re)build the RAG SQLite FTS5 index
+composer install
+cp Config.inc.example.php Config.inc.php
+composer test
+composer test:architecture
+PHPSTAN_TURBO=0 composer stan  # Termux; omit the prefix on CI/Ubuntu
+php bin/hyperf.php list
+php bin/hyperf.php rag:build
+php bin/hyperf.php start
 ```
 
-`composer stan` runs `phpstan analyse app --level=5`. No formatter is configured.
+- Tests use Pest and bootstrap through `tests/bootstrap.php`; that bootstrap creates `Config.inc.php` when absent and supplies a Redis mock when ext-redis is unavailable.
+- Integration tests need MariaDB and Redis. CI initializes MariaDB with `docker/mariadb-init.sql`; local Docker services are started with `docker compose -f docker/compose.yaml up -d`.
+- PHPStan analyzes `app/` at level 5. `app/Client/SpinYarnClient.php` is excluded, and the two existing `ignoreErrors` entries in `phpstan.neon` are intentional.
+- There is no configured formatter. Before finishing code changes, run the relevant Pest tests, `composer test:architecture`, and `PHPSTAN_TURBO=0 composer stan` on Termux.
 
-`phpstan.neon` (and Pest coverage) **exclude** `app/Data/*`, `app/Cache/*`, `app/Client/*`, `app/Storage/*` — those dirs are not type-checked or coverage-measured. `composer test:coverage` writes `coverage/clover.xml`.
+## Configuration and operational constraints
 
-CI runs in `.github/workflows/ci.yaml`. Tests auto-create `Config.inc.php` from `Config.inc.example.php` if missing (`tests/bootstrap.php`).
+- Copy `Config.inc.example.php` to the gitignored `Config.inc.php`; never commit it or expose its API keys. Database and Redis connection settings can be overridden with `DB_*` and `REDIS_*`; AI settings in `.env` include `AI_ENABLED`, `AI_API_KEYS`, `AI_BASE_URL`, `AI_MODEL`, and JSON `AI_RAG_PROVIDERS`.
+- Do not change `id.characters` or the ID length: existing log IDs depend on them. IDs are seven characters, with `s`/`f` identifying the storage backend.
+- Upload limits are enforced before storage: 10 MB / 50,000 lines, plus at most 200 files and 12 MB total. ZIP uploads must remain protected against traversal and excessive expansion.
+- SpinYarn is optional and only parses mappings already present under `mappings/`; it has no automatic download. The extension and mapping files are primarily handled by the Docker build/bind mount.
+- Swoole is a resident process: process-level caches and extension handles survive requests. Restart the server after changing parsing/deobfuscation behavior or other process-level state.
+- The Docker MariaDB init script runs only for a new database volume. MariaDB runs Event Scheduler and `mariadb-events` applies the generated `cleanup_expired_logs` SQL; `scripts/sync_mariadb_events.php` reads `Config.inc.php` as the sole TTL source, including on existing volumes. MariaDB healthcheck verifies the event exists and is enabled. Production Compose reads secrets from the gitignored `.env`; `MARIADB_PASSWORD`, `MARIADB_ROOT_PASSWORD`, and `REDIS_PASSWORD` must be supplied consistently to Hyperf, MariaDB, Redis, and MariaDB Event services. Non-secret application settings remain in `Config.inc.php`. AI is disabled by default and configuration validation requires `AI_ENABLED=true`, `AI_API_KEYS`, `AI_BASE_URL`, and `AI_MODEL`; semantic RAG additionally requires valid JSON `AI_RAG_PROVIDERS` entries with embedding configuration; vector recall is primary and lexical results supplement it.
+- Application-layer rate limiting is intentionally disabled; public traffic must be rate-limited by Nginx/CDN/WAF before it reaches Hyperf. Do not re-enable trust of `X-Real-IP` in application code without an explicit trusted-proxy design.
+- Docker build versions are pinned in `docker/hyperf.Dockerfile`; the standard Compose deployment exposes Nginx on ports 80/443, its config is `docker/nginx/default.conf`, TLS certificates are mounted read-only from the gitignored `docker/certs/` directory, and ACME HTTP-01 challenges use `docker/acme/`.
 
-**Release:** `.github/workflows/release.yaml` publishes a GitHub Release when a commit to `main` starts with `[Build]` (or via manual `workflow_dispatch`). The version + release notes are read from `CHANGELOG.md` — add a new `## x.y.z — date` entry at the top, bump the version in `app/Version.php` (`App\Version::VERSION` is the single source; `MCPClient.php`/`RagController.php` read it) and `README.md`, then commit with `[Build]` prefix. The tag is `v{x.y.z}`.
+## Implementation rules that are easy to miss
 
-> **Termux note:** run `PHPSTAN_TURBO=0 composer stan` — PHPStan's turbo extension is not available on Termux (needs glibc). CI on Ubuntu is unaffected.
->
-> **Local runtime:** Swoole is compiled locally (`extension=swoole.so` in `conf.d/swoole.ini`, patched with `patchelf --add-needed libc++_shared.so`). No ext-redis on Termux — Redis degrades gracefully (`class_exists` pre-check). MariaDB runs via `mariadbd`.
-
-## Config
-
-Two layers:
-
-- **Business config** — `Config.inc.php` (gitignored, copy `Config.inc.example.php`), read by `App\Config::Get('section')`. Auto-loaded on first call via `core.php`.
-- **Framework config** — `config/autoload/*.php` (Hyperf): `server.php` (ports), `databases.php` (MariaDB), `exceptions.php`, `middlewares.php`, `annotations.php`, etc.
-
-Environment overrides in `App\Config::applyEnvironmentOverrides()`: `REDIS_HOST`, `REDIS_PORT`, `REDIS_TIMEOUT`, `REDIS_PASSWORD`, `AI_ENABLED`, `AI_API_KEYS` (comma-separated), `AI_BASE_URL`, `AI_MODEL`. MariaDB connection is overridden via `DB_*` envs in `databases.php`.
-
-**Do not change `id.characters`** — it will break all existing log IDs.
-
-## Storage & cache
-
-- MariaDB (`s` prefix, `App\Storage\MariaDbStorage` via `hyperf/database`) ↔ Filesystem (`f` prefix), selected via `storage.storageId`.
-- MariaDB schema: `logs` / `log_files` / `log_metadata` (see `docker/mariadb-init.sql`). `Get()` uses `includeContent` projection to skip large file bodies.
-- A log id may hold multiple files: primary content in `data` plus additional files in `files: [{name, data, size}]`.
-- Multi-file upload via `POST /v1/log` JSON `files` array; `.zip` entries are expanded (`UploadParser`, path-traversal + zip-bomb protected). Limits under `storage.uploadFiles` (200 files / 12MB total).
-- Redis is an optional cache layer (`cache.enabled`), with TTL and maxSize config. Multi-file logs exceeding `cache.maxSize` (main content + files combined) are skipped.
-- **Deletion tokens are stored as SHA-256 hashes** (MariaDB / filesystem / Redis cache alike); the plaintext token is only ever returned in the upload response. `Token::matches()` compares request tokens by hash with a legacy fallback to plaintext for pre-existing rows.
-- Filesystem storage writes a lightweight `{id}.meta.json` alongside each log so metadata queries skip reading the full document; both storages honour `includeContent=false`.
-- TTL cleanup: both storages implement `CleanupExpired()`; `Log::renew()` triggers a probabilistic (1%) cleanup sweep.
-
-## Log analysis (Codex)
-
-- Parsing/detection uses **Aternos Codex** (`aternos/codex-minecraft` + `aternos/codex-hytale`). `App\Detective` extends `Aternos\Codex\Detective\Detective`, registering both Minecraft + Hytale detectives; `Log::analyse()` runs Codex on the stored text.
-- Analysis results are cached **process-level** in `Log::$analysisJsonCache` (static, size-capped) — first `/insights` hit parses (~seconds), repeats are ~ms. Invalidation is manual; changing Codex parsing logic requires a server restart to take effect.
-- `phpstan.neon` carries two deliberate `ignoreErrors`: Codex's `analyse()` lives on `AnalysableLogInterface` while `detect()` returns base `LogInterface` (runtime classes implement both), and `Hyperf\Response::getConnection()` dispatches via `__call`. Don't "fix" these by adding wrappers.
-
-## Deobfuscation (SpinYarn)
-
-- Log deobfuscation uses the **SpinYarn PHP extension** (`App\Client\SpinYarnClient`), replacing the retired `aternos/sherlock` dependency.
-- `Log::deobfuscateForStorage()` detects the log type (Vanilla → `vanilla`, Fabric → `yarn`) and version, then calls `SpinYarnClient::deobfuscate()` before storing, so the DB holds deobfuscated text and reads need no further deobfuscation. When the extension is not loaded it degrades to null and the log passes through unchanged.
-- The extension handle is process-level (`static`), reused across requests — this is the whole point of the resident-process migration (avoids ~110ms mapping reload per request).
-- Config under `spinyarn` (see `Config.inc.example.php`): `mappings_dir` (relative `mappings` = `./mappings`), `cache_max_entries/high_watermark/low_watermark`. SpinYarn v1.0.0+ has **no `auto_download`** — it only parses; mapping files must already be present locally.
-- The extension is built in `docker/hyperf.Dockerfile` (multi-stage: Rust C ABI lib + phpize-built `spinyarn.so`, cloned at tag `v1.0.0`); mappings live in `./mappings` (Yarn `*.tiny.gz` + `vanilla/*.txt`, tracked via **Git LFS**). Generate/refresh them with `scripts/download_mappings.sh` + `scripts/download_vanilla_mappings.py`; Docker bind-mounts the host `./mappings` at `/app/mappings`.
-
-## Namespaces
-
-All source classes live under `App\` PSR-4 (`composer.json` maps `App\` → `app/`):
-
-- `App\Controller\*` — HTTP controllers (extend `AbstractController`)
-- `App\Storage\*` — `MariaDbStorage` / `FilesystemStorage`
-- `App\Filter\*` — pre-filter redaction chain (incl. `Pattern/`)
-- `App\Data\*` — `Token`, `MetadataEntry`
-- `App\Client\*` — `AIClient`, `MCPClient`, `RedisClient`, `SpinYarnClient`
-- `App\Agent\*` — `LogAgent` (tool loop)
-- `App\Rag\*` — `RagSearch` (SQLite FTS5)
-- `App\Sse\*` — `SseWriter`
-- `App\Cache\*` — `RedisCache` (optional cache layer) + `CacheInterface`
-- `App\Command\*` — `RagBuildCommand` (`rag:build` Hyperf command)
-- `App\Middleware\*` — `CorsMiddleware`, `RateLimitMiddleware` (global HTTP middleware)
-- `App\Exception\Handler\*` — exception handlers
-- `App\Syslog` — uniform diagnostic logging (`Syslog::error()`); do not use raw `error_log()`
-- Top-level `App\`: `Config`, `Log`, `Id`, `Version`, `ApiError`, `ApiResponse`, `ContentParser`, `UploadParser`, `Detective`
-
-Reference classes as `\App\Foo` / `App\Sub\Foo`; never prefix `LogShare\`.
-
-## ID format
-
-7 characters: 1 storage-prefix char (checksum-encoded, `s`=MariaDB / `f`=Filesystem) + 6 random chars from `id.characters`. See `app/Id.php` for encoding.
-
-## Request handling conventions
-
-Controllers extend `App\Controller\AbstractController`, which provides:
-- `parseContent()`, `validateContentExists()`
-- `respondSuccess()`, `respondJson()`, `respondError()`, `respondText()` (return PSR-7 responses)
-- `apiPrefix()`, `authorizationHeader()`
-
-**Controllers must not access `$_SERVER`, `$_GET`, or `$_POST` directly, and must not run raw SQL** (both enforced by architecture tests). Use `RequestInterface` (injected), `ContentParser`, and the Storage classes.
-
-`ApiError` is thrown for expected errors; `App\Exception\Handler\ApiExceptionHandler` renders it as JSON with the correct status code.
-
-Global HTTP middleware (`config/autoload/middlewares.php`): `CorsMiddleware` then `RateLimitMiddleware`. Rate limiting is Redis `INCR`+`EXPIRE` keyed by `IP + method + normalized path` (dynamic resource segments like `/v1/raw/{id}` collapse to `/v1/raw/*`; config `rateLimit`, default 36000/60s) and **fails open** when Redis is unavailable. When behind a reverse proxy, list trusted-proxy IPs in `rateLimit.trustedProxies` so the `X-Real-IP` header is used instead of `remote_addr`.
-
-API changes must be reflected in the maintained API docs: `openapi.yaml`, `postman_collection.json`, and `API.md` — all three are referenced from `README.md`.
-
-## Pre-filters
-
-Applied before storage. Configured in `Config.inc.php` under `filter.pre`:
-- Trim, LimitBytes (10MB), LimitLines (50K) — the two `Limit*` filters **reject** oversized input (400) rather than truncating
-- Encoding, IPv4, IPv6, IPv6Short, UUID, XUID, SessionToken, ClientId, Coordinate, Username, AccessToken redaction
-
-## Content parsing
-
-`ContentParser` accepts `application/x-www-form-urlencoded` and `application/json`. Supports gzip/deflate `Content-Encoding`. Extracts `content`, `metadata[]`, `source`, and `files[]` fields from JSON. Raw file lists are normalized/expanded by `UploadParser`.
-
-## AI / LogAgent
-
-When `ai.enabled` is false (`AI_ENABLED` env overrides), all `/v1/ai/*` routes return 404 — check this first when debugging missing AI endpoints. When `ai.agent.enabled` is true, those routes run the model-driven tool loop (`App\Agent\LogAgent`):
-
-- `App\Client\MCPClient` — lightweight Streamable-HTTP MCP client (curl + JSON-RPC, zero deps). Used for `web_search_exa` (Exa hosted endpoint) and `rag_search`.
-- `App\Rag\RagSearch` + `App\Controller\RagController` — built-in RAG MCP server (SQLite FTS5 BM25), hosted by Hyperf on the main `http` server under the `/rag` path, MCP JSON-RPC 2.0 protocol. DB path from `ai.mcp.rag.db` (default `rag/index.db`); `RAG_DB_PATH` env overrides. Build index via `php bin/hyperf.php rag:build`. Access control: by default the `/rag` endpoint only accepts loopback connections; to expose it via a reverse proxy, set `ai.mcp.rag.authToken` and require `Authorization: Bearer <token>` (LogAgent automatically forwards it). The RAG JSON-RPC request body intentionally has no application-level size limit; this is by design for the MCP transport. Limit individual `rag_search.query` values instead. Knowledge base (`rag/knowledge/`) includes Fabric developer docs, Forge & NeoForge docs (`scripts/download_modloader_docs.sh`), server/proxy admin docs for PaperMC family (Paper/Velocity/Waterfall/Folia/Adventure), Purpur, Glowstone, Geyser and Quilt (`scripts/download_server_docs.sh`), plus hand-distilled Android-launcher issue KBs (`*-issues`, `patterns`, `renderers`); both download scripts run `scripts/clean_knowledge_docs.php` afterwards (frontmatter/MDX/admonition/HTML stripping; meta-file deletion applies to upstream dirs only). Bukkit/Spigot/BungeeCord are NOT indexed — no markdown source exists upstream. Search semantics: strict AND first, degrades to OR (bm25 / matched-term ranking); CJK runs are exploded into bigrams so Chinese multi-word queries never return empty. Semantic enhancement (`ai.rag` section, off by default): when enabled with an independent gateway/key, `rag:build` embeds chunks via bge-m3 and search adds vector recall + bge-reranker-v2-m3 reordering (`App\Rag\SemanticClient`); any API failure degrades silently to lexical-only. Env: `AI_RAG_ENABLED` / `AI_RAG_BASE_URL` / `AI_RAG_API_KEY`.
-- `App\Client\AIClient::streamChat()` — streaming LLM request via curl (coroutine-hooked by `SWOOLE_HOOK_ALL`), multi-key rotation; parses `content`, `reasoning_content`, `tool_calls` deltas. Robustness against misbehaving gateways: in-stream `data: {"error":...}` frames (HTTP 200) are surfaced as failures so the next key is tried; SSE lines without the space separator (`data:{...}`) are accepted; if the body parses as a one-shot non-streaming JSON completion (gateway ignored `stream=true`), it is consumed as a single delta instead of failing with "empty stream"; a truly empty stream logs the response-body head to Syslog (`Empty stream diagnostics, body head: ...`) before throwing.
-- SSE is written through `App\Sse\SseWriter` (shared by AIClient + LogAgent); under Swoole the stream handle lives in `Hyperf\Context\Context` (coroutine-scoped) with a static fallback only for CLI/tests — don't hold it in a plain static for request handling.
-- Diagnostic logging goes through `App\Syslog::error(component, message)` (uniform `[Component] message` format over `error_log`), not raw `error_log()` calls.
-- Session-scoped file tools `list_log_files` / `read_log_file` operate only on the bound log id (`logId`), so the agent cannot read other logs.
-- SSE contract: `event: status` with `type` = thinking / tool / tool_result / limit, plus legacy `data:` content deltas and `event: done`. See `API.md`.
-- Tool invocation remains model-controlled by design: even though the system prompt asks the model to search RAG first, `LogAgent` does not enforce a mandatory tool call in code. If the model returns no `tool_calls`, it may answer directly. Do not add a hard interception for this, because it could interfere with the model's reasoning chain and reduce maximum availability.
-
-## Docker
-
-```bash
-docker compose -f docker/compose.yaml up -d
-```
-
-- `hyperf` service — resident process built by `docker/hyperf.Dockerfile` (Swoole 6.2 (pinned via `SWOOLE_VERSION` build arg) + SpinYarn + pdo_mysql + pdo_sqlite (RAG) + redis; project code + vendor baked into the image via `composer install`); serves RAG on the main HTTP server under `/rag`; ships a PHP-based healthcheck probing `/v1/limits`; listens on `9501`
-- `mariadb:11` (schema auto-created by `docker/mariadb-init.sql`) + `redis:7-alpine`
-- named volumes: `mariadb-data`, `redis-data`; host `./mappings` is bind-mounted into `hyperf` at `/app/mappings`
-- **Deployment notes:** `.dockerignore` excludes `Config.inc.php` (secrets never enter the image — the app falls back to `Config.inc.example.php`); configure via compose envs (`AI_ENABLED`, `AI_API_KEYS`, `REDIS_PASSWORD`, `MARIADB_PASSWORD`). `REDIS_PASSWORD` is applied to **both** hyperf and redis (redis starts with conditional `--requirepass`), so setting it on one side only will break cache/rate-limit. `mariadb-init.sql` runs only when the `mariadb-data` volume is empty (first init); pre-existing volumes from older deployments need manual schema creation.
-
-## Constraints
-
-- Requires PHP 8.4+, ext-json, ext-zlib, ext-mbstring, ext-pdo_mysql; Swoole 6.2 (resident server). SpinYarn deobfuscation requires the optional `spinyarn` extension (degrades gracefully when absent).
-- MariaDB + Redis hostnames come from `DB_*` / `REDIS_*` env (framework config) — see `config/autoload/databases.php`.
-- Max upload: app 10MB (`maxLength`); external reverse proxies should allow a larger request body.
+- Controllers must use injected PSR-7 requests, `ContentParser`, storage abstractions, and `AbstractController` helpers; do not read `$_SERVER`, `$_GET`, or `$_POST`, and do not issue raw SQL from controllers. Architecture tests enforce this.
+- Throw `App\ApiError` for expected API failures; `ApiExceptionHandler` renders the API error response.
+- Apply configured pre-filters before storage. Deletion tokens are stored hashed; plaintext tokens are returned only by the upload response.
+- Use `App\Syslog::error()` for diagnostics, not raw `error_log()`.
+- SSE output must go through `App\Sse\SseWriter`; request-scoped stream state belongs in Hyperf context rather than a plain static.
+- AI tool calls remain model-controlled; do not force a RAG call in `LogAgent` when the model returns no tools. AI routes are 404 when `ai.enabled` is false.
+- If an API route or response changes, update `API.md`, `openapi.yaml`, and `postman_collection.json` together.

@@ -26,7 +26,7 @@ return [
         'open_tcp_nodelay' => true,
         'max_coroutine' => 100000,
         'open_http2_protocol' => true,
-        'max_request' => 100000,
+        'max_request' => 2000,
         'socket_buffer_size' => 16 * 1024 * 1024,
         'buffer_output_size' => 16 * 1024 * 1024,
         'package_max_length' => 16 * 1024 * 1024,

@@ -121,7 +121,7 @@ class AIClient
                             $message = is_array($parsed['error'])
                                 ? ($parsed['error']['message'] ?? json_encode($parsed['error'], JSON_UNESCAPED_UNICODE))
                                 : (string) $parsed['error'];
-                            throw new \Exception('upstream stream error frame: ' . $message);
+                            throw new \Exception('上游 API 流式错误：' . $message);
                         }
 
                         $delta = $parsed['choices'][0]['delta'] ?? [];
@@ -193,9 +193,10 @@ class AIClient
                 $curlError = curl_error($ch);
 
                 if (!empty($curlError)) {
-                    throw new \Exception('CURL error: ' . $curlError);
+                    throw new \Exception('连接 AI API 失败：' . $curlError);
                 }
                 if ($httpCode === 429) {
+                    $lastException = new \Exception('HTTP 429: ' . self::extractErrorDetail($responseBody));
                     \App\Syslog::error('AI Client', 'Stream rate limited, switching key');
                     if ($emitted) {
                         // 已向客户端 emit 了部分内容，换 key 重试会造成重复输出，直接失败
@@ -206,7 +207,7 @@ class AIClient
                 // httpCode=0 绝不是成功：连接中断/上游静默断流时 curlError 可能为空，
                 // 旧逻辑把 0 放行导致「空流 + 静默 done」的假成功
                 if ($httpCode !== 200) {
-                    throw new \Exception('HTTP ' . $httpCode . ': ' . self::extractErrorDetail($responseBody));
+                    throw new \Exception('AI API 返回 HTTP ' . $httpCode . '：' . self::extractErrorDetail($responseBody));
                 }
 
                 // 空完成检测：既无正文也无工具调用也无思维链 = 上游异常。视为
@@ -243,7 +244,7 @@ class AIClient
                             . ', body-bytes=' . strlen($responseBody)
                             . ', body-text=' . mb_substr((string) $bodyText, 0, 300)
                             . ', body-hex=' . bin2hex($bodyHead));
-                        throw new \Exception('upstream returned an empty stream (HTTP ' . $httpCode . ', ' . strlen($responseBody) . ' bytes body)');
+                        throw new \Exception('AI API 返回空响应流（HTTP ' . $httpCode . '，响应体 ' . strlen($responseBody) . ' 字节）');
                     }
                 }
 
@@ -282,7 +283,10 @@ class AIClient
         }
 
         if (!$success) {
-            throw new \Exception('AI service temporarily unavailable.');
+            if ($lastException !== null) {
+                throw new \Exception('所有 AI API 密钥均尝试失败：' . $lastException->getMessage(), 0, $lastException);
+            }
+            throw new \Exception('AI API 暂时不可用。');
         }
     }
 
@@ -454,7 +458,7 @@ class AIClient
             $message = is_array($error)
                 ? ($error['message'] ?? json_encode($error, JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE))
                 : (string) $error;
-            throw new \Exception('upstream response error: ' . $message);
+            throw new \Exception('上游 AI API 返回错误：' . $message);
         }
 
         $choice = $decoded['choices'][0] ?? null;

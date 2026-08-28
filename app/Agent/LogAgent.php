@@ -157,7 +157,7 @@ class LogAgent
             self::emitDone();
         } catch (\Throwable $e) {
             \App\Syslog::error('LogAgent', '分析失败: ' . $e->getMessage());
-            self::emitError('AI service temporarily unavailable.');
+            self::emitError($e->getMessage());
         }
     }
 
@@ -511,6 +511,10 @@ PROMPT;
             if ($content === null) {
                 return '文件不存在: ' . $filename;
             }
+        }
+
+        if (($session->readFiles[$sessionKey] ?? false) === true) {
+            return self::duplicateReadNotice($sessionKey, $content);
         }
 
         $length = strlen($content);

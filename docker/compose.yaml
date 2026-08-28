@@ -1,19 +1,47 @@
 services:
+  nginx:
+    image: nginx:1.27-alpine
+    container_name: logshare-nginx
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx:/etc/nginx/conf.d:ro
+      - ./certs:/etc/letsencrypt:ro
+      - ./acme:/var/www/acme:ro
+    depends_on:
+      - hyperf
+    networks:
+      - logshare-network
+    restart: unless-stopped
+
+  acme:
+    image: certbot/certbot:v2.11.0
+    container_name: logshare-acme
+    volumes:
+      - ./certs:/etc/letsencrypt:rw
+      - ./acme:/var/www/acme:rw
+    networks:
+      - logshare-network
+    entrypoint: /bin/sh
+    command: -c 'trap exit TERM; while :; do certbot renew --webroot -w /var/www/acme --quiet; sleep 12h & wait $${!}; done'
+    restart: unless-stopped
+
   hyperf:
-    container_name: mclogs-hyperf
+    container_name: logshare-hyperf
     build:
       context: ..
       dockerfile: docker/hyperf.Dockerfile
       args:
         SWOOLE_VERSION: ${SWOOLE_VERSION:-6.2.0}
-    ports:
-      # 只绑回环：公网流量经宿主机反向代理进入
-      - "127.0.0.1:9501:9501"
+    expose:
+      - "9501"
     volumes:
       - ../mappings:/app/mappings
       # 完整业务配置（AI 密钥、语义 RAG、生产域名等）挂载到容器内，
       # 文件不存在时自动回退 Config.inc.example.php；该文件已被 .gitignore 排除
       - ../Config.inc.php:/app/Config.inc.php:ro
+      - ../.env:/app/.env:ro
     environment:
       APP_ENV: prod
       SCAN_CACHEABLE: "true"
@@ -21,24 +49,15 @@ services:
       DB_PORT: "3306"
       DB_DATABASE: logshare
       DB_USERNAME: logshare
-      DB_PASSWORD: ${MARIADB_PASSWORD:-logshare}
+      DB_PASSWORD: ${MARIADB_PASSWORD:?MARIADB_PASSWORD must be set}
       REDIS_HOST: redis
       REDIS_PORT: "6379"
-      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
-      # AI 开关与密钥：不设置 AI_API_KEYS 时 AI_ENABLED=false 可关闭 AI 路由，
-      # 否则 /v1/ai/* 会因缺少密钥在流内返回错误。
-      AI_ENABLED: ${AI_ENABLED:-true}
-      AI_API_KEYS: ${AI_API_KEYS:-}
-      # 语义 RAG 增强（bge-m3 / bge-reranker-v2-m3）：env 仅覆盖单主供应商场景，
-      # 多供应商 failover 列表请挂载自定义 Config.inc.php
-      AI_RAG_ENABLED: ${AI_RAG_ENABLED:-false}
-      AI_RAG_BASE_URL: ${AI_RAG_BASE_URL:-}
-      AI_RAG_API_KEY: ${AI_RAG_API_KEY:-}
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD must be set}
     depends_on:
       - mariadb
       - redis
     networks:
-      - mclogs-network
+      - logshare-network
     restart: unless-stopped
     healthcheck:
       # 容器内不依赖 curl，用 PHP 本体探测 HTTP 端口；显式 3s 网络超时，
@@ -51,37 +70,56 @@ services:
 
   mariadb:
     image: mariadb:11
-    container_name: mclogs-mariadb
+    container_name: logshare-mariadb
+    command: --event-scheduler=ON
     environment:
       MARIADB_DATABASE: logshare
       MARIADB_USER: logshare
       # 生产部署请通过宿主机环境变量覆盖默认密码
-      MARIADB_PASSWORD: ${MARIADB_PASSWORD:-logshare}
-      MARIADB_ROOT_PASSWORD: ${MARIADB_ROOT_PASSWORD:-root}
+      MARIADB_PASSWORD: ${MARIADB_PASSWORD:?MARIADB_PASSWORD must be set}
+      MARIADB_ROOT_PASSWORD: ${MARIADB_ROOT_PASSWORD:?MARIADB_ROOT_PASSWORD must be set}
     volumes:
       - mariadb-data:/var/lib/mysql
       - ./mariadb-init.sql:/docker-entrypoint-initdb.d/init.sql:ro
     networks:
-      - mclogs-network
+      - logshare-network
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      test: ["CMD-SHELL", "healthcheck.sh --connect --innodb_initialized && mariadb -uroot -p\"$$MARIADB_ROOT_PASSWORD\" -Nse \"SELECT COUNT(*) = 1 FROM information_schema.EVENTS WHERE EVENT_SCHEMA = 'logshare' AND EVENT_NAME = 'cleanup_expired_logs' AND STATUS = 'ENABLED'\" | grep -q 1"]
       interval: 10s
       timeout: 5s
       retries: 6
 
+  mariadb-events:
+    image: mariadb:11
+    container_name: logshare-mariadb-events
+    entrypoint: ["/bin/sh", "-c"]
+    command: >-
+      until mariadb-admin ping -hmariadb -uroot -p"$$MARIADB_ROOT_PASSWORD" --silent;
+      do sleep 2; done;
+      mariadb -hmariadb -uroot -p"$$MARIADB_ROOT_PASSWORD" logshare < /mariadb-events.sql;
+      while :; do sleep 86400; done
+    environment:
+      MARIADB_ROOT_PASSWORD: ${MARIADB_ROOT_PASSWORD:?MARIADB_ROOT_PASSWORD must be set}
+    volumes:
+      - ./mariadb-events.sql:/mariadb-events.sql:ro
+    depends_on:
+      - mariadb
+    networks:
+      - logshare-network
+    restart: "no"
+
   redis:
     image: redis:7-alpine
-    container_name: mclogs-redis
-    # 与 hyperf 的 REDIS_PASSWORD 保持一致：设置密码时启用 requirepass，
-    # 未设置时以无密码模式启动（内网部署）
+    container_name: logshare-redis
+    # 与 hyperf 的 REDIS_PASSWORD 保持一致，始终启用 requirepass
     environment:
-      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
-    command: sh -c 'if [ -n "$$REDIS_PASSWORD" ]; then exec redis-server --requirepass "$$REDIS_PASSWORD"; else exec redis-server; fi'
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD must be set}
+    command: sh -c 'exec redis-server --requirepass "$$REDIS_PASSWORD"'
     volumes:
       - redis-data:/data
     networks:
-      - mclogs-network
+      - logshare-network
     restart: unless-stopped
     healthcheck:
       # 启用 requirepass 后未认证的 ping 会收到 NOAUTH，探测必须携带密码
@@ -92,8 +130,10 @@ services:
 
 volumes:
   redis-data:
+    name: logshare-redis-data
   mariadb-data:
+    name: logshare-mariadb-data
 
 networks:
-  mclogs-network:
-    name: mclogs-network
+  logshare-network:
+    name: logshare-network
