@@ -14,3 +14,6 @@
 /rag/index.db
 /rag/public/
 scripts/__pycache__/
+# SSH 密钥对（私钥严禁入库，建议移出项目目录）
+/LogShare
+/LogShare.pub

@@ -20,9 +20,9 @@ php bin/hyperf.php rag:build
 php bin/hyperf.php start
 ```
 
-- Tests use Pest and bootstrap through `tests/bootstrap.php`; that bootstrap creates `Config.inc.php` when absent and supplies a Redis mock when ext-redis is unavailable.
-- Integration tests need MariaDB and Redis. CI initializes MariaDB with `docker/mariadb-init.sql`; local Docker services are started with `docker compose -f docker/compose.yaml up -d`.
-- PHPStan analyzes `app/` at level 5. `app/Client/SpinYarnClient.php` is excluded, and the two existing `ignoreErrors` entries in `phpstan.neon` are intentional.
+- Tests use Pest and bootstrap through `tests/bootstrap.php`; that bootstrap creates `Config.inc.php` when absent and supplies a Redis mock when ext-redis is unavailable. Run one file with `vendor/bin/pest tests/Unit/FilterTest.php` or filter by name with `vendor/bin/pest --filter=...`; architecture tests are the `architecture` Pest group (`composer test:architecture`).
+- Integration tests need MariaDB and Redis. CI initializes MariaDB with `docker/mariadb-init.sql`; local Docker services are started with `docker compose -f docker/compose.yaml up -d`. CI (`.github/workflows/ci.yaml`) also smoke-tests the booted server on `9501` (`/v1/limits`, `POST /v1/log`, `/rag` MCP JSON-RPC) and builds the Docker image.
+- PHPStan analyzes `app/` at level 5. The two existing `ignoreErrors` entries in `phpstan.neon` are intentional (Codex type hierarchy in `app/Log.php`, Hyperf Response `getConnection()` in `app/Sse/SseWriter.php`); do not add suppressions casually.
 - There is no configured formatter. Before finishing code changes, run the relevant Pest tests, `composer test:architecture`, and `PHPSTAN_TURBO=0 composer stan` on Termux.
 
 ## Configuration and operational constraints
@@ -35,6 +35,7 @@ php bin/hyperf.php start
 - The Docker MariaDB init script runs only for a new database volume. MariaDB runs Event Scheduler and `mariadb-events` applies the generated `cleanup_expired_logs` SQL; `scripts/sync_mariadb_events.php` reads `Config.inc.php` as the sole TTL source, including on existing volumes. MariaDB healthcheck verifies the event exists and is enabled. Production Compose reads secrets from the gitignored `.env`; `MARIADB_PASSWORD`, `MARIADB_ROOT_PASSWORD`, and `REDIS_PASSWORD` must be supplied consistently to Hyperf, MariaDB, Redis, and MariaDB Event services. Non-secret application settings remain in `Config.inc.php`. AI is disabled by default and configuration validation requires `AI_ENABLED=true`, `AI_API_KEYS`, `AI_BASE_URL`, and `AI_MODEL`; semantic RAG additionally requires valid JSON `AI_RAG_PROVIDERS` entries with embedding configuration; vector recall is primary and lexical results supplement it.
 - Application-layer rate limiting is intentionally disabled; public traffic must be rate-limited by Nginx/CDN/WAF before it reaches Hyperf. Do not re-enable trust of `X-Real-IP` in application code without an explicit trusted-proxy design.
 - Docker build versions are pinned in `docker/hyperf.Dockerfile`; the standard Compose deployment exposes Nginx on ports 80/443, its config is `docker/nginx/default.conf`, TLS certificates are mounted read-only from the gitignored `docker/certs/` directory, and ACME HTTP-01 challenges use `docker/acme/`.
+- Edge WAF: `LiteWAF/` is a standalone OpenResty-Lua project running inside the nginx container (image `openresty/openresty:1.27.1.2-alpine`, not stock nginx). Entry points are `access_by_lua_file` / `content_by_lua_file` in `docker/nginx/default.conf`; http-level lua directives live in the mounted `LiteWAF/nginx/nginx.conf` (`lua_shared_dict litewaf`, `lua_package_path`). Public stats page: `/security` (HTML) and `/security/stats` (JSON), in-memory counters only, reset on process restart. Rules and CC thresholds are in `LiteWAF/lua/litewaf.lua`; reload nginx after editing them. The CC threshold must stay below the nginx `limit_req` rate (30r/s), or requests get 503-dropped by limit_req before LiteWAF can ban. `LiteWAF/tests/litewaf_regex_test.php` and `LiteWAF/tests/litewaf_logic_test.lua` are the regression tests for rules and logic.
 
 ## Implementation rules that are easy to miss
 
@@ -45,3 +46,12 @@ php bin/hyperf.php start
 - SSE output must go through `App\Sse\SseWriter`; request-scoped stream state belongs in Hyperf context rather than a plain static.
 - AI tool calls remain model-controlled; do not force a RAG call in `LogAgent` when the model returns no tools. AI routes are 404 when `ai.enabled` is false.
 - If an API route or response changes, update `API.md`, `openapi.yaml`, and `postman_collection.json` together.
+
+## 与用户的协作约定（不可省略）
+
+- 使用简体中文与用户交流与推理；术语可保留英文，但表述须以中文为准。
+- 开发环境是 Termux（Android）：系统 `/tmp` 只读，临时文件一律使用 `/data/data/com.termux/files/usr/tmp/` 或项目根 `tmp/`；遇兼容性问题先用 WebSearch 检索，仍无法确定时向用户确认，不得直接执行未经验证的操作。
+- 编写后端或前后端交互代码时，对 SQL 注入、XSS、CSRF、路径遍历、敏感信息泄露保持警惕；发现潜在风险须明确告知用户并征询处理意见，不得擅自忽略或掩盖。
+- 严禁破坏用户全局环境；任何可能影响系统稳定性、数据完整性或安全性的危险操作，必须事先征得用户明确授权。
+- 不懂就问、不妄加揣测：与文档或用户意图有出入时先确认再动手。
+- 本文档是项目上下文的唯一约定来源：修改内容与之不符时，同步更新本文档。

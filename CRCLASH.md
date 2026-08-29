@@ -1,141 +1,153 @@
-# LogShare 全面 Code Review 报告
+# LiteWAF 专项 Code Review 报告
 
-- **审查日期：** 2026-08-27
-- **审查范围：** 当前目录及子目录中的项目源代码、配置、构建/部署脚本、CI 与测试。
-- **排除目录：** `.git/`、`vendor/`、`runtime/`、`tmp/`、`.phpunit.cache/`、`rag/knowledge/`、`mappings/` 等依赖、生成物和数据目录。
-- **文件统计：** `app/` 核心 PHP 源码 62 个；测试及测试辅助 PHP 22 个；仓库可审查 PHP 文件约 100 个；Python 2 个；未发现 JS/TS、Go、Rust、Java、C/C++ 应用源码。
-- **整体评价：** 架构分层较清晰，输入过滤、存储抽象、SSE、缓存降级和测试基础较完整；公网部署、出站请求、资源限制和 Docker 供应链仍需加强。
+## 概览
 
-## 技术栈与目录
+- **审查日期：** 2026-08-29
+- **审查重点：** 应用户要求，本轮聚焦 `LiteWAF/`（独立 OpenResty-Lua WAF 项目）及其 Docker 集成；此前 2026-08-27 的全仓库报告已被本报告替换，可在 git 历史（提交 `9129bd4`）中找回。
+- **审查范围：** `LiteWAF/`（`lua/litewaf.lua` 282 行、`lua/waf.lua`、`lua/stats.lua`、`nginx/nginx.conf`、`README.md`）+ 集成面（`docker/compose.yaml`、`docker/nginx/default.conf`、`.dockerignore`）+ 回归测试（`tmp/litewaf_regex_test.php`、`tmp/litewaf_logic_test.lua`）+ 文档同步（`AGENTS.md`、`README.md`），共 12 个文件。
+- **排除目录：** `.git/`、`vendor/`、`runtime/` 等依赖与生成物；`app/` 等主项目代码本轮未变更，沿用上一轮结论。
+- **技术栈识别：** Lua 5.1（LuaJIT，运行于 OpenResty 1.27.1.2 + lua-nginx-module）；无第三方 Lua 依赖（仅内置 `cjson.safe`）；部署经 Docker Compose，镜像 tag 已固定；测试用 PHP 8（PCRE 与 ngx.re 同源）与纯 Lua 5.1 stub，无独立测试框架。
+- **整体评价：** 设计克制、边界清晰，安全取舍（不查请求体、不公开 IP、CC 阈值低于 limit_req）有明确论证且文档同步；回归测试覆盖了规则正误与核心逻辑。存在 1 个可实际利用的检查绕过缺陷（S1）、3 个运维/健壮性问题（G1-G3）与 10 条改进建议。无第三方依赖供应链风险。
 
-- **语言/运行时：** PHP 8.4+，Docker 最终镜像 PHP 8.5 CLI。
-- **框架：** Hyperf 3.2、Swoole 6.2 常驻/协程 HTTP 服务。
-- **构建/依赖：** Composer，`composer.json`/`composer.lock`；Docker 多阶段构建 Rust C ABI 与 SpinYarn PHP 扩展。
-- **基础设施：** MariaDB、Redis、SQLite FTS5、Nginx、Certbot/ACME、Docker Compose。
-- **测试/质量：** Pest 3、架构测试、PHPStan level 5。
-- **核心目录：** `app/Controller`、`app/Storage`、`app/Filter`、`app/Client`、`app/Agent`、`app/Rag`、`app/Cache`、`app/Sse`、`app/Command`；配置位于 `config/`，测试位于 `tests/`，部署文件位于 `docker/`。
+## 修复记录（2026-08-29）
+
+经确认，**S1 与 G1-G3、W1-W10 已全部修复或闭环**，并通过回归验证（Lua 语法检查、正则 43 样本、逻辑 26 项全部通过）：
+
+- **S1**：`skip_signature` 改为与 nginx `location =` 一致的精确匹配（仅豁免 `/security` 与 `/security/stats`），并新增 T13-T15 逻辑用例与 5 条正则样本防止回归。
+- **G1**：`deny` 增加 `ngx.log(ngx.WARN, ...)` 审计日志（IP、规则、URI 入 nginx error log）。
+- **G2**：两份回归测试迁移至 `LiteWAF/tests/` 并纳入版本控制，`AGENTS.md` 与 `LiteWAF/README.md` 引用同步更新。
+- **G3**：JSON 统计页增加 `cjson.encode` nil 兜底。
+- **W1**：nginx 服务增加 healthcheck（`wget --spider --no-check-certificate https://127.0.0.1/security`，Lua 直接响应、不依赖 hyperf）。
+- **W2/W3**：固定窗口双倍突发与短脉冲 503 兜底两项边界已写入 `LiteWAF/README.md`「已知边界」，按文档取舍闭环，未增加第二阈值。
+- **W4**：`init_by_lua` 阶段用 `ngx.re.compile` 预编译全部规则（非法规则拒绝启动，fail-closed），`match_rules` 优先走编译对象、保留字符串缓存回退路径。
+- **W5**：新增 `CONFIG.expose_rule` 开关控制警告页是否回显规则类目。
+- **W6**：统计页响应增加 `Cache-Control: no-store`。
+- **W7**：`location = /security/` 301 跳转到统计页。
+- **W8**：镜像 tag 升级核对要点写入 `LiteWAF/README.md` 集成章节。
+- **W9**：新增 `tpl_replace` 模板替换工具，统一转义 `%`，警告页与统计页共用。
+- **W10**：逻辑测试补「封禁到期自动解封」用例（T15，mock dict 支持 TTL 惰性过期）。
+
+至此本报告 14 项发现全部闭环，无遗留待办。
+
 
 ## 问题清单
 
 ### 严重
 
-#### C1. `/rag` 公网暴露边界依赖部署配置
+#### S1. 统计页前缀匹配过宽，`/security<任意后缀>` 可绕过全部特征规则
 
-- **位置：** `app/Controller/RagController.php`、`Config.inc.example.php` 的 RAG 配置。
-- **问题：** token 默认为空；若 Nginx 或端口配置错误，RAG MCP 接口可能被公开调用，造成知识库枚举和 CPU/上游语义服务消耗。
-- **建议：** 默认拒绝非 loopback 请求；公网模式强制要求 Bearer token；为 `/rag` 增加专用限流和集成测试。
+- **位置：** `LiteWAF/lua/litewaf.lua:114-116`（`skip_signature`），配合 `docker/nginx/default.conf:37-43`。
+- **问题：** `skip_signature` 用前缀匹配 `starts_with(uri, "/security")`，而 nginx 侧统计页是 `location = /security` 与 `location = /security/stats` 精确匹配。两者不一致导致：请求 `/security/xxx` 或 `/securityXXX` 时，nginx 将其送入 `location /` 代理到 Hyperf，但 WAF 因前缀命中而**跳过所有特征规则**（CC 限流仍生效）。攻击者只需给恶意 URI 加上 `/security` 前缀即可让 SQL 注入、XSS、路径穿越特征全部失效，直达后端。
+- **证据：** `location = /security` 是精确匹配（不匹配子路径）；`/security/../x` 会被 nginx 归一化为 `/x`，同样落入 `location /`。当前唯一被正确豁免的 URI 恰恰只有统计页本身。
+- **建议：** 将 `skip_signature` 改为与 nginx `location =` 语义一致的精确匹配：
 
-#### C2. 出站 URL 缺少统一 SSRF 防护
+  ```lua
+  local function skip_signature(uri)
+      return uri == CONFIG.stats_prefix
+          or uri == CONFIG.stats_prefix .. "/stats"
+  end
+  ```
 
-- **位置：** `app/Client/MCPClient.php`、`app/Rag/SemanticClient.php`、`app/Agent/LogAgent.php`。
-- **问题：** 配置 URL 直接交给 HTTP/cURL 请求，未形成统一的 scheme、端口、DNS 解析、重定向和私网地址策略。
-- **建议：** 外部服务仅允许 HTTPS 与明确域名白名单；禁止 loopback、RFC1918、link-local、云 metadata 地址及不受控重定向；内置 RAG 走独立 loopback 白名单。
-
-#### C3. 仓库配置中存在疑似敏感凭据风险
-
-- **位置：** `Config.inc.php`、`SSE_DIAGNOSE.md` 及工作区历史内容。
-- **问题：** `Config.inc.php` 虽被忽略，但当前工作区存在；诊断文档中曾包含上游 Authorization 示例。任何真实密钥都不应进入跟踪文件、日志或报告。
-- **建议：** 立即轮换疑似已暴露的密钥，使用占位符替换文档；通过 secrets/环境变量注入，并执行历史扫描。
+  修复后需在 `tmp/litewaf_logic_test.lua` 补一条"`/security/` 前缀变体仍走特征检查"的用例。
 
 ### 一般
 
-#### M1. MariaDB Event/初始化脚本对已有数据卷不生效（已修复）
+#### G1. 拦截事件无任何日志，封禁不可审计
 
-- **位置：** `docker/mariadb-events.sql`、`docker/compose.yaml`。
-- **修复：** MariaDB 启用 Event Scheduler；`mariadb-events` 服务等待数据库就绪后创建 `cleanup_expired_logs` 事件。首次部署流程已明确区分表结构初始化与 Event 创建。
-- **后续建议：** 部署后通过 `SHOW EVENTS` 检查事件状态和执行计划。
+- **位置：** `LiteWAF/lua/litewaf.lua:127-143`（`deny`）及封禁写入点（`:181`、`:193`）。
+- **问题：** 触发拦截只累加内存计数器，不写 `ngx.log`，nginx error log 中看不到被谁、因哪条规则被拦。计数器重启清零且无 IP 维度，事后无法做误报申诉定位、攻击溯源和规则调优——对一个 WAF 而言这是运维能力的关键缺口。
+- **建议：** 在 `deny` 中加 `ngx.log(ngx.WARN, "[LiteWAF] block ip=", ngx.var.binary_remote_addr, " rule=", category or "ban", " uri=", ngx.var.uri)`；日志中已含 IP，属服务端日志，不违反统计页"不公开 IP"的隐私约定。
 
-#### M2. 7 天清理与应用配置存在双重来源（已修复）
+#### G2. 回归测试放在 gitignored 的 `tmp/`，不会随仓库分发
 
-- **位置：** `docker/mariadb-events.sql`、`docker/compose.yaml`、`README.md`。
-- **修复：** `scripts/sync_mariadb_events.php` 读取 `Config.inc.php` 的 `storage.storageTime` 作为唯一来源并生成 SQL；`mariadb-events` 应用生成文件，修改 TTL 后重新生成并重启该服务即可同步数据库事件。
+- **位置：** `tmp/litewaf_regex_test.php`、`tmp/litewaf_logic_test.lua`；`.gitignore` 含 `/tmp/`。
+- **问题：** 两份测试是 LiteWAF 的质量保障核心（规则正误样本 + 逻辑用例），但 `tmp/` 被全局忽略，新克隆的仓库中不存在；`AGENTS.md` 与 `LiteWAF/README.md` 引用的回归手段随之失效，规则修改后无法在别处验证。
+- **建议：** 迁移到 `LiteWAF/tests/litewaf_regex_test.php` 与 `LiteWAF/tests/litewaf_logic_test.lua`，同步更新两处文档引用；测试路径解析改为相对测试文件自身定位 `../lua/litewaf.lua`。
 
-#### M3. Compose 命名卷迁移容易造成“丢数据”错觉（已修复）
+#### G3. `cjson.safe.encode` 失败返回 nil，统计页 JSON 端点会 500
 
-- **位置：** `docker/compose.yaml`、`README.md`。
-- **修复：** MariaDB 卷固定命名为 `logshare-mariadb-data`，容器重建不会因 Compose 项目目录变化而切换卷；README 增加旧卷检查、迁移和备份流程，并明确禁止 `down -v`。
+- **位置：** `LiteWAF/lua/litewaf.lua:250-253`。
+- **问题：** `cjson.safe` 在编码失败时返回 `nil`（而非抛错），`ngx.say(nil)` 会抛 Lua 异常，使 `/security/stats` 返回 500。当前 `data` 结构简单、触发概率极低，但统计页恰是攻击期间最需要可用的端点，容错应为零成本。
+- **建议：** `local json = cjson.encode(data) or "{}"` 后再 `ngx.say`。
 
-#### M4. Compose 仍允许弱默认数据库/Redis 凭据（已修复）
+### 建议
 
-- **位置：** `docker/compose.yaml`、`README.md`。
-- **修复：** `MARIADB_PASSWORD`、`MARIADB_ROOT_PASSWORD`、`REDIS_PASSWORD` 均改为必填变量；缺少任一变量时 Compose 拒绝启动，Redis 不再默认无密码运行。
+#### W1. nginx 容器缺少 healthcheck
 
-#### M5. AI 默认开关与空密钥组合不合理（已修复）
+- **位置：** `docker/compose.yaml`（nginx 服务）。
+- **问题：** hyperf / mariadb / redis 均配置了 healthcheck，唯 nginx 没有。配置挂载错误（如 LiteWAF lua 路径变更）导致 nginx 启动失败或空转时，编排层无法感知。
+- **建议：** 增加 `test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:80/"]`（alpine 内置 busybox wget；80 端口始终监听，301/403 均为存活信号）。
 
-- **位置：** `Config.inc.example.php`、`.env.example`、`README.md`。
-- **修复：** AI 默认关闭；主推理的 URL、API Key、模型，以及 RAG 供应商列表均由 `.env` 配置，Compose 不再维护 AI 配置副本。RAG 使用 JSON `AI_RAG_PROVIDERS` 动态描述供应商，不再硬编码供应商名称。
+#### W2. CC 固定窗口存在跨窗口双倍突发
 
-#### M6. RAG 查询与 AI/SSE 资源上限不足
+- **位置：** `LiteWAF/lua/litewaf.lua:172-183`。
+- **问题：** 固定窗口算法在窗口交界处，一分钟内理论可通过约 2×limit 的请求（前一窗口尾 + 后一窗口头），这是固定窗口的固有特性，非实现错误。
+- **建议：** 保持现状，在 `LiteWAF/README.md` 的"能力与取舍"中补一句说明；若未来需要更平滑限流，可用 shared dict 实现双窗口或令牌桶。
 
-- **位置：** `app/Controller/RagController.php`、`app/Rag/RagSearch.php`、`app/Agent/LogAgent.php`、`app/Client/AIClient.php`。
-- **问题：** 长查询、工具参数、消息累积和长 SSE 连接可能消耗大量 CPU、内存、协程及上游额度。
-- **建议：** 限制 query 字节数/term 数、工具参数、消息数、总输出、连接生命周期和全局并发；相同分析请求使用 Redis 锁防止 cache stampede。
+#### W3. 短时高频突发由 nginx limit_req 以 503 兜底，LiteWAF 无法封禁
 
-#### M7. 上游错误信息可能泄露内部细节
+- **位置：** `docker/nginx/default.conf:46`（`limit_req burst=60 nodelay`）与 `LiteWAF/lua/litewaf.lua:20`。
+- **问题：** 瞬时超过 burst 的请求在 PREACCESS 阶段即被 503 丢弃，到不了 ACCESS 阶段的 LiteWAF，短脉冲型攻击只产生 503 风暴而不会触发封禁与计数。两阶段协作边界已在文档中论证，此处仅提示增强选项。
+- **建议：** 如需覆盖短脉冲，可增加 1 秒级细粒度窗口（如 80 次/秒）作为第二道 CC 阈值；或接受现状（503 对攻击者同样有效且零成本）。
 
-- **位置：** `app/Client/AIClient.php`、`app/Client/MCPClient.php`、`app/Rag/SemanticClient.php`、`app/Agent/LogAgent.php`。
-- **问题：** 异常或上游响应片段可能被直接传给 API/SSE 客户端。
-- **建议：** 对外返回稳定错误码和通用消息，详细信息仅写入 `App\Syslog`，统一脱敏 URL、Authorization、Cookie 和响应内容。
+#### W4. 正则未在 init 阶段预编译
 
-#### M8. Docker 构建链路不可完全复现（已修复）
+- **位置：** `LiteWAF/lua/litewaf.lua:119-125`（`match_rules`）。
+- **问题：** `ngx.re.find(subject, pattern, "ijo")` 的 `o` 标志命中 OpenResty 全局编译缓存，稳态开销可接受；但每 worker 冷启动有一次编译成本，且每次调用经过缓存查找与参数解析。
+- **建议：** 在 `init_by_lua` 中用 `ngx.re.compile` 把 `_M.RULES` 预编译为正则对象数组（对象自带 `:find`）。可选微优化，非必需。
 
-- **位置：** `docker/hyperf.Dockerfile`。
-- **修复：** 固定 Rust、PHP、Composer、扩展安装器和 SpinYarn tag，移除 `latest` 安装器引用。
-- **后续建议：** 在构建环境允许时进一步固定基础镜像 digest，并为远程下载增加 checksum 校验。
+#### W5. 警告页向攻击者回显规则类目
 
-#### M9. 关键外部依赖的失败恢复需持续验证（已修复）
+- **位置：** `LiteWAF/lua/litewaf.lua:136`（`{{RULE}}` 输出 `sqli` / `probe` 等）。
+- **问题：** 回显类目便于误报定位，但也让攻击者能低成本探测规则覆盖范围。
+- **建议：** 可保留（信息量很低），或加配置项 `expose_rule` 控制输出；配合 G1 的服务端日志，运维仍可事后审计。
 
-- **位置：** `app/Client/SpinYarnClient.php`、AI/MCP 客户端、`phpstan.neon`。
-- **修复：** SpinYarn 缺失/初始化/反混淆失败均安全降级；已有 AI/MCP mock 测试覆盖正常协议路径，并已移除 SpinYarn 的 PHPStan 排除项。
-- **后续建议：** 增加上游超时、空响应、错误 SSE 和 Docker 启动失败的集成测试。
+#### W6. 统计页响应缺少 `Cache-Control: no-store`
 
-## 改进建议
+- **位置：** `LiteWAF/lua/litewaf.lua:252`、`:277`。
+- **问题：** 页面声明 60 秒自动刷新，但未显式禁止中间层缓存；未来若链路加入代理缓存，可能展示过期计数。
+- **建议：** 两处 `content_type` 赋值旁追加 `ngx.header["Cache-Control"] = "no-store"`。
 
-### R1. 增加 MariaDB Event 运维可观测性（已修复）
+#### W7. `/security/`（带尾斜杠）落入 Hyperf 返回 API 风格 404
 
-Compose 的 MariaDB healthcheck 现在验证 `cleanup_expired_logs` 存在且状态为 `ENABLED`；README 增加 `SHOW EVENTS` 检查命令，可查看状态、执行计划和下次执行时间。后续可增加删除行数审计表或独立指标。
+- **位置：** `docker/nginx/default.conf:37-43`（`location =` 精确匹配）。
+- **问题：** 用户手输 `/security/` 不会命中统计页，而是代理到 Hyperf 得到 JSON 404，体验不一致（修复 S1 时需保持两处语义一致）。
+- **建议：** 增加 `location = /security/ { return 301 /security; }`；纯体验问题，优先级低。
 
-### R2. 加强存储层一致性测试（已修复）
+#### W8. 镜像 tag 未跟进 OpenResty 补丁线
 
-MariaDB 测试已覆盖过期/新鲜日志分别处理、续期后不误删，以及 Event 存在、启用状态和每小时执行计划；测试无数据库或未安装 Event 时会安全跳过。后续可在真实 Docker MariaDB 环境中增加外键级联和已有卷升级的集成测试。
+- **位置：** `docker/compose.yaml:5`（`openresty/openresty:1.27.1.2-alpine`）。
+- **问题：** 版本固定符合项目约定，但上游存在 `-7` 补丁系列（含安全修复），固定 tag 需人工关注升级。
+- **建议：** 周期性检查上游 tag；升级时按 compose 注释提示，同步核对 `LiteWAF/nginx/nginx.conf` 与镜像内置配置差异。
 
-### R3. 统一配置校验（已修复）
+#### W9. `gsub` 模板替换对 `%` 字符不设防
 
-`App\Config::load()` 现在校验存储 TTL、Redis 地址、启用 AI 所需的 URL/Key/模型，以及启用语义 RAG 时的 JSON 供应商条目；配置不完整会在启动阶段失败。数据库凭据由 Compose 负责校验，Nginx/证书路径仍由 Nginx 配置自行校验。
+- **位置：** `LiteWAF/lua/litewaf.lua:133-136`、`:273-276`。
+- **问题：** Lua `string.gsub` 的 replacement 中 `%` 是转义符。当前所有替换值均为常量（无 `%`），安全；但若日后 reason/category 引入含 `%` 的动态内容会产生错误输出。
+- **建议：** 保持常量约定并加注释；或封装 `_replace(tpl, k, v)` 工具，内部对 `v` 做 `v:gsub("%%", "%%%%")`。
 
-### R4. 完善 Nginx 安全配置（已修复）
+#### W10. 逻辑测试未覆盖封禁 TTL 到期路径
 
-补充安全响应头、连接/请求速率限制、上传超时策略；明确 ACME 首次签发和证书续期后的 Nginx reload 流程。
+- **位置：** `tmp/litewaf_logic_test.lua`（T5-T9）。
+- **问题：** mock dict 未模拟 TTL 过期，"封禁到期自动解封"（`:181`、`:193` 的 `d:set(key, 1, ban)` TTL）路径无测试。生产由 shared dict TTL 保证，风险低，但属覆盖缺口。
+- **建议：** mock dict 的 `get` 依据 `ex` 与当前 NOW 判断过期，补一条"封禁到期后恢复放行"用例。
 
-### R5. 保持 API 文档同步（已修复）
+## 改进建议（按优先级汇总）
 
-任何 API、认证、错误响应或部署行为变化后同步更新 `API.md`、`openapi.yaml`、`postman_collection.json`。
-
-### R6. 改善测试矩阵与 CI（已修复）
-
-补充真实 HTTP SSE、RAG 鉴权、代理 IP、ZIP 边界、MariaDB/Redis 故障和 Docker Compose smoke test；确认覆盖率生成与上传命令一致。
-
-### R7. 清理历史审查文档漂移（已修复）
-
-报告和文档中的文件数量、已删除 Compose 文件、容器名称、端口及安全结论应定期重新扫描，避免引用旧架构。
+1. **立即修复 S1**：`skip_signature` 改精确匹配（一行改动 + 一条测试），消除特征检查绕过。
+2. **短期落地 G1-G3**：给 `deny` 加 `ngx.log(ngx.WARN, ...)`；测试迁移到 `LiteWAF/tests/` 并更新 `AGENTS.md`、`LiteWAF/README.md` 引用；JSON 编码加 nil 兜底。
+3. **择机实施 W1、W6、W7**：nginx healthcheck、`Cache-Control`、尾斜杠跳转，均为数行改动。
+4. **文档补充 W2/W3**：在 LiteWAF README 的取舍清单中写明固定窗口双倍突发与 503 兜底的边界，避免后续维护者误判。
+5. **长期可选**：W4 正则预编译、W5 规则回显开关、W10 TTL 用例、双窗口限流升级。
 
 ## 正面亮点
 
-- `app/Controller`、`Storage`、`Filter`、`Client`、`Rag` 等模块职责清晰，架构测试约束控制器不得读取超全局变量、不得直接写 SQL。
-- MariaDB 使用真实预处理和异常模式；日志关联表使用外键级联删除。
-- 上传前有大小、行数、文件数和总容量限制，ZIP 处理考虑路径遍历与过度膨胀风险。
-- 删除 token 以哈希存储，明文只在上传响应阶段返回。
-- Redis 故障具备降级路径，缓存大小和 TTL 有明确配置。
-- SSE 统一经 `App\Sse\SseWriter` 输出，适配常驻协程请求上下文；Nginx 已关闭代理缓冲并设置长读取超时。
-- AI 工具调用保持模型控制，不强制插入 RAG 调用；RAG 具备词法检索与语义增强的降级思路。
-- MariaDB 与文件系统存储均实现续期和过期清理；当前 Compose 已使用独立持久化卷和内部网络。
-- 测试覆盖过滤器、解析器、存储、AI/MCP、Agent、RAG 及架构规则，具备较好的回归基础。
+- **零第三方依赖**：仅用 OpenResty 内置能力（shared dict、ngx.re、cjson），无 LuaRocks 依赖，供应链面积极小；镜像版本已固定。
+- **失败语义明确**：`init_by_lua` 阶段模块加载失败会拒绝启动（fail-closed）；运行期 shared dict 缺失则放行不阻塞业务（fail-open），两种语义的选择都有意识且注释清晰。
+- **无内存泄漏路径**：CC 计数键按窗口分桶并设 2×窗口 TTL 自动回收，封禁键自带 TTL，计数器数量有界；`incr` 原子操作保证多 worker 一致。
+- **规则工程化**：37 条规则带机器可读标记（`-- RULES-BEGIN/END`），配 38 个正负样本的 PHP PCRE 回归（与 ngx.re 同源）+ 19 项 stub ngx 逻辑测试，规则变更可验证。
+- **安全取舍有论证**：不检查请求体（应用层日志天然含攻击载荷，避免误报）、统计页不公开 IP、CC 阈值须低于 nginx limit_req 的阶段关系分析，均已写入 LiteWAF README 与 AGENTS.md。
+- **隐私与信息泄露控制**：统计页只暴露聚合计数；警告页不含栈信息与内部路径；443 server 的 `X-Content-Type-Options`、`server_tokens off` 对 Lua 生成的响应同样生效。
+- **边界整洁**：LiteWAF 以独立目录存在，只读挂载（`:ro`）进 nginx 容器，不进入应用镜像（`.dockerignore` 已排除）；`waf.lua`/`stats.lua` 薄入口 + 单模块核心，职责划分简单清楚。
+- **文档同步到位**：`AGENTS.md`、主 `README.md`、`LiteWAF/README.md` 三处对 WAF 的描述与实现一致，包括阈值调优要点与上线验证命令。
 
-## 优先处理顺序
-
-1. 轮换并清理所有疑似敏感凭据，确认 `/rag` 未未经鉴权暴露。
-2. 为出站 HTTP 建立 SSRF 防护和允许列表。
-3. 检查现有 MariaDB 卷是否已创建 `cleanup_expired_logs`，补执行升级脚本并验证 Event Scheduler。
-4. 移除生产弱默认凭据，默认关闭未配置密钥的 AI。
-5. 增加 RAG/AI/SSE 的资源预算和真实部署集成测试。
-6. 固定 Docker 构建依赖并同步维护文档。
