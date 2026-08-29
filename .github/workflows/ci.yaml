@@ -247,6 +247,12 @@ jobs:
     runs-on: ubuntu-latest
     needs: [test, static-analysis, architecture, hyperf-boot]
     if: github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+    # compose.yaml 的必填变量（hyperf/redis/mariadb）在 build 插值阶段即校验，
+    # CI 仅做构建与冒烟测试，使用占位密码即可
+    env:
+      MARIADB_PASSWORD: ci-placeholder
+      MARIADB_ROOT_PASSWORD: ci-placeholder
+      REDIS_PASSWORD: ci-placeholder
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -255,14 +261,25 @@ jobs:
         run: docker compose -f docker/compose.yaml build
 
       - name: Prepare Config for Smoke Test
-        run: cp Config.inc.example.php Config.inc.php
+        run: |
+          cp Config.inc.example.php Config.inc.php
+          cp .env.example .env
+
+      - name: Generate Self-Signed Certificate for Smoke Test
+        # nginx 443 与 healthcheck 需要证书文件；CI 上 docker/certs/ 为空
+        run: |
+          mkdir -p docker/certs/live/api.example.com
+          openssl req -x509 -newkey rsa:2048 -nodes \
+            -keyout docker/certs/live/api.example.com/privkey.pem \
+            -out docker/certs/live/api.example.com/fullchain.pem \
+            -days 1 -subj '/CN=api.example.com'
 
       - name: Test Image Starts
         run: |
           docker compose -f docker/compose.yaml up -d
           ready=0
           for i in $(seq 1 30); do
-            if curl -sf http://localhost:9501/v1/limits > /dev/null; then
+            if curl -skf https://localhost/v1/limits > /dev/null; then
               ready=1
               break
             fi
@@ -270,9 +287,11 @@ jobs:
           done
           if [ "$ready" != "1" ]; then
             echo "=== hyperf 日志 ==="
-            docker compose -f docker/compose.yaml logs hyperf
+            docker compose -f docker/compose.yaml logs hyperf nginx
             docker compose -f docker/compose.yaml down
             exit 1
           fi
+          # LiteWAF 统计页（经 nginx 的 OpenResty Lua 直接响应）
+          curl -skf https://localhost/security/stats || { echo '=== nginx 日志 ==='; docker compose -f docker/compose.yaml logs nginx; docker compose -f docker/compose.yaml down; exit 1; }
           echo "smoke test 通过"
           docker compose -f docker/compose.yaml down
