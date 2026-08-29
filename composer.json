@@ -54,7 +54,7 @@
     },
     "scripts": {
         "test": "pest",
-        "test:coverage": "pest --coverage",
+        "test:coverage": "pest --coverage --coverage-clover=coverage/clover.xml",
         "test:architecture": "pest --group=architecture",
         "stan": "phpstan analyse app --level=5"
     }

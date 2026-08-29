@@ -11,6 +11,7 @@
 /tmp/
 /runtime/
 /.phpunit.cache/
+coverage/
 /rag/index.db
 /rag/public/
 scripts/__pycache__/
