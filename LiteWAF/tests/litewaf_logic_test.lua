@@ -129,7 +129,10 @@ end
 -- T1 init 记录启动时间
 waf.init()
 ok(ngx.shared.litewaf:get("c:start_epoch") == NOW, "init 记录启动时间")
-ok(waf._compiled and #waf._compiled == #waf.RULES, "规则在 init 阶段全部预编译")
+
+-- 惰性编译：init 阶段不持有编译结果（ngx.re.compile 在 init 阶段不可用），
+-- 首次请求走 get_rules() 完成 worker 级编译；匹配行为由后续用例覆盖。
+ok(waf._compiled == nil, "init 阶段不做规则预编译（惰性编译在首请求）")
 
 -- T2 白名单路径：不计数、不检查、不拦截
 local r = request({ uri = "/.well-known/acme-challenge/tok123", hit = true })
