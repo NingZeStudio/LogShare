@@ -369,7 +369,7 @@ class AIClient
 
     private static function getConfig(): array
     {
-        $config = \App\Config::Get('ai') ?? [];
+        $config = \App\Config::Get('ai');
 
         $keys = [];
         if (!empty($config['apiKeys']) && is_array($config['apiKeys'])) {
