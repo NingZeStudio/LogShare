@@ -126,11 +126,34 @@ local function skip_signature(uri)
         or uri == CONFIG.stats_prefix .. "/stats"
 end
 
+-- 编译后的规则缓存（worker 级，惰性）：ngx.re.compile 不能在 init_by_lua（master 进程）
+-- 阶段调用，必须在请求阶段首次用时编译；每个 worker 各自缓存一份。
+local compiled_rules
+
+local function get_rules()
+    if not compiled_rules then
+        compiled_rules = {}
+        for i, rule in ipairs(_M.RULES) do
+            local re, err = ngx.re.compile(rule[2], "ji")
+            if not re then
+                -- 规则非法：警告并降级到 ngx.re.find 字符串缓存路径（沿用 "ijo"）
+                ngx.log(ngx.WARN, "[LiteWAF] invalid rule #" .. i .. " ("
+                    .. rule[1] .. "): " .. tostring(err) .. "; fallback to string cache")
+                compiled_rules = nil
+                return _M.RULES
+            end
+            compiled_rules[i] = { rule[1], re }
+        end
+    end
+    return compiled_rules
+end
+
 -- 对单个 subject 顺序匹配规则，返回命中类目或 nil。
--- init 阶段已预编译时走正则对象（W4），否则回退 ngx.re.find 字符串缓存路径。
+-- 惰性编译优先走正则对象（减缓存查找），非法规则自动回退字符串缓存路径。
 local function match_rules(subject)
     if not subject or subject == "" then return nil end
-    for _, rule in ipairs(_M._compiled or _M.RULES) do
+    local rules = get_rules()
+    for _, rule in ipairs(rules) do
         local matcher = rule[2]
         local hit
         if type(matcher) == "table" then
@@ -165,22 +188,15 @@ local function deny(d, category, with_reason)
 end
 
 -- ───────────────────── 生命周期 ─────────────────────
--- init_by_lua：master 进程初始化，记录启动时间（shared dict 全 worker 共享），
--- 并预编译全部特征规则（每 worker 冷启动零编译成本；规则非法则拒绝启动，fail-closed）
+-- init_by_lua：master 进程初始化，仅记录启动时间（shared dict 全 worker 共享）。
+-- 注意：此处不能做规则预编译——ngx.re.compile 只存在于请求阶段（worker 上下文），
+-- init 阶段调用会报 "attempt to call field 'compile' (a nil value)"；
+-- 预编译由 get_rules() 在首个请求时惰性完成（每 worker 一次）。
 function _M.init()
     local d = dict()
     if d and not d:get("c:start_epoch") then
         d:set("c:start_epoch", ngx.now())
     end
-    local compiled = {}
-    for i, rule in ipairs(_M.RULES) do
-        local re, err = ngx.re.compile(rule[2], "ji")
-        if not re then
-            error("[LiteWAF] invalid rule #" .. i .. " (" .. rule[1] .. "): " .. tostring(err))
-        end
-        compiled[i] = { rule[1], re }
-    end
-    _M._compiled = compiled
 end
 
 -- access_by_lua：每个请求的检查入口

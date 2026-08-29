@@ -19,7 +19,7 @@
 - **G3**：JSON 统计页增加 `cjson.encode` nil 兜底。
 - **W1**：nginx 服务增加 healthcheck（`wget --spider --no-check-certificate https://127.0.0.1/security`，Lua 直接响应、不依赖 hyperf）。
 - **W2/W3**：固定窗口双倍突发与短脉冲 503 兜底两项边界已写入 `LiteWAF/README.md`「已知边界」，按文档取舍闭环，未增加第二阈值。
-- **W4**：`init_by_lua` 阶段用 `ngx.re.compile` 预编译全部规则（非法规则拒绝启动，fail-closed），`match_rules` 优先走编译对象、保留字符串缓存回退路径。
+- **W4**：规则编译改为 worker 级惰性预编译（首个请求触发 `ngx.re.compile` 并缓存）。**注意**：此前的"init 阶段预编译"方案在真实 OpenResty 中不可行——`ngx.re.compile` 仅在请求阶段可用，`init_by_lua`（master 进程）调用会报 `attempt to call field 'compile' (a nil value)`；该问题由 CI Docker 冒烟测试暴露并已修正，非法规则自动降级回 `ngx.re.find` 字符串缓存路径。
 - **W5**：新增 `CONFIG.expose_rule` 开关控制警告页是否回显规则类目。
 - **W6**：统计页响应增加 `Cache-Control: no-store`。
 - **W7**：`location = /security/` 301 跳转到统计页。
