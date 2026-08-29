@@ -166,7 +166,7 @@ test('read_log_file rejects duplicate reads of the same file', function () {
     $m = $ref->getMethod('executeTool');
 
     $first = $m->invoke(null, 'read_log_file', ['filename' => 'main'], [], $rawId, $session);
-    expect($first)->toContain('全文：');
+    expect($first)->toContain('内容：');
 
     // Second read with identical arguments: duplicate notice
     $second = $m->invoke(null, 'read_log_file', ['filename' => 'main'], [], $rawId, $session);
@@ -185,12 +185,12 @@ test('read_log_file dedup treats omitted filename and main as the same key', fun
     $m = $ref->getMethod('executeTool');
 
     $first = $m->invoke(null, 'read_log_file', ['filename' => 'main'], [], $rawId, $session);
-    expect($first)->toContain('全文：');
+    expect($first)->toContain('内容：');
 
     // Omitted filename resolves to main: must hit the duplicate guard
     $second = $m->invoke(null, 'read_log_file', [], [], $rawId, $session);
     expect($second)->toContain('已读取');
-    expect($second)->not->toContain('全文：');
+    expect($second)->not->toContain('内容：');
 });
 
 test('read_log_file returns not found for missing files', function () {
