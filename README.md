@@ -76,11 +76,13 @@ docker compose -f docker/compose.yaml up -d --build
 
 Nginx 对外监听 80/443，Hyperf 仅在 Compose 内部网络监听 9501，包含以下容器：
 
-- **nginx**：Nginx 反向代理；配置文件为 `docker/nginx/default.conf`，证书放在 `docker/certs/`
+- **nginx**：OpenResty（Nginx + Lua）反向代理，内置 LiteWAF 边缘防护；配置文件为 `docker/nginx/default.conf` 与 `LiteWAF/`，证书放在 `docker/certs/`
 - **mariadb**：启用 Event Scheduler，每小时由数据库直接删除超过 7 天 TTL 的日志
 - **hyperf**：Hyperf 常驻进程（Swoole 6.2 + SpinYarn + pdo_mysql + redis），启动命令会先构建 RAG 索引；索引完成后原子替换，构建失败不会破坏旧索引
 - **mariadb**：MariaDB 11，schema 由 `docker/mariadb-init.sql` 自动创建
 - **redis**：Redis 7 Alpine，缓存层与限流
+
+LiteWAF（`LiteWAF/`）是以 OpenResty Lua 实现的极简边缘 WAF：对每个 IP 做固定窗口 CC 限流与封禁，并拦截 SQL 注入、XSS、路径穿越及扫描器探测等明显攻击特征，触发时返回 403 警告页。公开的极简安全统计页位于 `https://<域名>/security`（JSON：`/security/stats`），仅展示内存计数，不含 IP 等敏感信息，进程重启后清零。规则与阈值调整见 `LiteWAF/README.md`；改动 Lua 文件后执行 `docker compose -f docker/compose.yaml exec nginx nginx -s reload` 生效。注意 LiteWAF 不能替代应用层安全，也建议在前置 CDN/WAF 层做更高强度的速率限制。
 
 将 `docker/nginx/default.conf` 中两个 `server_name` 改为实际域名，并将 HTTPS 证书路径中的域名同步修改。首次签发前，需先临时注释 HTTPS server，启动 Nginx 后执行：
 
