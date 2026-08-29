@@ -203,7 +203,7 @@ test('streamChat throws on an HTTP 200 stream with no consumable data', function
         );
         expect(true)->toBeFalse();
     } catch (\Exception $e) {
-        expect($e->getMessage())->toContain('upstream returned an empty stream');
+        expect($e->getMessage())->toContain('返回空响应流');
     }
 });
 
@@ -231,6 +231,6 @@ test('streamChat throws when all keys fail', function () {
         );
         expect(true)->toBeFalse();
     } catch (\Exception $e) {
-        expect($e->getMessage())->toContain('所有 API Key 均尝试失败');
+        expect($e->getMessage())->toContain('所有 AI API 密钥均尝试失败');
     }
 });

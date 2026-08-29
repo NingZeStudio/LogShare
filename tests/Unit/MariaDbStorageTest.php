@@ -142,13 +142,15 @@ class MariaDbStorageTest extends HttpTestCase
     {
         $this->requireDb();
 
-        $event = Db::selectOne("SELECT EVENT_NAME, STATUS, EVENT_INTERVAL_VALUE, EVENT_INTERVAL_FIELD FROM information_schema.EVENTS WHERE EVENT_SCHEMA = DATABASE() AND EVENT_NAME = 'cleanup_expired_logs'");
+        # MariaDB 的 information_schema.EVENTS 列名为 INTERVAL_VALUE/INTERVAL_FIELD
+        # （MySQL 风格的 EVENT_INTERVAL_* 在 MariaDB 中不存在）
+        $event = Db::selectOne("SELECT EVENT_NAME, STATUS, INTERVAL_VALUE, INTERVAL_FIELD FROM information_schema.EVENTS WHERE EVENT_SCHEMA = DATABASE() AND EVENT_NAME = 'cleanup_expired_logs'");
         if ($event === null) {
             $this->markTestSkipped('cleanup_expired_logs event is not installed');
         }
 
         expect($event->STATUS)->toBe('ENABLED');
-        expect($event->EVENT_INTERVAL_VALUE)->toBe('1');
-        expect($event->EVENT_INTERVAL_FIELD)->toBe('HOUR');
+        expect($event->INTERVAL_VALUE)->toBe('1');
+        expect($event->INTERVAL_FIELD)->toBe('HOUR');
     }
 }

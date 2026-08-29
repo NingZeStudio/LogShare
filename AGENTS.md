@@ -22,7 +22,7 @@ php bin/hyperf.php start
 
 - Tests use Pest and bootstrap through `tests/bootstrap.php`; that bootstrap creates `Config.inc.php` when absent and supplies a Redis mock when ext-redis is unavailable. Run one file with `vendor/bin/pest tests/Unit/FilterTest.php` or filter by name with `vendor/bin/pest --filter=...`; architecture tests are the `architecture` Pest group (`composer test:architecture`).
 - Integration tests need MariaDB and Redis. CI initializes MariaDB with `docker/mariadb-init.sql`; local Docker services are started with `docker compose -f docker/compose.yaml up -d`. CI (`.github/workflows/ci.yaml`) also smoke-tests the booted server on `9501` (`/v1/limits`, `POST /v1/log`, `/rag` MCP JSON-RPC) and builds the Docker image.
-- PHPStan analyzes `app/` at level 5. The two existing `ignoreErrors` entries in `phpstan.neon` are intentional (Codex type hierarchy in `app/Log.php`, Hyperf Response `getConnection()` in `app/Sse/SseWriter.php`); do not add suppressions casually.
+- PHPStan analyzes `app/` at level 5. The two existing `ignoreErrors` entries in `phpstan.neon` are intentional (Codex type hierarchy in `app/Log.php`, Hyperf Response `getConnection()` in `app/Sse/SseWriter.php`), and `app/Client/SpinYarnClient.php` is excluded because it depends on the spinyarn PHP extension that is absent in the CI static-analysis environment; do not add suppressions or exclusions casually.
 - There is no configured formatter. Before finishing code changes, run the relevant Pest tests, `composer test:architecture`, and `PHPSTAN_TURBO=0 composer stan` on Termux.
 
 ## Configuration and operational constraints
