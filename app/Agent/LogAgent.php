@@ -16,7 +16,7 @@ use Hyperf\HttpServer\Response;
  */
 class LogAgent
 {
-    public const DEFAULT_MAX_TOOL_ROUNDS = 3;
+    public const DEFAULT_MAX_TOOL_ROUNDS = 50;
     private const MAX_TOOL_RESULT_BYTES = 12000;
     private const MAX_RETRIEVAL_RESULT_BYTES = 32000;
     private const STATUS_SUMMARY_BYTES = 400;
