@@ -129,35 +129,53 @@ _M.RULES = {
 }
 -- RULES-END
 
--- ───────────────────── 拦截页模板（视觉语言与 /security 统计页一致）─────────────
-local WARN_HTML = [==[<!doctype html>
-<html lang="zh-CN">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>403 请求已被拦截</title>
+-- ───────────────────── 拦截页模板：卡片组件（无完整页面外壳，支持 iframe 嵌入）─────────────
+-- 布局样式挂在根 #waf-block 上（而非 body），同一份响应体既可独立渲染，
+-- 也可由前端在 iframe 中展示。charset 由 deny() 的 Content-Type 头保证。
+local WARN_HTML = [==[
 <style>
-body{font-family:system-ui,-apple-system,"PingFang SC",sans-serif;max-width:480px;margin:14vh auto 0;padding:0 1.5rem;color:#1f2937;background:#fafafa;text-align:center}
-.card{background:#fff;border:1px solid #e5e7eb;border-radius:6px;padding:2.4rem 1.8rem 2rem}
-.mark{width:52px;height:52px;margin:0 auto 1.2rem;border:3px solid #dc2626;border-radius:50%;position:relative}
-.mark::before{content:"";position:absolute;left:50%;top:10px;width:4px;height:19px;margin-left:-2px;background:#dc2626;border-radius:2px}
-.mark::after{content:"";position:absolute;left:50%;bottom:9px;width:4px;height:4px;margin-left:-2px;background:#dc2626;border-radius:2px}
-.tag{display:inline-block;padding:.15rem .7rem;border-radius:3px;font-size:.75rem;background:#fef2f2;color:#b91c1c;border:1px solid #fecaca;margin-bottom:1.1rem}
-h1{font-size:1.15rem;color:#b91c1c;margin:0 0 .75rem}
-p{font-size:.875rem;line-height:1.75;color:#6b7280;margin:0}
-code{display:block;margin-top:1.4rem;font-size:.75rem;color:#9ca3af}
+*,*::before,*::after{margin:0;padding:0;box-sizing:border-box}
+#waf-block{min-height:100vh;display:flex;justify-content:flex-start;align-items:center;background:#f1f5f9;padding:30px 24px;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale}
+.widget{background:#fff;max-width:560px;width:100%;padding:28px 28px 24px;border-radius:16px;box-shadow:0 20px 60px rgba(0,0,0,.08),0 8px 24px rgba(0,0,0,.04);border:1px solid rgba(226,232,240,.6);transition:box-shadow .2s ease}
+.widget:hover{box-shadow:0 24px 72px rgba(0,0,0,.12),0 8px 28px rgba(0,0,0,.06)}
+.row-main{display:flex;align-items:center;gap:20px}
+.icon-triangle{flex-shrink:0;display:flex;align-items:center;justify-content:center;line-height:0}
+.icon-triangle svg{width:56px;height:56px;display:block;filter:drop-shadow(0 3px 8px rgba(234,88,12,.15))}
+.text-group{display:flex;flex-direction:column;gap:6px}
+.title{font-size:26px;font-weight:600;color:#0f172a;line-height:1.3;letter-spacing:-.01em}
+.title .highlight{color:#ea580c;font-weight:700}
+.sub{font-size:16px;font-weight:400;color:#334155;line-height:1.5}
+.sub .brand{font-weight:600;color:#1e293b}
+.sub .brand strong{color:#ea580c;font-weight:700}
+.sub a{color:inherit;text-decoration:none;cursor:pointer}
+.sub a:hover{opacity:.6}
+.waf-meta{margin-top:10px;font-size:12px;color:#94a3b8}
+@media (max-width:480px){#waf-block{padding:20px 16px}.widget{padding:20px 18px 18px}.row-main{gap:14px}.icon-triangle svg{width:44px;height:44px}.title{font-size:22px}.sub{font-size:15px}}
+@media (max-width:380px){#waf-block{padding:16px 14px}.widget{padding:16px 14px 14px}.row-main{gap:12px;align-items:flex-start}.icon-triangle svg{width:36px;height:36px}.title{font-size:19px}.sub{font-size:14px}}
 </style>
-</head>
-<body>
-<div class="card">
-  <div class="mark" aria-hidden="true"></div>
-  <div class="tag">{{REASON}}</div>
-  <h1>请求已被拦截</h1>
-  <p>你的请求触发了 LiteWAF 防护规则，已被拒绝访问。<br>如果你认为这是误判，请联系站点管理员并附上本页提示。</p>
+<div id="waf-block">
+  <div class="widget">
+    <div class="row-main">
+      <div class="icon-triangle" role="img" aria-label="警告三角">
+        <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <defs>
+            <filter id="shadow" x="-10%" y="-10%" width="120%" height="120%">
+              <feDropShadow dx="0" dy="2" stdDeviation="4" flood-color="#ea580c" flood-opacity="0.18" />
+            </filter>
+          </defs>
+          <path d="M12 2L1 21H23L12 2Z" stroke="#ea580c" stroke-width="2" stroke-linejoin="round" filter="url(#shadow)" />
+          <path d="M12 9V14" stroke="#ea580c" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" />
+          <circle cx="12" cy="18" r="1.5" fill="#ea580c" />
+        </svg>
+      </div>
+      <div class="text-group">
+        <div class="title">{{TITLE}}</div>
+        <div class="sub"><span class="brand">安全与性能由<strong>LiteWaf</strong></span> 提供。<a href="mailto:lyl518@outlook.com">联系管理员</a></div>
+        <div class="waf-meta">LiteWAF v{{VERSION}} · {{REASON}}</div>
+      </div>
+    </div>
+  </div>
 </div>
-<code>LiteWAF v{{VERSION}} · {{RULE}}</code>
-</body>
-</html>
 ]==]
 
 -- ───────────────────── 内部工具 ─────────────────────
@@ -403,7 +421,7 @@ local function read_body_data(uri)
     return data
 end
 
-local function deny(d, category, with_reason)
+local function deny(d, category)
     bump(d, "blocked")
     if category then
         bump(d, category)
@@ -413,10 +431,21 @@ local function deny(d, category, with_reason)
     -- 服务端审计日志（含 IP，仅入 nginx error log，不影响统计页隐私约定）
     ngx.log(ngx.WARN, "[LiteWAF] block ip=", ngx.var.remote_addr or "?",
         " rule=", category or "ban", " uri=", ngx.var.uri or "-")
-    local reason = with_reason
-        and (category == "cc" and "CC 请求频率超限" or "恶意攻击特征")
-        or "访问已被临时封禁"
-    local page = tpl_replace(WARN_HTML, "{{REASON}}", reason)
+    -- 标题按拦截状态区分：特征命中 / CC 频率 / 封禁期。高亮词随文案变化。
+    local title
+    local reason
+    if category == "cc" then
+        title = '您的请求<span class="highlight">频率过高</span>。'
+        reason = "CC 请求频率超限"
+    elseif category == nil then
+        title = '您的访问已被<span class="highlight">临时封禁</span>。'
+        reason = "访问已被临时封禁"
+    else
+        title = '我们认为您的请求是<span class="highlight">恶意</span>的。'
+        reason = "恶意攻击特征"
+    end
+    local page = tpl_replace(WARN_HTML, "{{TITLE}}", title)
+    page = tpl_replace(page, "{{REASON}}", reason)
     page = tpl_replace(page, "{{VERSION}}", _M._VERSION)
     page = tpl_replace(page, "{{RULE}}",
         CONFIG.expose_rule and (category or "ban") or "-")
@@ -455,7 +484,7 @@ function _M.access()
 
     -- 封禁名单检查（CC 与特征命中共用）
     if d:get("b:" .. ip) then
-        return deny(d, nil, false)
+        return deny(d, nil)
     end
 
     -- CC 防御：固定窗口计数（键按窗口分桶，TTL 两倍窗口自动回收）
@@ -469,7 +498,7 @@ function _M.access()
     if n and n > CONFIG.cc.limit then
         d:set("b:" .. ip, 1, CONFIG.cc.ban)
         record_ban_slot(d, CONFIG.cc.ban)
-        return deny(d, "cc", true)
+        return deny(d, "cc")
     end
 
     -- 统计页自身：跳过特征匹配，避免规则误伤公开页
@@ -497,7 +526,7 @@ function _M.access()
         if category then
             d:set("b:" .. ip, 1, CONFIG.sig_ban)
             record_ban_slot(d, CONFIG.sig_ban)
-            return deny(d, category, true)
+            return deny(d, category)
         end
     end
 end

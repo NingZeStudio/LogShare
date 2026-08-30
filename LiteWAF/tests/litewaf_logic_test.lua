@@ -221,7 +221,7 @@ for i = 1, 241 do
     d = request({ uri = "/v1/log", ip = "5.6.7.8" })
 end
 ok(d.blocked and d.status == 403, "CC 超限返回 403")
-ok(d.body and d.body:find("请求已被拦截", 1, true) ~= nil, "CC 拦截返回警告页")
+ok(d.body and d.body:find("频率过高", 1, true) ~= nil, "CC 拦截返回警告页")
 ok(counter(d.dict, "cc") == 1, "CC 触发计入 cc 计数")
 
 -- T6 封禁期间即使低频也拦截（不计类目，只计 blocked）
