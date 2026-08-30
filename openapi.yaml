@@ -30,8 +30,8 @@ info:
 servers:
   - url: https://api.logshare.cn
     description: Production API
-  - url: http://localhost:9300
-    description: Local Docker (nginx on 9300 → Hyperf on 9501)
+  - url: http://localhost:9501
+    description: Local Hyperf (direct, dev only)
 tags:
   - name: Logs
     description: Log submission, retrieval, deletion

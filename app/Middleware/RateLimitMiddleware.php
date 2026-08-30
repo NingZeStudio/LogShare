@@ -13,7 +13,10 @@ use Psr\Http\Server\RequestHandlerInterface;
 
 /**
  * Per-IP rate limiter via Redis INCR + EXPIRE, replacing the old `Router::checkRateLimit`.
- * Fails open when Redis is unavailable.
+ *
+ * 注意：当前未注册到全局中间件链（config/autoload/middlewares.php），属预留实现。
+ * Redis 故障时本实现返回 503（fail-closed）——若要启用并追求可用性优先，
+ * 需先将故障路径改为放行（fail-open），否则 Redis 抖动会放大为全站不可用。
  *
  * Key 口径为 IP + method + 归一化 path：动态资源段（如 /v1/raw/{id}）折叠为
  * 固定前缀，避免攻击者用随机 id 生成无限个独立计数桶绕过限流。

@@ -37,7 +37,10 @@ final class SemanticClient
             throw new \InvalidArgumentException('Semantic provider URL must use HTTP or HTTPS');
         }
         $host = strtolower((string) $parts['host']);
-        if ($host === 'localhost' || str_ends_with($host, '.local') || filter_var($host, FILTER_VALIDATE_IP) !== false && !filter_var($host, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE)) {
+        // 与 MCPClient 相同的信任边界：URL 来自服务端配置（ai.rag.providers），
+        // 仅拦截私网 IP 字面量与 .local；域名解析结果不做校验（见 MCPClient 注释）。
+        // 注意 && 与 || 混用处已加括号，避免可读性问题。
+        if ($host === 'localhost' || str_ends_with($host, '.local') || (filter_var($host, FILTER_VALIDATE_IP) !== false && !filter_var($host, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE))) {
             throw new \InvalidArgumentException('Semantic provider URL targets a private address');
         }
         return [

@@ -6,6 +6,9 @@ use App\ApiError;
 
 class LimitLinesFilter extends Filter
 {
+    /**
+     * @throws ApiError 当行数超过 storage.maxLines 时以 400 中止上传
+     */
     public static function filter(string $data): string
     {
         $config = \App\Config::Get('storage');

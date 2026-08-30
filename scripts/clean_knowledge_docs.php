@@ -96,6 +96,21 @@ exit(0);
 /**
  * Clean a single markdown document (single-pass line state machine).
  */
+/**
+ * 删除文件并在失败时输出 STDERR 告警；仅成功删除才计入 $removed。
+ * 旧逻辑用 @unlink 压制错误，权限/只读盘导致删除失败时统计仍然 +1，
+ * 且无任何可见告警。
+ */
+function deleteOrWarn(string $path, int &$removed): void
+{
+    if (@unlink($path)) {
+        $removed++;
+        return;
+    }
+    $err = error_get_last()['message'] ?? 'unknown error';
+    fwrite(STDERR, "[clean] 删除失败: {$path} ({$err})\n");
+}
+
 function cleanDocument(string $content): string
 {
     // ── YAML frontmatter: extract title, drop the rest ──

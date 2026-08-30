@@ -10,7 +10,7 @@ interface CacheInterface
      * @param string $value
      * @param int|null $duration cache time (in seconds) null means the value will be cached forever
      */
-    public static function Set(string $key, string $value, ?int $duration = null);
+    public static function Set(string $key, string $value, ?int $duration = null): void;
 
     /**
      * Get the cached data

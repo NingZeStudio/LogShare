@@ -11,6 +11,9 @@ use Psr\Http\Message\ResponseInterface;
  */
 class ApiResponse
 {
+    /** 平铺到响应顶层时不可被数据覆盖的协议保留键 */
+    private const RESERVED_KEYS = ['success', 'message', 'error', 'code'];
+
     public static function success(mixed $data = null, string $message = 'Success', int $httpCode = 200): ResponseInterface
     {
         $response = new \stdClass();
@@ -18,13 +21,17 @@ class ApiResponse
         $response->message = $message;
 
         if ($data !== null) {
-            if (is_object($data) || is_array($data)) {
-                foreach ($data as $key => $value) {
-                    $response->$key = $value;
+            if (is_object($data) || (is_array($data) && !array_is_list($data))) {
+                $keys = is_object($data) ? array_keys(get_object_vars($data)) : array_keys($data);
+                if (array_intersect($keys, self::RESERVED_KEYS) === []) {
+                    foreach ($data as $key => $value) {
+                        $response->$key = $value;
+                    }
+                    return self::jsonResponse($response, $httpCode);
                 }
-            } else {
-                $response->data = $data;
+                // 数据键与协议保留键冲突时整体降级为 data 字段承载，避免覆盖 success/message
             }
+            $response->data = $data;
         }
 
         return self::jsonResponse($response, $httpCode);

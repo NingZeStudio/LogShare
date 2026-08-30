@@ -101,8 +101,9 @@ class RedisClient
             $conn->auth($password);
         }
         $database = $redisConfig['database'] ?? null;
-        if (is_int($database) && $database > 0) {
-            $conn->select($database);
+        // is_numeric 兼容环境变量覆盖后传入的数字字符串（如 "1"），否则会静默跳过 select
+        if (is_numeric($database) && (int) $database > 0) {
+            $conn->select((int) $database);
         }
         return $conn;
     }

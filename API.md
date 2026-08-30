@@ -8,32 +8,32 @@
 
 ---
 
-## 快速接入（启动器开发者）
+## 快速接入
 
-三步接入「日志上传 + AI 分析」：
+接入「日志上传 + AI 分析」的最小流程：
 
 ```bash
-# ① 上传崩溃日志（source 填你的启动器名/版本，帮助 AI 匹配对应生态的知识库）
+# 1. 上传日志（source 填启动器名/版本，用于匹配对应生态的知识库）
 curl -X POST https://api.logshare.cn/v1/log \
      -H 'Content-Type: application/json' \
      -d '{"content":"<日志全文>","source":"your-launcher/1.0.0"}'
 # → {"success":true,"id":"sAbCdEf","token":"...","raw":"...","url":"..."}
 
-# ② 展示原始日志 / 结构化解析（可选）
+# 2. 获取原始日志或结构化解析（可选）
 curl https://api.logshare.cn/v1/raw/sAbCdEf          # 日志原文
 curl https://api.logshare.cn/v1/insights/sAbCdEf     # Codex 结构化分析
 
-# ③ AI 深度分析（SSE 流式，读超时建议 ≥300s）
+# 3. AI 深度分析（SSE 流式，读超时建议 ≥300s）
 curl -N https://api.logshare.cn/v1/ai/sAbCdEf
 ```
 
-**接入检查清单：**
+接入时需要注意以下几点：
 
-- [ ] 保存上传响应中的 `token`（删除日志的唯一凭证，不可找回）
-- [ ] `source` 字段填启动器名/版本（如 `fcl/1.2.0`）——知识库内置了 Pojav/FCL/ZL2/Amethyst/PGW/MobileGlues 等启动器生态的实战案例库，来源标识能显著提升 AI 分析的针对性
-- [ ] AI 分析使用 SSE 流式协议，按「SSE 事件协议」一节解析（注意 `event:` 行与 `data:` 行的配对）
-- [ ] 移动端建议开启 gzip 上传（`Content-Encoding: gzip`），大日志可省 80%+ 流量
-- [ ] 客户端 HTTP 读超时 ≥300s（Agent 多轮工具分析可能持续数十秒）
+- 上传响应中的 `token` 是删除日志的唯一凭证，丢失后无法找回，请自行持久化保存。
+- `source` 字段建议填写启动器名与版本（如 `fcl/1.2.0`）。知识库收录了 Pojav、FCL、ZL2、Amethyst、PGW、MobileGlues 等启动器生态的问题案例，该字段用于让 AI 分析优先匹配对应来源的案例。
+- AI 分析使用 SSE 流式协议，解析方式见「SSE 事件协议」一节，注意 `event:` 行与 `data:` 行的配对关系。
+- 移动端建议开启 gzip 上传（`Content-Encoding: gzip`）以减小大日志的传输体积。
+- 客户端 HTTP 读超时应设置为 300 秒以上，Agent 的多轮工具分析可能持续数十秒。
 
 ---
 
@@ -56,7 +56,7 @@ POST /v1/log
 | `content` | string | 是* | 日志内容（多文件上传时可为空，见下） |
 | `files` | array | 否 | 附加文件数组，每个元素 `{name, content}` |
 | `metadata[]` | array | 否 | 元数据，每项 `{key, value, label?, visible?}`；`value` 为字符串时直接存储，其他类型会 JSON 序列化；单项最长 value 1024 / label 128 / key 64 字符 |
-| `source` | string | 否 | 来源标识（最长 64 字符）。**启动器接入强烈建议填写**，格式如 `fcl/1.2.0`、`pojavlauncher/3.4.1`——知识库按启动器生态组织了实战案例（FCL/ZL2/PGW/Amethyst/MobileGlues），该字段帮助 AI 优先匹配对应案例 |
+| `source` | string | 否 | 来源标识（最长 64 字符），建议填写，格式如 `fcl/1.2.0`、`pojavlauncher/3.4.1`。知识库按启动器生态组织了问题案例（FCL/ZL2/PGW/Amethyst/MobileGlues），该字段用于让 AI 分析优先匹配对应来源的案例 |
 
 \* 当提供 `files` 时 `content` 可省略，主文件取 `files[0]`。
 
@@ -226,7 +226,7 @@ POST /v1/analyse
 
 ## AI 分析
 
-> **面向启动器开发者的推荐姿势：** 先请求 `GET /v1/insights/{id}` 展示结构化的错误摘要（毫秒级、免费），再提供「AI 深度分析」按钮按需触发 `GET /v1/ai/{id}` 流式分析——两者结合体验最佳，且避免每个用户无差别消耗 AI 资源。
+> **推荐的使用方式：** 先调用 `GET /v1/insights/{id}` 展示结构化错误摘要（该接口不消耗 AI 资源），再在用户主动触发时调用 `GET /v1/ai/{id}` 进行流式分析。这样可以避免为每次页面展示都执行一次 AI 分析。
 
 > **禁用开关**：配置 `ai.enabled = false`（或环境变量 `AI_ENABLED=false`）时，所有 `/v1/ai/*` 接口统一返回 HTTP 404（`{"success":false,"error":"AI analysis is disabled.","code":404}`）。默认 `true` 启用。
 
@@ -241,7 +241,7 @@ GET /v1/ai/{id}
 
 SSE（Server-Sent Events）流式输出。LogAgent 模式下，Agent 可读取该日志 ID 下的所有文件（`list_log_files` / `read_log_file` 工具，作用域限定在当前 ID）。`GET /v1/ai/{id}` 会绑定该 ID；`POST /v1/ai/analyse` 只有请求 JSON 提供 `id` 时才会开放文件工具。
 
-> **缓存行为：** `GET /v1/ai/{id}` 的分析结论按日志 ID 缓存 30 分钟——同一 ID 重复请求会直接返回上次结论（秒回，无工具调用事件）；调试时如需强制重新分析，重新上传一份新日志即可。
+> **缓存行为：** `GET /v1/ai/{id}` 的分析结论按日志 ID 缓存 30 分钟——同一 ID 重复请求会直接返回上次结论（不再执行工具调用）；调试时如需强制重新分析，重新上传一份新日志即可。
 
 ### 直接提交内容
 
@@ -251,6 +251,8 @@ POST /v1/ai/analyse
 ```
 
 不落盘，直接提交内容给 AI 分析。请求格式同 `POST /log`。SSE 流式输出，缓存基于内容哈希（30 分钟 TTL）。
+
+> **脱敏差异：** 已存储日志的分析路径（`/v1/ai/{id}`）读取的是上传时经过 `filter.pre` 脱敏过滤链处理后的内容；而本端点直传的内容**不经过**脱敏链，原文会直接发送给 AI 网关。用户提交含敏感信息（token、IP 等）的日志时，请自行确认可接受该差异，或先走 `POST /v1/log` 再分析。
 
 **可选字段 `id`：** 传入已存在的日志 ID 时，Agent 获得该日志文件的访问权（会话作用域），可用于多文件对比；`content` 可省略（缺省读取该 ID 主文件）。缓存键基于该 ID。
 
@@ -323,7 +325,7 @@ LogAgent 模式（`ai.agent.enabled`）会输出额外的 `event: status` 事件
 
 ## RAG MCP 服务（内置知识库检索）
 
-内置于 Hyperf 主进程的 **Streamable HTTP MCP 服务**（JSON-RPC 2.0），提供本地知识库检索。知识库覆盖：Forge/NeoForge/Fabric 官方开发者文档、PaperMC 全家桶（Paper/Velocity/Waterfall/Folia）、Purpur/Glowstone/Geyser/Quilt、Android 启动器生态实战案例库与错误签名模式库。
+内置于 Hyperf 主进程的 **Streamable HTTP MCP 服务**（JSON-RPC 2.0），提供本地知识库检索。知识库覆盖：Forge/NeoForge/Fabric 官方开发者文档，PaperMC 全家桶（Paper/Velocity/Waterfall/Folia）、Purpur/Glowstone/Geyser/Quilt 服务端文档，以及 Android 启动器生态的问题案例与错误签名文档。
 
 检索管线：词法召回（FTS5 BM25 + LIKE，AND→OR 逐级降级，CJK 自动二元切分）∪ 可选 bge-m3 向量召回；向量结果按余弦相似度优先，词法结果去重后补充。数据库路径由 `ai.mcp.rag.db` 指定（默认 `rag/index.db`），构建索引：`php bin/hyperf.php rag:build`。
 

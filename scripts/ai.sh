@@ -10,13 +10,13 @@ fi
 #   ai.sh <log-id>                 分析已存储日志
 #   ai.sh -c "日志内容"             直接分析内容（不落盘）
 #   ai.sh -t <log-id>              显示思维链（thinking）
-#   ai.sh -u http://host:9300 ...  指定服务地址（默认 $LOGSHARE_URL 或 http://127.0.0.1:9300）
+#   ai.sh -u http://host:9501 ...  指定服务地址（默认 $LOGSHARE_URL 或 http://127.0.0.1:9501）
 #
 # 依赖：curl、jq
 
 set -euo pipefail
 
-BASE_URL="${LOGSHARE_URL:-http://127.0.0.1:9300}"
+BASE_URL="${LOGSHARE_URL:-http://127.0.0.1:9501}"
 SHOW_THINKING=0
 CONTENT=""
 ID=""
@@ -27,7 +27,7 @@ usage() {
   ai.sh <log-id>                 分析已存储日志
   ai.sh -c "日志内容"             直接分析内容（不落盘）
   ai.sh -t <log-id>              显示思维链（thinking）
-  ai.sh -u http://host:9300 ...  指定服务地址（默认 $LOGSHARE_URL 或 http://127.0.0.1:9300）
+  ai.sh -u http://host:9501 ...  指定服务地址（默认 $LOGSHARE_URL 或 http://127.0.0.1:9501）
 EOF
     exit 1
 }
@@ -75,8 +75,10 @@ header
 BODY_STARTED=0
 thinking_buf=""
 
-curl -sN "${REQ_ARGS[@]}" "$URL" \
-| while IFS= read -r line; do
+# 注意：必须用进程替换（done < <(curl ...)）而非管道，管道右侧的 while 在
+# 子 shell 中执行，thinking_buf / BODY_STARTED 的修改不会传播回父 shell，
+# 循环结束后的"刷新残留思考缓冲"会永远读到空值
+while IFS= read -r line; do < <(curl -sN "${REQ_ARGS[@]}" "$URL")
 
     # ── 事件标记行 ──
     case "$line" in
@@ -89,9 +91,10 @@ curl -sN "${REQ_ARGS[@]}" "$URL" \
     [[ "$line" == "data: "* ]] || continue
     JSON="${line#data: }"
 
-    # 错误事件
-    if [[ "$line" == "data: " && $(echo "$JSON" | jq -r '.error // empty' 2>/dev/null) != "" ]]; then
-        printf '\n%s\n' "❌ $(echo "$JSON" | jq -r '.error')"
+    # 错误事件：对 JSON 本身判错。旧条件 `"$line" == "data: "` 只在 data
+    # 载荷为空时成立，真实的 `data: {"error":...}` 永远不会命中，错误被静默吞掉
+    if [[ -n "$JSON" ]] && [[ $(printf '%s' "$JSON" | jq -r '.error // empty' 2>/dev/null) != "" ]]; then
+        printf '\n%s\n' "❌ $(printf '%s' "$JSON" | jq -r '.error')"
         continue
     fi
 

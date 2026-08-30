@@ -33,8 +33,9 @@ class UuidFilter extends Filter
 
     public static function filter(string $data): string
     {
-        // 快速预检：UUID 必然含 8 位连续十六进制，无则跳过全文正则
-        if (preg_match('/[0-9a-fA-F]{8}/', $data) === 0) {
+        // 快速预检：要求「8 位 hex + 连字符」或「16 位以上连续 hex」，覆盖
+        // 带连字符与 32 连写两种 UUID 形态；普通数字串（时间戳等）不命中
+        if (preg_match('/(?:[0-9a-fA-F]{8}-|[0-9a-fA-F]{16,})/', $data) === 0) {
             return $data;
         }
 

@@ -88,6 +88,11 @@ class ContentParser
             return new ApiError(400, "Required POST argument 'content' not found.");
         }
 
+        // content[]=x 之类会被 parse_str 解析为数组，提前拒绝避免下游类型混乱
+        if (!is_string($data['content'])) {
+            return new ApiError(400, "Field 'content' must be a string.");
+        }
+
         if (empty($data['content'])) {
             return new ApiError(400, "Required POST argument 'content' is empty.");
         }

@@ -35,18 +35,21 @@ find_latest_build() {
 }
 
 # Extract .tiny from a JAR, write gzipped output
+# 参数经 argv 传入 Python（`python3 - args <<'EOF'`），避免 shell 变量拼进
+# 代码字符串——版本号含单引号时会破坏语法乃至注入代码
 jar_to_gz() {
     local jar_file="$1"
     local out_file="$2"
-    python3 -c "
-import zipfile, sys, gzip
-with zipfile.ZipFile('$jar_file', 'r') as z:
+    python3 - "$jar_file" "$out_file" <<'PYEOF'
+import sys, zipfile, gzip
+jar_file, out_file = sys.argv[1], sys.argv[2]
+with zipfile.ZipFile(jar_file, 'r') as z:
     for name in z.namelist():
         if name.endswith('.tiny'):
-            with gzip.open('$out_file', 'wb') as g:
+            with gzip.open(out_file, 'wb') as g:
                 g.write(z.read(name))
             break
-"
+PYEOF
 }
 
 download_one() {
@@ -114,9 +117,15 @@ process_version() {
     local version="$1"
     local build
 
+    # 已存在的文件先做完整性校验（gzip -t），损坏的映射不跳过、走重新下载；
+    # 旧逻辑只看文件存在即跳过，损坏文件会被永久跳过且不重下
     if [[ -f "${MAPPINGS_DIR}/${version}.tiny.gz" ]]; then
-        echo "  [skip] $version already exists"
-        return 2
+        if [[ -s "${MAPPINGS_DIR}/${version}.tiny.gz" ]] && gzip -t "${MAPPINGS_DIR}/${version}.tiny.gz" 2>/dev/null; then
+            echo "  [skip] $version already exists"
+            return 2
+        fi
+        echo "  [corrupt] $version: existing file failed gzip validation, re-downloading"
+        rm -f "${MAPPINGS_DIR}/${version}.tiny.gz"
     fi
 
     build=$(find_latest_build "$(echo "$version" | sed 's/\+/%2B/g')")

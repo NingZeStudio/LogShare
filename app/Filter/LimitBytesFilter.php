@@ -6,6 +6,9 @@ use App\ApiError;
 
 class LimitBytesFilter extends Filter
 {
+    /**
+     * @throws ApiError 当字节数超过 storage.maxLength 时以 400 中止上传
+     */
     public static function filter(string $data): string
     {
         $config = \App\Config::Get('storage');

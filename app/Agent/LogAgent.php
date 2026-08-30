@@ -21,6 +21,13 @@ class LogAgent
     private const MAX_RETRIEVAL_RESULT_BYTES = 32000;
     private const STATUS_SUMMARY_BYTES = 400;
 
+    /** SSE 帧统一 JSON 编码 flags：非法 UTF-8 时替换为 U+FFFD，避免 json_encode 返回 false 产生空帧 */
+    private const SSE_JSON_FLAGS = JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE;
+
+    /** fetchTopics 的进程级缓存：topics 仅随知识库重建变化，短 TTL 内直接复用 */
+    private static ?string $topicsCache = null;
+    private static int $topicsCacheExpiresAt = 0;
+
     /**
      * Run the agent loop and stream the result as SSE.
      *
@@ -41,8 +48,10 @@ class LogAgent
 
         // try 边界紧贴 begin()：SSE 开始输出后任何异常都必须以流内 error 收尾，
         // 不能逃逸到全局 JSON handler 造成坏帧。
+        // $heldLock 记录本协程持有的缓存锁 key，finally 中无条件释放（幂等），
+        // 覆盖异常与提前 return 路径，避免锁只能等 TTL 过期、互斥失效。
+        $heldLock = null;
         try {
-            $cacheLock = null;
             if ($cacheKey !== null) {
                 $cached = self::checkCache($cacheKey);
                 if ($cached !== null) {
@@ -50,8 +59,9 @@ class LogAgent
                     self::emitDone();
                     return;
                 }
-                $cacheLock = self::acquireCacheLock($cacheKey);
-                if ($cacheLock === null) {
+                if (self::acquireCacheLock($cacheKey)) {
+                    $heldLock = $cacheKey;
+                } else {
                     $cached = self::waitForCache($cacheKey);
                     if ($cached !== null) {
                         self::emitContent($cached);
@@ -151,13 +161,20 @@ class LogAgent
 
             if ($cacheKey !== null && $fullAnswer !== '') {
                 self::writeCache($cacheKey, $fullAnswer, $cacheTTL);
-                self::releaseCacheLock($cacheKey);
             }
 
             self::emitDone();
+        } catch (\App\Exception\ClientDisconnectedException $e) {
+            // 客户端已断开：SseWriter 无法再写入任何帧，仅记日志并中止，
+            // 不再尝试 emitError（同样会写失败）
+            \App\Syslog::error('LogAgent', '客户端已断开，分析中止: ' . $e->getMessage());
         } catch (\Throwable $e) {
             \App\Syslog::error('LogAgent', '分析失败: ' . $e->getMessage());
             self::emitError($e->getMessage());
+        } finally {
+            if ($heldLock !== null) {
+                self::releaseCacheLock($heldLock);
+            }
         }
     }
 
@@ -296,10 +313,20 @@ class LogAgent
             return '';
         }
 
+        // topics 仅随知识库重建变化：进程级短 TTL 缓存，避免每次分析都做一次
+        // 完整 MCP 握手 + list_topics 调用（推高首 token 延迟）。失败不缓存，
+        // 下次分析仍会重试。
+        if (self::$topicsCache !== null && self::$topicsCacheExpiresAt > time()) {
+            return self::$topicsCache;
+        }
+
         try {
             $client = self::mcpClient($endpoint, $session);
             $contents = $client->callTool('list_topics', []);
-            return implode("\n\n", $contents);
+            $topics = implode("\n\n", $contents);
+            self::$topicsCache = $topics;
+            self::$topicsCacheExpiresAt = time() + 300;
+            return $topics;
         } catch (\Exception $e) {
             \App\Syslog::error('LogAgent', '获取知识库主题失败: ' . $e->getMessage());
             return '';
@@ -513,6 +540,9 @@ PROMPT;
             }
         }
 
+        // 防重复读取循环：仅当文件已「完整」读取过时才拦截。部分读取
+        // （行区间 / offset 续读）不置标记，模型按 next_offset 续读不会被
+        // 误判为重复调用。
         if (($session->readFiles[$sessionKey] ?? false) === true) {
             return self::duplicateReadNotice($sessionKey, $content);
         }
@@ -526,7 +556,9 @@ PROMPT;
             $lineEnd = isset($arguments['line_end']) ? max($lineStart, (int) $arguments['line_end']) : $total;
             $lines = explode("\n", $content);
             $text = implode("\n", array_slice($lines, $lineStart - 1, $lineEnd - $lineStart + 1));
-            $session->readFiles[$sessionKey] = true;
+            if ($lineStart === 1 && $lineEnd >= $total) {
+                $session->readFiles[$sessionKey] = true;
+            }
             return sprintf(
                 "文件 %s（共 %d 行，%d 字节；本次行区间=%d-%d）\n内容：\n%s",
                 $sessionKey,
@@ -546,7 +578,9 @@ PROMPT;
         $maxBytes = isset($arguments['max_bytes']) ? max(1024, (int) $arguments['max_bytes']) : $length - $offset;
         $text = mb_strcut(substr($content, $offset), 0, $maxBytes);
         $nextOffset = $offset + strlen($text);
-        $session->readFiles[$sessionKey] = true;
+        if ($offset === 0 && $nextOffset >= $length) {
+            $session->readFiles[$sessionKey] = true;
+        }
         $tail = $nextOffset < $length
             ? "\n[内容已截断；请使用 offset={$nextOffset} 继续读取，next_offset={$nextOffset}]"
             : "\n[文件已读取完毕，next_offset={$nextOffset}]";
@@ -603,17 +637,17 @@ PROMPT;
 
     private static function emitContent(string $delta): void
     {
-        SseWriter::write("data: " . json_encode(['choices' => [['delta' => ['content' => $delta]]]], JSON_UNESCAPED_UNICODE) . "\n\n");
+        SseWriter::write("data: " . json_encode(['choices' => [['delta' => ['content' => $delta]]]], self::SSE_JSON_FLAGS) . "\n\n");
     }
 
     private static function emitThinking(string $reasoning): void
     {
-        SseWriter::write("event: status\ndata: " . json_encode(['type' => 'thinking', 'delta' => $reasoning], JSON_UNESCAPED_UNICODE) . "\n\n");
+        SseWriter::write("event: status\ndata: " . json_encode(['type' => 'thinking', 'delta' => $reasoning], self::SSE_JSON_FLAGS) . "\n\n");
     }
 
     private static function emitTool(string $name, array $arguments): void
     {
-        SseWriter::write("event: status\ndata: " . json_encode(['type' => 'tool', 'name' => $name, 'arguments' => $arguments], JSON_UNESCAPED_UNICODE) . "\n\n");
+        SseWriter::write("event: status\ndata: " . json_encode(['type' => 'tool', 'name' => $name, 'arguments' => $arguments], self::SSE_JSON_FLAGS) . "\n\n");
     }
 
     private static function emitToolResult(string $name, string $result): void
@@ -629,7 +663,7 @@ PROMPT;
             'name' => $name,
             'summary' => $summary,
             'truncated' => strlen($result) > strlen($summary),
-        ], JSON_UNESCAPED_UNICODE) . "\n\n");
+        ], self::SSE_JSON_FLAGS) . "\n\n");
     }
 
     /**
@@ -694,7 +728,7 @@ PROMPT;
 
     private static function emitLimit(int $rounds): void
     {
-        SseWriter::write("event: status\ndata: " . json_encode(['type' => 'limit', 'rounds' => $rounds], JSON_UNESCAPED_UNICODE) . "\n\n");
+        SseWriter::write("event: status\ndata: " . json_encode(['type' => 'limit', 'rounds' => $rounds], self::SSE_JSON_FLAGS) . "\n\n");
     }
 
     private static function emitDone(): void
@@ -705,7 +739,7 @@ PROMPT;
 
     private static function emitError(string $message): void
     {
-        SseWriter::write("event: error\ndata: " . json_encode(['error' => $message], JSON_UNESCAPED_UNICODE) . "\n\n");
+        SseWriter::write("event: error\ndata: " . json_encode(['error' => $message], self::SSE_JSON_FLAGS) . "\n\n");
         SseWriter::end();
     }
 
@@ -724,13 +758,12 @@ PROMPT;
         return null;
     }
 
-    private static function acquireCacheLock(string $cacheKey): ?string
+    private static function acquireCacheLock(string $cacheKey): bool
     {
         try {
-            $lock = $cacheKey . ':lock:' . bin2hex(random_bytes(6));
-            return \App\Cache\RedisCache::Acquire($cacheKey . ':lock', 120) ? $lock : null;
+            return \App\Cache\RedisCache::Acquire($cacheKey . ':lock', 120);
         } catch (\Throwable $e) {
-            return null;
+            return false;
         }
     }
 

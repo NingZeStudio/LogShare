@@ -18,10 +18,16 @@ jobs:
       should_release: ${{ steps.check.outputs.should_release }}
     steps:
       - id: check
+        env:
+          # commit message 由 push 者完全控制，直接用 ${{ }} 插值进 run 脚本
+          # 会构成 GitHub Actions 脚本注入（runner 上任意命令执行），必须经
+          # 环境变量中转后按普通 shell 变量使用
+          HEAD_MSG: ${{ github.event.head_commit.message }}
+          EVENT_NAME: ${{ github.event_name }}
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
             echo "should_release=true" >> "$GITHUB_OUTPUT"
-          elif [[ "${{ github.event.head_commit.message }}" == "[Build]"* ]]; then
+          elif [[ "$HEAD_MSG" == "[Build]"* ]]; then
             echo "should_release=true" >> "$GITHUB_OUTPUT"
           else
             echo "should_release=false" >> "$GITHUB_OUTPUT"

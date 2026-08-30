@@ -78,7 +78,8 @@ echo "==> Geyser..."
 rm -rf "${TMP_DIR}/geyser"
 fetch_git "GeyserMC/geyserwiki" "${TMP_DIR}/geyser" || true
 if [ -d "${TMP_DIR}/geyser/_docs" ]; then
-    copy_md "${TMP_DIR}/geyser/_docs" "${KNOWLEDGE_DIR}/geyser" 'CONTRIBUTING|^README|^LICENSE'
+    # find 输出带 ./ 前缀，排除模式须匹配路径片段而非行首锚定
+    copy_md "${TMP_DIR}/geyser/_docs" "${KNOWLEDGE_DIR}/geyser" 'CONTRIBUTING|/README\.md$|/LICENSE$'
 fi
 
 echo "==> Quilt..."

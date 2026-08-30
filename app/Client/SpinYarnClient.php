@@ -88,6 +88,9 @@ class SpinYarnClient
                     ? spinyarn_init($mappingsDir, $cacheMax, $cacheHigh, $cacheLow, $redisUrl)
                     : spinyarn_init($mappingsDir, $cacheMax, $cacheHigh, $cacheLow);
             } catch (\Throwable $e) {
+                // 有意 fail-open：初始化失败（扩展缺失/映射目录不可读）后整个进程
+                // 生命周期内反混淆降级为原样透传，不再重试——日志可读性降级优于
+                // 上传链路不可用。失败原因见 error log。
                 \App\Syslog::error("SpinYarn", "初始化失败: " . $e->getMessage());
                 $handle = false;
             }
