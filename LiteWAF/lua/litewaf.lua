@@ -129,7 +129,7 @@ _M.RULES = {
 }
 -- RULES-END
 
--- ───────────────────── 红色极简警告页模板 ─────────────────────
+-- ───────────────────── 拦截页模板（视觉语言与 /security 统计页一致）─────────────
 local WARN_HTML = [==[<!doctype html>
 <html lang="zh-CN">
 <head>
@@ -137,19 +137,24 @@ local WARN_HTML = [==[<!doctype html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>403 请求已被拦截</title>
 <style>
-body{font-family:system-ui,-apple-system,"PingFang SC",sans-serif;max-width:560px;margin:16vh auto;padding:0 1.5rem;color:#374151;background:#fef2f2;text-align:center}
-.mark{width:56px;height:56px;margin:0 auto 1.4rem;border:3px solid #dc2626;border-radius:50%;position:relative}
-.mark::before{content:"";position:absolute;left:50%;top:11px;width:4px;height:20px;margin-left:-2px;background:#dc2626;border-radius:2px}
-.mark::after{content:"";position:absolute;left:50%;bottom:10px;width:4px;height:4px;margin-left:-2px;background:#dc2626;border-radius:2px}
-h1{font-size:1.15rem;color:#b91c1c;margin:0 0 .8rem}
-p{font-size:.9rem;line-height:1.7;color:#6b7280;margin:0 0 .5rem}
-code{font-size:.75rem;color:#b0b7c3}
+body{font-family:system-ui,-apple-system,"PingFang SC",sans-serif;max-width:480px;margin:14vh auto 0;padding:0 1.5rem;color:#1f2937;background:#fafafa;text-align:center}
+.card{background:#fff;border:1px solid #e5e7eb;border-radius:6px;padding:2.4rem 1.8rem 2rem}
+.mark{width:52px;height:52px;margin:0 auto 1.2rem;border:3px solid #dc2626;border-radius:50%;position:relative}
+.mark::before{content:"";position:absolute;left:50%;top:10px;width:4px;height:19px;margin-left:-2px;background:#dc2626;border-radius:2px}
+.mark::after{content:"";position:absolute;left:50%;bottom:9px;width:4px;height:4px;margin-left:-2px;background:#dc2626;border-radius:2px}
+.tag{display:inline-block;padding:.15rem .7rem;border-radius:3px;font-size:.75rem;background:#fef2f2;color:#b91c1c;border:1px solid #fecaca;margin-bottom:1.1rem}
+h1{font-size:1.15rem;color:#b91c1c;margin:0 0 .75rem}
+p{font-size:.875rem;line-height:1.75;color:#6b7280;margin:0}
+code{display:block;margin-top:1.4rem;font-size:.75rem;color:#9ca3af}
 </style>
 </head>
 <body>
-<div class="mark" aria-hidden="true"></div>
-<h1>请求已被拦截</h1>
-<p>你的请求触发了 LiteWAF 防护规则（{{REASON}}），已被拒绝访问。<br>如果你认为这是误判，请联系站点管理员并附上本页提示。</p>
+<div class="card">
+  <div class="mark" aria-hidden="true"></div>
+  <div class="tag">{{REASON}}</div>
+  <h1>请求已被拦截</h1>
+  <p>你的请求触发了 LiteWAF 防护规则，已被拒绝访问。<br>如果你认为这是误判，请联系站点管理员并附上本页提示。</p>
+</div>
 <code>LiteWAF v{{VERSION}} · {{RULE}}</code>
 </body>
 </html>
