@@ -266,13 +266,20 @@ jobs:
           cp .env.example .env
 
       - name: Generate Self-Signed Certificate for Smoke Test
-        # nginx 443 与 healthcheck 需要证书文件；CI 上 docker/certs/ 为空
+        # nginx 443 与 healthcheck 需要证书文件；CI 上 docker/certs/ 为空。
+        # 域名从 default.conf 的证书路径动态提取，避免仓库域名调整后
+        # CI 仍生成旧域名的证书导致 nginx 启动失败
         run: |
-          mkdir -p docker/certs/live/api.example.com
+          DOMAIN=$(sed -n 's#.*live/\([^/]*\)/fullchain.pem.*#\1#p' docker/nginx/default.conf | head -1)
+          if [ -z "$DOMAIN" ]; then
+            echo "无法从 docker/nginx/default.conf 提取证书域名"; exit 1
+          fi
+          echo "生成自签证书: $DOMAIN"
+          mkdir -p "docker/certs/live/$DOMAIN"
           openssl req -x509 -newkey rsa:2048 -nodes \
-            -keyout docker/certs/live/api.example.com/privkey.pem \
-            -out docker/certs/live/api.example.com/fullchain.pem \
-            -days 1 -subj '/CN=api.example.com'
+            -keyout "docker/certs/live/$DOMAIN/privkey.pem" \
+            -out "docker/certs/live/$DOMAIN/fullchain.pem" \
+            -days 1 -subj "/CN=$DOMAIN"
 
       - name: Test Image Starts
         run: |
