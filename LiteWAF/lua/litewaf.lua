@@ -199,12 +199,27 @@ local function mask_ip(ip)
     return head and (head .. ".*.*") or "?"
 end
 
+-- ngx.re.compile 是 lua-resty-core（resty.core.re）的 FFI API，不是
+-- lua-nginx-module 的原生 API：resty.core 未加载时 ngx.re 表里只有原生的
+-- find/match/gmatch，compile 为 nil。这里主动加载（官方镜像自带），
+-- 加载失败也不影响功能——get_rules() 会检测并走纯字符串匹配路径。
+-- pcall 包裹：require 失败不能炸掉 access 阶段。
+pcall(require, "resty.core.re")
+
 -- 编译后的规则缓存（worker 级，惰性）：ngx.re.compile 不能在 init_by_lua（master 进程）
 -- 阶段调用，必须在请求阶段首次用时编译；每个 worker 各自缓存一份。
 local compiled_rules
 
+-- compile 是否可用（模块加载时探测一次；resty.core.re 加载成功后为 function）
+local COMPILE_AVAILABLE = type(ngx.re.compile) == "function"
+
 local function get_rules()
     if not compiled_rules then
+        -- compile 不可用（resty.core 缺失）：直接走 _M.RULES 字符串路径，
+        -- ngx.re.find 是原生 API，必然存在——绝不能在 compile 为 nil 时调用它
+        if not COMPILE_AVAILABLE then
+            return _M.RULES
+        end
         compiled_rules = {}
         for i, rule in ipairs(_M.RULES) do
             local re, err = ngx.re.compile(rule[2], "ji")
@@ -410,9 +425,9 @@ end
 
 -- ───────────────────── 生命周期 ─────────────────────
 -- init_by_lua：master 进程初始化，仅记录启动时间（shared dict 全 worker 共享）。
--- 注意：此处不能做规则预编译——ngx.re.compile 只存在于请求阶段（worker 上下文），
--- init 阶段调用会报 "attempt to call field 'compile' (a nil value)"；
--- 预编译由 get_rules() 在首个请求时惰性完成（每 worker 一次）。
+-- 规则编译保持惰性（首个请求时按 worker 完成）：ngx.re.compile 依赖 resty.core.re，
+-- 模块顶部已 pcall 加载；即便加载失败，get_rules() 也会走纯字符串匹配路径，
+-- 不会因 compile 缺失而中止 access 阶段（历史 bug：曾导致线上完全不拦截）。
 function _M.init()
     local d = dict()
     if d and not d:get("c:start_epoch") then
