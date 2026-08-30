@@ -5,9 +5,10 @@ namespace App\Filter\Pattern;
 class PatternWithReplacement extends Pattern
 {
     public function __construct(
-        protected string $pattern,
+        string $pattern,
         protected string $replacement
     ) {
+        parent::__construct($pattern);
     }
 
     /**

@@ -9,6 +9,8 @@ class UploadParser
 {
     public const DEFAULT_MAX_FILES = 200;
     public const DEFAULT_MAX_TOTAL_BYTES = 12 * 1024 * 1024;
+    /** 与 MariaDB `log_files.name` VARCHAR(512) 及常见文件系统上限对齐 */
+    public const MAX_NAME_LENGTH = 512;
 
     /**
      * Validate a file name for path traversal attacks.
@@ -22,6 +24,11 @@ class UploadParser
     public static function validateFileName(string $name): bool
     {
         if ($name === '' || str_contains($name, "\0")) {
+            return false;
+        }
+
+        // 超长名称在 MariaDB 路径会触发 "Data too long" 500，这里统一提前拒绝
+        if (strlen($name) > self::MAX_NAME_LENGTH) {
             return false;
         }
 
@@ -93,7 +100,7 @@ class UploadParser
                     return new ApiError(413, "Upload exceeds maximum total size of {$maxTotalBytes} bytes.");
                 }
                 if (!self::validateFileName($name)) {
-                    return new ApiError(400, "Invalid file name: " . htmlspecialchars($name));
+                    return new ApiError(400, "Invalid file name: " . mb_strcut($name, 0, 64));
                 }
                 $result[] = ['name' => $name, 'data' => $content];
                 $totalBytes += strlen($content);
@@ -129,7 +136,7 @@ class UploadParser
     {
         $tmpDir = CORE_PATH . '/tmp';
         if (!is_dir($tmpDir)) {
-            @mkdir($tmpDir, 0777, true);
+            @mkdir($tmpDir, 0700, true);
         }
 
         $tmpFile = $tmpDir . '/upload_' . bin2hex(random_bytes(8)) . '.zip';
@@ -144,7 +151,7 @@ class UploadParser
         try {
             $openResult = $zip->open($tmpFile);
             if ($openResult !== true) {
-                return new ApiError(400, "Invalid ZIP archive: " . htmlspecialchars($zipName));
+                return new ApiError(400, "Invalid ZIP archive: " . mb_strcut($zipName, 0, 64));
             }
             $opened = true;
 
@@ -157,7 +164,7 @@ class UploadParser
                     continue;
                 }
                 if (!self::validateFileName($entryName)) {
-                    return new ApiError(400, "Invalid file name in archive: " . htmlspecialchars($entryName));
+                    return new ApiError(400, "Invalid file name in archive: " . mb_strcut($entryName, 0, 64));
                 }
 
                 // 文件数配额先于解压检查，避免白耗一次解压
@@ -165,7 +172,10 @@ class UploadParser
                     return new ApiError(413, "Too many files in upload. Maximum is {$maxFiles}.");
                 }
 
-                // 预判条目声明解压大小，防止高压缩比 zip 炸弹在解压时 OOM
+                // 预判条目声明解压大小，防止高压缩比 zip 炸弹在解压时 OOM。
+                // 已知剩余风险：central directory 的声明 size 理论上可与 local
+                // header 不一致，getFromIndex 可能按声明值分配内存；下方解压后
+                // 的 strlen 复检兜底真实大小，双保险取交集。
                 $stat = $zip->statIndex($i);
                 $declaredSize = is_array($stat) ? $stat['size'] : 0;
                 if ($declaredSize > $remainingBudget) {

@@ -1,5 +1,8 @@
 .git
 .gitignore
+.env
+.github
+docs
 vendor
 runtime
 tmp
@@ -12,3 +15,10 @@ rag/public
 docker
 tests
 LiteWAF
+README.md
+CHANGELOG.md
+CRCLASH.md
+AGENTS.md
+API.md
+postman_collection.json
+openapi.yaml

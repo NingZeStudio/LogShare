@@ -1,5 +1,13 @@
+# 统一日志上限：默认 json-file 无限制，长期运行可占满磁盘
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "50m"
+    max-file: "5"
+
 services:
   nginx:
+    logging: *default-logging
     # OpenResty = Nginx + lua-nginx-module，LiteWAF（../LiteWAF/）运行其上；
     # 版本固定，升级时同步检查 LiteWAF/nginx/nginx.conf 与镜像内置配置的差异
     image: openresty/openresty:1.27.1.2-alpine
@@ -29,6 +37,7 @@ services:
       start_period: 10s
 
   acme:
+    logging: *default-logging
     image: certbot/certbot:v2.11.0
     container_name: logshare-acme
     volumes:
@@ -41,6 +50,7 @@ services:
     restart: unless-stopped
 
   hyperf:
+    logging: *default-logging
     container_name: logshare-hyperf
     build:
       context: ..
@@ -82,7 +92,8 @@ services:
       start_period: 40s
 
   mariadb:
-    image: mariadb:11
+    logging: *default-logging
+    image: mariadb:11.8
     container_name: logshare-mariadb
     command: --event-scheduler=ON
     environment:
@@ -104,7 +115,7 @@ services:
       retries: 6
 
   mariadb-events:
-    image: mariadb:11
+    image: mariadb:11.8
     container_name: logshare-mariadb-events
     entrypoint: ["/bin/sh", "-c"]
     command: >-
@@ -123,7 +134,8 @@ services:
     restart: "no"
 
   redis:
-    image: redis:7-alpine
+    logging: *default-logging
+    image: redis:7.4-alpine
     container_name: logshare-redis
     # 与 hyperf 的 REDIS_PASSWORD 保持一致，始终启用 requirepass
     environment:

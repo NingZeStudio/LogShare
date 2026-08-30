@@ -22,12 +22,22 @@ class Config
         }
 
         $data = require $path;
-        if (is_array($data)) {
-            self::applyEnvironmentOverrides($data);
-            self::validate($data);
-            self::$data = $data;
-            self::$loaded = true;
+        if (!is_array($data)) {
+            // 配置文件损坏/返回类型错误时 fail-fast：常驻进程下静默降级会导致
+            // 每次访问配置都重读文件，且业务拿到空配置产生更难排查的次生故障
+            throw new \InvalidArgumentException("Config file {$path} must return an array.");
         }
+        self::applyEnvironmentOverrides($data);
+        // Example 配置中的占位符（如 '${REDIS_PASSWORD}'）在非 Docker 部署下不会
+        // 被替换，占位符形态一律视为未配置，避免拿字面量去 AUTH Redis
+        if (isset($data['cache']['redis']['password'])
+            && is_string($data['cache']['redis']['password'])
+            && preg_match('/^\$\{[A-Z_]+\}$/', $data['cache']['redis']['password']) === 1) {
+            $data['cache']['redis']['password'] = '';
+        }
+        self::validate($data);
+        self::$data = $data;
+        self::$loaded = true;
     }
 
     /**

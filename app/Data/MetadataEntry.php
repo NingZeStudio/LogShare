@@ -83,7 +83,7 @@ class MetadataEntry implements \JsonSerializable
     public function setKey(?string $key): static
     {
         if (is_string($key) && strlen($key) > static::MAX_KEY_LENGTH) {
-            $key = substr($key, 0, static::MAX_KEY_LENGTH);
+            $key = mb_strcut($key, 0, static::MAX_KEY_LENGTH, 'UTF-8');
         }
         $this->key = $key;
         return $this;
@@ -102,7 +102,8 @@ class MetadataEntry implements \JsonSerializable
     {
         if (is_string($value)) {
             if (strlen($value) > static::MAX_VALUE_LENGTH) {
-                $value = substr($value, 0, static::MAX_VALUE_LENGTH);
+                // 按字符而非字节截断，避免在多字节字符中间切出非法 UTF-8
+                $value = mb_strcut($value, 0, static::MAX_VALUE_LENGTH, 'UTF-8');
             }
             $this->value = $value;
             return $this;
@@ -117,7 +118,9 @@ class MetadataEntry implements \JsonSerializable
             return $this;
         }
         if (strlen($encodedValue) > static::MAX_VALUE_LENGTH) {
-            $encodedValue = substr($encodedValue, 0, static::MAX_VALUE_LENGTH);
+            // 编码后超长的复合值按字符截断为展示用字符串；截断结果不再是
+            // 合法 JSON，仅用于展示（MariaDB 读取端的类型还原对此原样放行）
+            $encodedValue = mb_strcut($encodedValue, 0, static::MAX_VALUE_LENGTH, 'UTF-8');
         }
         $this->value = $encodedValue;
         return $this;
@@ -150,7 +153,7 @@ class MetadataEntry implements \JsonSerializable
     public function setLabel(?string $label): static
     {
         if (is_string($label) && strlen($label) > static::MAX_LABEL_LENGTH) {
-            $label = substr($label, 0, static::MAX_LABEL_LENGTH);
+            $label = mb_strcut($label, 0, static::MAX_LABEL_LENGTH, 'UTF-8');
         }
         $this->label = $label;
         return $this;

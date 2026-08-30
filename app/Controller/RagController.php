@@ -21,6 +21,9 @@ class RagController extends AbstractController
     private const EXTRA_HOP_HEADERS = ['HTTP_X_FORWARDED_FOR', 'HTTP_X_REAL_IP', 'HTTP_FORWARDED'];
 
     private static ?RagSearch $search = null;
+    /** 单例创建时索引文件的 mtime；rag:build 通过 rename 原子替换索引文件后
+     * mtime 变化，此时丢弃旧单例重建连接，Web 进程无需重启即可用上新索引。 */
+    private static ?int $searchIndexMtime = null;
 
     /**
      * 进程级复用 RagSearch（含 SQLite PDO 连接），避免每个 MCP 请求重建连接。
@@ -31,10 +34,18 @@ class RagController extends AbstractController
      */
     private function getSearch(): RagSearch
     {
-        if (self::$search === null) {
+        $currentMtime = self::currentIndexMtime();
+        if (self::$search === null || self::$searchIndexMtime !== $currentMtime) {
             self::$search = new RagSearch(RagSearch::resolveDbPath());
+            self::$searchIndexMtime = $currentMtime;
         }
         return self::$search;
+    }
+
+    private static function currentIndexMtime(): ?int
+    {
+        $mtime = @filemtime(RagSearch::resolveDbPath());
+        return $mtime === false ? null : $mtime;
     }
 
     #[RequestMapping(path: '', methods: ['GET', 'POST'])]
@@ -54,7 +65,7 @@ class RagController extends AbstractController
         ));
         if (!$isLoopback || $proxied !== []) {
             $authorization = $this->request->getHeaderLine('Authorization');
-            if ($token === '' || $authorization !== 'Bearer ' . $token) {
+            if ($token === '' || !hash_equals('Bearer ' . $token, $authorization)) {
                 return $this->respondJson([
                     'jsonrpc' => '2.0',
                     'id' => null,

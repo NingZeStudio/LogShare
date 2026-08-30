@@ -10,7 +10,7 @@ class RedisCache extends RedisClient implements CacheInterface
     /**
      * @inheritDoc
      */
-    public static function Set(string $key, string $value, ?int $duration = null)
+    public static function Set(string $key, string $value, ?int $duration = null): void
     {
         self::opSet($key, $value, $duration);
     }

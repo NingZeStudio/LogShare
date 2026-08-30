@@ -66,10 +66,16 @@ class Log
         $result = null;
 
         if ($this->isCacheEnabled()) {
-            try {
-                $result = $this->loadFromRedis();
-            } catch (\Exception $e) {
-                \App\Syslog::error("Redis", "缓存读取失败: " . $e->getMessage());
+            if ($this->isDeletedTombstoned()) {
+                // 墓碑存在：该 id 已被删除但当时缓存删除失败，残留缓存不可信，
+                // 跳过缓存读取直接回源（主存储已删，正确返回不存在）
+                \App\Syslog::error("Redis", "命中删除墓碑，跳过缓存: " . $this->getRedisCacheKey());
+            } else {
+                try {
+                    $result = $this->loadFromRedis();
+                } catch (\Exception $e) {
+                    \App\Syslog::error("Redis", "缓存读取失败: " . $e->getMessage());
+                }
             }
         }
 
@@ -80,7 +86,7 @@ class Log
             $storage = $config['storages'][$this->id->getStorage()]['class'];
             $result = $storage::Get($this->id);
 
-            if ($result !== null && $this->isCacheEnabled()) {
+            if ($result !== null && $this->isCacheEnabled() && !$this->isDeletedTombstoned()) {
                 $filesBytes = array_sum(array_map(
                     fn($file) => isset($file['size']) ? (int) $file['size'] : strlen($file['data'] ?? ''),
                     $result['files'] ?? []
@@ -131,11 +137,18 @@ class Log
      * Codex 的 detect+parse+analyse 对大型日志成本高昂（~2.5s/3.5MB），同一内容的
      * 重复分析（如 GET /v1/insights/{id} 反复访问）应命中缓存，避免重复全量分析。
      *
+     * 容量约束：条数上限 + 总字节预算 + 单条字节上限。分析 JSON 体积与日志内容
+     * 成正比，Swoole 常驻进程内存只增不还，不限字节会让 32 条大分析占满 worker 内存。
+     *
      * @var array<string, string>
      */
     private static array $analysisJsonCache = [];
 
     private const MAX_ANALYSIS_JSON_CACHE = 32;
+    private const MAX_ANALYSIS_JSON_ENTRY_BYTES = 4 * 1024 * 1024;
+    private const MAX_ANALYSIS_JSON_TOTAL_BYTES = 32 * 1024 * 1024;
+
+    private static int $analysisJsonCacheBytes = 0;
 
     /**
      * 返回 Codex 分析结果的 JSON 字符串（含进程级缓存）。
@@ -144,7 +157,11 @@ class Log
     {
         $key = md5((string) $this->data);
         if (isset(self::$analysisJsonCache[$key])) {
-            return self::$analysisJsonCache[$key];
+            $json = self::$analysisJsonCache[$key];
+            // LRU 语义：命中后重插到尾部，避免热条目被 FIFO 挤出
+            unset(self::$analysisJsonCache[$key]);
+            self::$analysisJsonCache[$key] = $json;
+            return $json;
         }
 
         $codexLog = $this->get();
@@ -157,10 +174,18 @@ class Log
             throw new ApiError(500, 'Failed to encode analysis result: ' . json_last_error_msg());
         }
 
-        if (count(self::$analysisJsonCache) >= self::MAX_ANALYSIS_JSON_CACHE) {
-            array_shift(self::$analysisJsonCache);
+        $jsonBytes = strlen($json);
+        if ($jsonBytes <= self::MAX_ANALYSIS_JSON_ENTRY_BYTES) {
+            while (self::$analysisJsonCache !== []
+                && (count(self::$analysisJsonCache) >= self::MAX_ANALYSIS_JSON_CACHE
+                    || self::$analysisJsonCacheBytes + $jsonBytes > self::MAX_ANALYSIS_JSON_TOTAL_BYTES)) {
+                $evicted = array_key_first(self::$analysisJsonCache);
+                self::$analysisJsonCacheBytes -= strlen(self::$analysisJsonCache[$evicted]);
+                unset(self::$analysisJsonCache[$evicted]);
+            }
+            self::$analysisJsonCache[$key] = $json;
+            self::$analysisJsonCacheBytes += $jsonBytes;
         }
-        self::$analysisJsonCache[$key] = $json;
 
         return $json;
     }
@@ -318,8 +343,16 @@ class Log
 
         if (!empty($files)) {
             $filteredFiles = [];
-            foreach ($files as $file) {
-                $filteredContent = $this->preFilterValue($file['data'] ?? '');
+            foreach ($files as $index => $file) {
+                $rawContent = $file['data'] ?? '';
+                // LogController 会把 files[0] 复制为主 content：此时主 content 已
+                // 经过整条过滤链 + 反混淆，直接复用，避免同一内容重复过滤且保证
+                // 两处存储内容一致
+                if ($index === 0 && $rawContent === $data) {
+                    $filteredContent = $this->data;
+                } else {
+                    $filteredContent = $this->preFilterValue($rawContent);
+                }
                 $filteredFiles[] = [
                     'name' => $file['name'] ?? '',
                     'data' => $filteredContent,
@@ -337,7 +370,7 @@ class Log
         $storage = $config['storages'][$config['storageId']]['class'];
 
         $this->id = $storage::Put($this->data, $this->token, $this->metadata, $this->source, $this->files);
-        $this->exists = true;
+        $this->exists = $this->id !== null;
 
         if ($this->id !== null && $this->isCacheEnabled()) {
             $filesBytes = array_sum(array_map(fn($file) => strlen($file['data']), $this->files));
@@ -455,15 +488,41 @@ class Log
             $this->data = null;
         }
 
-        if ($this->isCacheEnabled()) {
+        // 仅在主存储删除成功后清理缓存；删除失败时写墓碑标记（TTL 与缓存一致），
+        // 防止残留缓存在 TTL 窗口内继续返回已删日志
+        if ($result && $this->isCacheEnabled()) {
             try {
                 $this->deleteFromRedisCache();
             } catch (\Exception $e) {
                 \App\Syslog::error("Redis", "缓存删除失败: " . $e->getMessage());
+                try {
+                    $this->deleteFromRedisCache();
+                } catch (\Exception $retry) {
+                    \App\Syslog::error("Redis", "缓存删除重试失败，写入墓碑标记: " . $retry->getMessage());
+                    try {
+                        $ttl = (int) (Config::Get('cache')['ttl'] ?? 1800);
+                        \App\Cache\RedisCache::Set($this->getRedisCacheKey() . ':deleted', '1', $ttl);
+                    } catch (\Exception $tombstone) {
+                        \App\Syslog::error("Redis", "墓碑标记写入失败: " . $tombstone->getMessage());
+                    }
+                }
             }
         }
 
         return $result;
+    }
+
+    /**
+     * 检查该日志 id 是否带有删除墓碑标记
+     */
+    private function isDeletedTombstoned(): bool
+    {
+        try {
+            return \App\Cache\RedisCache::Exists($this->getRedisCacheKey() . ':deleted');
+        } catch (\Exception $e) {
+            // Redis 不可用时墓碑不可读，交给回源判定
+            return false;
+        }
     }
 
     /**

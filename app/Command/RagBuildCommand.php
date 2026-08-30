@@ -41,7 +41,9 @@ class RagBuildCommand extends HyperfCommand
             $stats = $rag->stats();
         } catch (\Throwable $e) {
             $this->error('构建失败: ' . $e->getMessage());
-            return;
+            // 返回非零退出码：CI 与启动脚本（rag:build && start）必须能感知
+            // 索引构建失败，否则坏索引会被静默当成构建成功
+            return self::FAILURE;
         }
 
         $embeddedNote = $result['embedded'] > 0
@@ -54,5 +56,6 @@ class RagBuildCommand extends HyperfCommand
             $stats['chunks'],
             $embeddedNote
         ));
+        return self::SUCCESS;
     }
 }

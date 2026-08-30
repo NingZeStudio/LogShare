@@ -39,12 +39,20 @@ def main() -> int:
             print(f"[down] {vid} ({size}MB)")
             data = urllib.request.urlopen(url, timeout=120).read()
             fd, part = tempfile.mkstemp(prefix=f".{vid}.", suffix=".part", dir=OUT)
+            closed = False
             try:
                 with os.fdopen(fd, "wb") as f:
                     f.write(data)
+                closed = True  # fdopen 的 with 块已关闭 fd
                 os.replace(part, target)
             except Exception:
-                os.close(fd)
+                # 仅当 fdopen 尚未接管（或接管后异常已自行关闭）时兜底关闭，
+                # 避免二次 close 抛 EBADF 掩盖原始网络错误
+                if not closed:
+                    try:
+                        os.close(fd)
+                    except OSError:
+                        pass
                 try:
                     os.unlink(part)
                 except FileNotFoundError:

@@ -52,9 +52,12 @@ class AIClient
 
         foreach ($keys as $apiKey) {
             $emitted = false;
-            $retried = false;
+            $retries = 0;
 
-            retry:
+            // 同 key 空流重试用内层 while 实现（取代 goto retry）：
+            // continue = 同 key 重试；break = 放弃本 key，外层 foreach 换下一 key；
+            // break 2 = 成功或已向客户端 emit 过内容，彻底退出重试。
+            while (true) {
             try {
                 $payload = self::buildPayload($messages, $config['model'], $tools);
                 $buffer = '';
@@ -200,9 +203,9 @@ class AIClient
                     \App\Syslog::error('AI Client', 'Stream rate limited, switching key');
                     if ($emitted) {
                         // 已向客户端 emit 了部分内容，换 key 重试会造成重复输出，直接失败
-                        break;
+                        break 2;
                     }
-                    continue;
+                    break;
                 }
                 // httpCode=0 绝不是成功：连接中断/上游静默断流时 curlError 可能为空，
                 // 旧逻辑把 0 放行导致「空流 + 静默 done」的假成功
@@ -260,8 +263,12 @@ class AIClient
                 unset($call);
                 $onToolCalls($toolCalls, $fullReasoning);
                 $onDone($fullContent, !empty($toolCalls));
-                break;
+                break 2;
 
+            } catch (\App\Exception\ClientDisconnectedException $e) {
+                // 断连必须原样传播：SseWriter 已无法写入，LogAgent 需要据此直接
+                // 中止循环，而不是被包装成「密钥失败」后继续换 key / emitError
+                throw $e;
             } catch (\Exception $e) {
                 $lastException = $e;
                 // 只记录 key 指纹，避免可识别前缀进入日志
@@ -270,15 +277,16 @@ class AIClient
 
                 if ($emitted) {
                     // 已向客户端 emit 了部分内容，换 key 重试会造成重复输出，直接失败
-                    break;
+                    break 2;
                 }
                 // 空流/HTTP 0 等偶发故障：原 key 重试一次，避免首次连接预热问题
-                if (!$retried && str_contains($e->getMessage(), 'empty stream')) {
-                    $retried = true;
+                if ($retries === 0 && str_contains($e->getMessage(), 'empty stream')) {
+                    $retries++;
                     \App\Syslog::error('AI Client', "Key {$keyPrefix} 空流，重试一次");
-                    goto retry;
+                    continue;
                 }
-                continue;
+                break;
+            }
             }
         }
 
@@ -334,8 +342,11 @@ class AIClient
                     \App\Sse\SseWriter::end();
                 }
             );
+        } catch (\App\Exception\ClientDisconnectedException $e) {
+            // 客户端已断开：无法再写任何 SSE 帧，记日志后静默中止
+            \App\Syslog::error('AI Client', '客户端已断开，分析中止: ' . $e->getMessage());
         } catch (\Exception $e) {
-            \App\Sse\SseWriter::write("event: error\ndata: " . json_encode(['error' => $e->getMessage()], JSON_UNESCAPED_UNICODE) . "\n\n");
+            \App\Sse\SseWriter::write("event: error\ndata: " . json_encode(['error' => $e->getMessage()], JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE) . "\n\n");
             \App\Sse\SseWriter::end();
         }
     }

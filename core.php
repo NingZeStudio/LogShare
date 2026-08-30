@@ -18,6 +18,9 @@ if (is_file($dotenvPath)) {
         [$name, $value] = explode('=', $line, 2);
         $name = trim($name);
         $value = trim($value);
+        // 不支持行内注释语法（`FOO=bar # comment` 的 # 会被并入值）；如需注释请整行书写。
+        // 这里仍剥离未加空格直接跟在值后的 "#" 之后内容可能误伤合法值（如 URL 片段），
+        // 故不做行内剥离，仅在注释中声明限制。
         if ($name !== '' && getenv($name) === false) {
             putenv($name . '=' . trim($value, "\\\"'"));
         }

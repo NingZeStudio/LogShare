@@ -7,6 +7,9 @@ use App\Data\Token;
 
 class FilesystemStorage implements StorageInterface
 {
+    /** 单次 CleanupExpired 最多检查的文件数，限制请求路径内的清理工作量 */
+    private const CLEANUP_BATCH = 500;
+
     public static function Put(string $data, ?Token $token = null, array $metadata = [], ?string $source = null, ?array $files = null): ?\App\Id
     {
         $config = \App\Config::Get("filesystem");
@@ -19,9 +22,14 @@ class FilesystemStorage implements StorageInterface
         $id = new \App\Id();
         $id->setStorage("f");
 
+        // 用 O_EXCL 语义（fopen 'x'）原子占位，防止并发下 rename 静默覆盖已有日志
+        $path = $basePath . $id->getRaw();
         do {
             $id->regenerate();
-        } while (file_exists($basePath . $id->getRaw()));
+            $path = $basePath . $id->getRaw();
+            $placeholder = @fopen($path, 'x');
+        } while ($placeholder === false);
+        fclose($placeholder);
 
         $document = [
             'data' => $data,
@@ -51,8 +59,14 @@ class FilesystemStorage implements StorageInterface
             ));
         }
 
-        $path = $basePath . $id->getRaw();
-        self::writeAtomically($path, $document);
+        try {
+            self::writeAtomically($path, $document);
+        } catch (\Throwable $e) {
+            // 占位文件已存在，写正文失败时清干净，避免留下空文件
+            @unlink($path);
+            @unlink($path . '.meta.json');
+            throw $e;
+        }
         self::writeAtomically($path . '.meta.json', ['created' => $document['created']]);
         return $id;
     }
@@ -87,7 +101,7 @@ class FilesystemStorage implements StorageInterface
         ];
     }
 
-    private static function readCreated(string $path, array $document): ?int
+    private static function readCreated(string $path, ?array $document): ?int
     {
         $meta = $path . '.meta.json';
         if (is_file($meta)) {
@@ -135,9 +149,11 @@ class FilesystemStorage implements StorageInterface
     }
 
     /**
-     * Delete expired log files. Files whose `created` timestamp is older than
-     * `storage.storageTime` are removed. Falls back to file mtime for documents
-     * without a `created` field.
+     * Delete expired log files. A document's `created` timestamp is resolved
+     * the same way as in `Get()` (`.meta.json` first — written/updated by
+     * `Renew()` — then the embedded field, then file mtime), so renewed logs
+     * are not treated as expired. Processes at most self::CLEANUP_BATCH files
+     * per call to bound the work done inside a request.
      *
      * @return int Number of deleted files
      */
@@ -155,19 +171,20 @@ class FilesystemStorage implements StorageInterface
             return 0;
         }
 
-        foreach (glob($basePath . '*') ?: [] as $file) {
+        $files = glob($basePath . '*') ?: [];
+        foreach (array_slice($files, 0, self::CLEANUP_BATCH) as $file) {
             if (!is_file($file)) {
                 continue;
             }
 
             $content = @file_get_contents($file);
             $document = $content !== false ? json_decode($content, true) : null;
-            $created = is_array($document) && isset($document['created'])
-                ? (int) $document['created']
-                : @filemtime($file);
+            $created = self::readCreated($file, is_array($document) ? $document : null)
+                ?? @filemtime($file);
 
             if ($created > 0 && $created + $storageTime < $now) {
                 @unlink($file);
+                @unlink($file . '.meta.json');
                 $deleted++;
             }
         }
@@ -185,7 +202,10 @@ class FilesystemStorage implements StorageInterface
             return false;
         }
 
-        return unlink($path);
+        $deleted = unlink($path);
+        // 主文档删除成功时同步清理伴随的元数据文件，避免残留孤儿
+        @unlink($path . '.meta.json');
+        return $deleted;
     }
 
     /**

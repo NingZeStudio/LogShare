@@ -420,9 +420,14 @@ class RagSearch
      * @var array<string, array{expires: int, results: array}>
      */
     private static array $semanticCache = [];
+    /** @var array<string, int> 每条缓存条目的序列化字节数（增量维护） */
+    private static array $semanticCacheSizes = [];
+    private static int $semanticCacheBytes = 0;
     private const SEMANTIC_CACHE_TTL = 60;
     private const SEMANTIC_CACHE_MAX = 64;
     private const SEMANTIC_CACHE_MAX_BYTES = 1048576;
+    /** 向量余弦扫描的单批行数，控制一次性载入内存的向量总量 */
+    private const VECTOR_SCAN_BATCH = 5000;
 
     private function applySemanticEnhancement(string $query, array $lexical, int $k): array
     {
@@ -445,12 +450,22 @@ class RagSearch
         }
 
         $entry = ['expires' => time() + self::SEMANTIC_CACHE_TTL, 'results' => $results];
-        while (self::$semanticCache !== [] && (count(self::$semanticCache) >= self::SEMANTIC_CACHE_MAX || strlen(serialize(self::$semanticCache)) + strlen(serialize($entry)) > self::SEMANTIC_CACHE_MAX_BYTES)) {
-            array_shift(self::$semanticCache);
+        $entryBytes = strlen(serialize($entry));
+        if ($entryBytes > self::SEMANTIC_CACHE_MAX_BYTES) {
+            return $results;
         }
-        if (strlen(serialize($entry)) <= self::SEMANTIC_CACHE_MAX_BYTES) {
-            self::$semanticCache[$cacheKey] = $entry;
+        // 每条 entry 记录自身字节数并累加，淘汰时 O(1) 扣减；
+        // 旧实现对整个缓存反复 serialize 计算字节数，为 O(n²)
+        while (self::$semanticCache !== []
+            && (count(self::$semanticCache) >= self::SEMANTIC_CACHE_MAX
+                || self::$semanticCacheBytes + $entryBytes > self::SEMANTIC_CACHE_MAX_BYTES)) {
+            $evicted = array_key_first(self::$semanticCache);
+            self::$semanticCacheBytes -= self::$semanticCacheSizes[$evicted] ?? 0;
+            unset(self::$semanticCache[$evicted], self::$semanticCacheSizes[$evicted]);
         }
+        self::$semanticCache[$cacheKey] = $entry;
+        self::$semanticCacheSizes[$cacheKey] = $entryBytes;
+        self::$semanticCacheBytes += $entryBytes;
 
         return $results;
     }
@@ -505,33 +520,45 @@ class RagSearch
      */
     private function topByCosine(array $queryVec, int $limit): array
     {
-        $rows = $this->pdo->query(
-            "SELECT e.rowid, e.vec FROM doc_embeddings e"
-        )->fetchAll();
-
         $qNorm = self::norm($queryVec);
         $dim = count($queryVec);
         $scored = [];
         $dimensionMismatchSeen = false;
-        foreach ($rows as $row) {
-            $vec = self::unpackVector((string) $row['vec']);
-            if ($vec === []) {
-                continue;
+        $scanStmt = $this->pdo->prepare("SELECT e.rowid, e.vec FROM doc_embeddings e LIMIT ? OFFSET ?");
+        $batchSize = self::VECTOR_SCAN_BATCH;
+        $offset = 0;
+        // 分批扫描向量：万级 chunk × 千维向量一次全量载入会占用数十 MB，
+        // LIMIT/OFFSET 分批 + 逐批释放控制内存峰值
+        while (true) {
+            $scanStmt->execute([$batchSize, $offset]);
+            $batchRows = $scanStmt->fetchAll();
+            if ($batchRows === []) {
+                break;
             }
-            if (count($vec) !== $dim) {
-                // 历史向量与当前 embedding 模型维度不一致（如切换模型后未重建索引）
-                $dimensionMismatchSeen = true;
-                continue;
+            $offset += count($batchRows);
+            foreach ($batchRows as $row) {
+                $vec = self::unpackVector((string) $row['vec']);
+                if ($vec === []) {
+                    continue;
+                }
+                if (count($vec) !== $dim) {
+                    // 历史向量与当前 embedding 模型维度不一致（如切换模型后未重建索引）
+                    $dimensionMismatchSeen = true;
+                    continue;
+                }
+                $dot = 0.0;
+                foreach ($queryVec as $i => $qv) {
+                    $dot += $qv * $vec[$i];
+                }
+                $vNorm = self::norm($vec);
+                if ($qNorm == 0.0 || $vNorm == 0.0) {
+                    continue;
+                }
+                $scored[] = ['rowid' => (int) $row['rowid'], 'sim' => $dot / ($qNorm * $vNorm)];
             }
-            $dot = 0.0;
-            foreach ($queryVec as $i => $qv) {
-                $dot += $qv * $vec[$i];
+            if (count($batchRows) < $batchSize) {
+                break;
             }
-            $vNorm = self::norm($vec);
-            if ($qNorm == 0.0 || $vNorm == 0.0) {
-                continue;
-            }
-            $scored[] = ['rowid' => (int) $row['rowid'], 'sim' => $dot / ($qNorm * $vNorm)];
         }
 
         if ($dimensionMismatchSeen) {
@@ -544,11 +571,12 @@ class RagSearch
 
         usort($scored, fn($a, $b) => $b['sim'] <=> $a['sim']);
 
+        // prepare 提到循环外，避免同一 SQL 重复编译
+        $metaStmt = $this->pdo->prepare("SELECT title, body, source FROM docs WHERE rowid = ?");
         $hits = [];
         foreach (array_slice($scored, 0, $limit) as $s) {
-            $meta = $this->pdo->prepare("SELECT title, body, source FROM docs WHERE rowid = ?");
-            $meta->execute([$s['rowid']]);
-            $row = $meta->fetch();
+            $metaStmt->execute([$s['rowid']]);
+            $row = $metaStmt->fetch();
             if ($row === false) {
                 continue;
             }

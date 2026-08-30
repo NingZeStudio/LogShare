@@ -30,6 +30,10 @@ class CorsMiddleware implements MiddlewareInterface
         return $response
             ->withHeader('Access-Control-Allow-Origin', '*')
             ->withHeader('Access-Control-Allow-Headers', '*')
-            ->withHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+            ->withHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS')
+            // 减少浏览器对同一接口的高频重复预检（SSE/上传场景每请求一次
+            // OPTIONS 的开销可观）；Vary: Origin 为将来收紧 Origin 时的 CDN 缓存留路
+            ->withHeader('Access-Control-Max-Age', '86400')
+            ->withHeader('Vary', 'Origin');
     }
 }

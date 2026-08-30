@@ -32,6 +32,10 @@ class MCPClient
         $this->timeout = $timeout;
         $this->connectTimeout = $connectTimeout;
 
+        // SSRF 防护信任边界：本客户端的 URL 全部来自服务端配置（ai.mcp.*），
+        // 不接收用户输入。此处仅拦截 IP 字面量指向私网/保留段；域名字面量解析到
+        // 内网地址、DNS rebinding 不在防护范围内——若未来把 URL 来源扩展为用户
+        // 可控输入，必须补充「解析后 IP 校验」并禁用重定向跟随。
         if (in_array($host, ['127.0.0.1', '::1', 'localhost'], true)) {
             return;
         }

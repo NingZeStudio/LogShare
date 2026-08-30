@@ -153,11 +153,14 @@ test('FilesystemStorage CleanupExpired removes expired logs only', function () {
     $idExpired = FilesystemStorage::Put('expired', null, [], null);
     $idFresh = FilesystemStorage::Put('fresh', null, [], null);
 
-    // Backdate the expired document's created field
+    // Backdate the expired document's created field. The .meta.json must be
+    // backdated too: it is the authoritative `created` source (Renew updates
+    // only the meta), so a fresh meta means "renewed" and must NOT be removed.
     $path = $this->tmpDir . '/' . $idExpired->getRaw();
     $doc = json_decode(file_get_contents($path), true);
     $doc['created'] = time() - 7200;
     file_put_contents($path, json_encode($doc));
+    file_put_contents($path . '.meta.json', json_encode(['created' => time() - 7200]));
 
     $deleted = FilesystemStorage::CleanupExpired();
     expect($deleted)->toBe(1);
@@ -166,4 +169,29 @@ test('FilesystemStorage CleanupExpired removes expired logs only', function () {
     expect(FilesystemStorage::Get($idFresh))->not->toBeNull();
 
     FilesystemStorage::Delete($idFresh);
+});
+
+test('FilesystemStorage renewed log is not removed by CleanupExpired (S1 regression)', function () {
+    $data = $this->dataProp->getValue();
+    $data['filesystem']['path'] = substr($this->tmpDir, strlen(CORE_PATH)) . '/';
+    $data['storage']['storageTime'] = 3600;
+    $this->dataProp->setValue(null, $data);
+
+    $id = FilesystemStorage::Put('renewed', null, [], null);
+    expect(FilesystemStorage::Renew($id))->toBeTrue();
+
+    // 模拟真实场景：Put 时的 created 已滑出 TTL 窗口，但 Renew 更新过 meta
+    // （meta 优先于主文档内嵌字段），因此清理必须跳过该文件
+    $path = $this->tmpDir . '/' . $id->getRaw();
+    $doc = json_decode(file_get_contents($path), true);
+    $doc['created'] = time() - 7200;
+    file_put_contents($path, json_encode($doc));
+
+    expect(FilesystemStorage::CleanupExpired())->toBe(0);
+    expect(FilesystemStorage::Get($id))->not->toBeNull();
+
+    // meta 也滑出窗口后，文档才真正过期
+    file_put_contents($path . '.meta.json', json_encode(['created' => time() - 7200]));
+    expect(FilesystemStorage::CleanupExpired())->toBe(1);
+    expect(FilesystemStorage::Get($id))->toBeNull();
 });
