@@ -165,6 +165,16 @@ local function fresh()
     return w
 end
 
+-- 干净环境 + compile 不可用（resty.core.re 缺失的真实场景）：
+-- 验证规则匹配自动回退到原生 ngx.re.find 字符串路径，拦截功能不失效
+local function fresh_without_compile()
+    ngx.shared.litewaf = newdict()
+    ngx.re.compile = nil
+    local w = dofile(LUA_PATH)
+    w.init()
+    return w
+end
+
 -- 输出 JSON 的辅助：调用 stats() 并返回 SAID
 local function stats_json(w, uri, page)
     ngx.var.uri = uri
@@ -392,6 +402,19 @@ do
     js = stats_json(w, "/security/stats")
     ok(js and js:find('"top_ips"', 1, true) ~= nil, "stats 含 top_ips")
     ok(js and js:find('"n":3', 1, true) ~= nil, "同前缀 IP 脱敏后聚合计数正确")
+end
+
+-- T24 compile 不可用（resty.core.re 缺失，线上真实事故场景）：
+-- get_rules 必须回退字符串路径，拦截功能完整可用
+do
+    local w = fresh_without_compile()
+    local r = request({ uri = "/?id=1 UNION", hit = true, ip = "19.1.1.1" })
+    ok(r.blocked and r.status == 403, "compile 不可用时回退字符串路径仍拦截")
+    ok(w._rules_compiled() == nil, "回退路径不产生编译缓存（直接使用原始规则表）")
+    -- 恢复 compile 供后续用例使用
+    ngx.re.compile = function(_, flags)
+        return { find = function(_, s) return hit(s) end }, nil
+    end
 end
 
 print(fail == 0 and "全部通过" or (fail .. " 项失败"))
