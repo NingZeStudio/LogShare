@@ -256,6 +256,10 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          # 冒烟测试经 nginx 挂载 OpenLiteWaf（submodule）的 Lua 文件，
+          # 必须一并检出，否则挂载源为空目录导致 WAF/统计页全部失效
+          submodules: recursive
 
       - name: Build Image
         run: docker compose -f docker/compose.yaml build

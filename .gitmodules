@@ -1,0 +1,3 @@
+[submodule "OpenLiteWaf"]
+	path = OpenLiteWaf
+	url = https://github.com/NingZeStudio/OpenLiteWaf.git
