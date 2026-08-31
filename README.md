@@ -2,7 +2,7 @@
 
 LogShare 是一个 Minecraft / Hytale 日志分析与分享平台。使用者通过 HTTP 接口上传服务端或客户端日志，获得一个可分享的短链接；系统在上传时自动识别日志类型与服务端版本，执行敏感信息脱敏，并借助 Aternos Codex 解析引擎与 SpinYarn 混淆映射反解，输出结构化的诊断结果。在此之上，平台提供可选的 AI 分析能力：LogAgent 智能体由大模型驱动工具循环，可自主调用网络搜索、内置知识库检索（RAG）与日志文件读取工具，并以 SSE 流式输出思维链与结论。
 
-服务端为 Hyperf 3.2 常驻进程，运行于 Swoole 6.2 协程运行时，要求 PHP 8.4 及以上。存储后端支持 MariaDB 与文件系统二选一，Redis 作为可选的缓存与限流层。当前版本 v1.7.3-hotfix.1，更新记录见 [`CHANGELOG.md`](CHANGELOG.md)。
+服务端为 Hyperf 3.2 常驻进程，运行于 Swoole 6.2 协程运行时，要求 PHP 8.4 及以上。存储后端支持 MariaDB 与文件系统二选一，Redis 作为可选的缓存与限流层。当前版本 v1.7.4，更新记录见 [`CHANGELOG.md`](CHANGELOG.md)。
 
 ## 环境要求
 
