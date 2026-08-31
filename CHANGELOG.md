@@ -1,5 +1,34 @@
 # Changelog
 
+## 1.7.4 — 2026-08-30
+
+### 新功能
+
+- **LiteWAF v1.1.0**：规则扩充至 63 条（新增 `rce` 命令执行类目、12 种扫描器 UA、druid/nacos/jenkins/solr 等管理后台探测路径）；检查范围新增完整解码 URL（含 query，堵住 `%20` 编码绕过）与请求体扫描（POST/PUT/PATCH 前 64KB，日志内容端点豁免）；`python-httpx` 等常规客户端 UA 不再误伤
+- **公开安全统计页重做**（`/security`）：总览卡片、最近 60 分钟拦截趋势图、类别分布、来源 IP Top（脱敏）、攻击日志分页（`/security/logs`，环形 500 条，每页 50 条，`token=` 参数自动打码）；拦截页重设计为卡片组件（iframe 友好，按特征命中/CC 超限/封禁期区分文案）
+- **AI 工具轮次上限**默认值调整为 50
+
+### 修复
+
+- **LiteWAF 线上完全不拦截**：签名匹配依赖 `ngx.re.compile`（lua-resty-core FFI API，非原生），resty.core 未加载时 access 阶段报 nil 中止；现模块主动加载 `resty.core.re`，缺失时自动回退原生 `ngx.re.find` 字符串匹配路径
+- **文件存储续期后仍被过期清理删除**（数据丢失）：`CleanupExpired` 改用与 `Get()` 一致的 `created` 时间源（`.meta.json` 优先），续期日志不再误删；`Delete` 同步清理元数据文件
+- **构建镜像泄漏 `.env`**：`.dockerignore` 排除 `.env`、`.github`、`docs/` 等非运行时文件，生产密钥不再进入镜像层
+- **`read_log_file` 续读与防重复拦截自相矛盾**：仅在完整读取时置已读标记，offset/行区间续读正常工作
+- **分析缓存锁在异常路径不释放**：改 `finally` 无条件释放，互斥不再失效
+- **SSE 客户端断开后 Agent 循环不中止**：`SseWriter` 检测底层写失败抛 `ClientDisconnectedException`，上层立即停止工具循环，不再浪费上游 API 配额
+- **`rag:build` 后 Web 进程沿用旧索引**：`RagController` 按 `filemtime` 检测索引替换，重建后自动生效
+- **`rag:build` 失败退出码为 0**：返回 FAILURE，CI 与启动脚本可感知
+- **CI 冒烟证书域名硬编码**：改为从 `default.conf` 动态提取
+- **`release.yaml` 脚本注入**：commit message 改经环境变量中转
+- **`ai.sh` 错误事件被吞**：修复恒 false 的 error 检测条件与子 shell 状态丢失
+- `content[]=` 类型污染返回 400 而非 500；`IPv6ShortFilter` 正则失败不再 500；删除日志时缓存删除失败写墓碑标记，杜绝已删日志在 TTL 内可读；URL 上传分析路径错误消息不再双重转义
+
+### 改进
+
+- **全仓库代码审查修复**（详见 `CRCLASH.md`）：共 63 项——存储层（ID 冲突重试、metadata 类型两端对齐、过期清理分批）、过滤链（safe 包装降级可观测、token 过滤器补无引号形态、UUID 预检精准化）、AI/RAG（RagSearch 语义缓存 O(n²) 修复、向量分批扫描、topics 进程级缓存、`hash_equals`）、WAF 与边缘（chunked body 扫描、nginx worker_connections/resolver/HSTS/http2）、部署（compose 镜像 pin、统一日志上限、SpinYarn 构建产物清理、rag:build 启动降级）
+- 历史过程文档（迁移计划、审查报告、排障记录）归档至 `docs/`
+- README / API.md / LiteWAF/README 重写为开发者文档风格
+
 ## 1.7.3-hotfix.1 — 2026-08-25
 
 ### 修复
