@@ -14,7 +14,7 @@ rag/index.db
 rag/public
 docker
 tests
-LiteWAF
+OpenLiteWaf
 README.md
 CHANGELOG.md
 CRCLASH.md

@@ -1,5 +1,5 @@
--- LiteWAF 逻辑回归测试（Lua 5.1，stub ngx 运行真实模块代码）
--- 用法：lua5.1 LiteWAF/tests/litewaf_logic_test.lua
+-- OpenLiteWaf 逻辑回归测试（Lua 5.1，stub ngx 运行真实模块代码）
+-- 用法：lua5.1 OpenLiteWaf/tests/openlitewaf_logic_test.lua
 -- 覆盖：白名单、CC 窗口与封禁、封禁 TTL 到期解封、特征命中与 S1 前缀绕过防护、
 -- 统计页跳过语义、计数器、统计页输出、请求体检查与豁免、
 -- 攻击日志写入/容量/分页、封禁槽位（活跃封禁数近似）、趋势计数。
@@ -14,7 +14,7 @@ local function ok(cond, name)
     end
 end
 
-local LUA_PATH = debug.getinfo(1, "S").source:gsub("^@", ""):gsub("[^/]+$", "") .. "../lua/litewaf.lua"
+local LUA_PATH = debug.getinfo(1, "S").source:gsub("^@", ""):gsub("[^/]+$", "") .. "../lua/openlitewaf.lua"
 
 -- ── 共享 dict mock（支持 TTL 惰性过期）──
 local NOW = 1000000.0
@@ -90,7 +90,7 @@ ngx = {
         get_body_file = function() return nil end,
         get_method = function() return REQ_METHOD end,
     },
-    shared = { litewaf = newdict() },
+    shared = { openlitewaf = newdict() },
     var = {},
     header = {},
     status = nil,
@@ -153,13 +153,13 @@ local function request(opts)
         blocked = blocked,
         status = ngx.status,
         body = SAID,
-        dict = ngx.shared.litewaf,
+        dict = ngx.shared.openlitewaf,
     }
 end
 
 -- 干净环境（新 dict + 新模块副本），用于体检查/日志/封禁槽位等独立场景
 local function fresh()
-    ngx.shared.litewaf = newdict()
+    ngx.shared.openlitewaf = newdict()
     local w = dofile(LUA_PATH)
     w.init()
     return w
@@ -168,7 +168,7 @@ end
 -- 干净环境 + compile 不可用（resty.core.re 缺失的真实场景）：
 -- 验证规则匹配自动回退到原生 ngx.re.find 字符串路径，拦截功能不失效
 local function fresh_without_compile()
-    ngx.shared.litewaf = newdict()
+    ngx.shared.openlitewaf = newdict()
     ngx.re.compile = nil
     local w = dofile(LUA_PATH)
     w.init()
@@ -192,7 +192,7 @@ end
 
 -- T1 init 记录启动时间
 waf.init()
-ok(ngx.shared.litewaf:get("c:start_epoch") == NOW, "init 记录启动时间")
+ok(ngx.shared.openlitewaf:get("c:start_epoch") == NOW, "init 记录启动时间")
 
 -- 惰性编译：init 阶段不持有编译结果（ngx.re.compile 在 init 阶段不可用），
 -- 首次请求走 get_rules() 完成 worker 级编译；匹配行为由后续用例覆盖。
@@ -258,7 +258,7 @@ ok(js and js:find('"blocked_total"', 1, true) ~= nil and js:find('"trends"', 1, 
 
 -- T12 统计页 HTML
 js = stats_json(waf, "/security")
-ok(js and js:find("LiteWAF 安全统计", 1, true) ~= nil, "HTML 统计页输出成功")
+ok(js and js:find("OpenLiteWaf 安全统计", 1, true) ~= nil, "HTML 统计页输出成功")
 ok(js and js:find("/security/logs", 1, true) ~= nil, "HTML 含日志分页脚本引用")
 
 -- T13 S1 回归：/security 前缀变体必须走特征检查，不得绕过
@@ -296,7 +296,7 @@ do
         body = 'EVIL {"q":"<script>alert(1)</script>"}', evil = true, ip = "14.1.1.1",
     })
     ok(r.blocked and r.status == 403, "body 命中特征返回 403")
-    ok(counter(ngx.shared.litewaf, "sqli") == 1, "body 命中计入类目")
+    ok(counter(ngx.shared.openlitewaf, "sqli") == 1, "body 命中计入类目")
     js = stats_json(w, "/security/logs", "1")
     ok(js and js:find('"total":1', 1, true) ~= nil, "body 命中写入攻击日志")
     ok(NOW == before, "体检查不推进时钟")
@@ -310,7 +310,7 @@ do
         body = 'EVIL {"q":"<script>alert(1)</script>"}', evil = true, ip = "14.2.1.1",
     })
     ok(not r.blocked, "日志端点 body 豁免（业务误报防护）")
-    ok(counter(ngx.shared.litewaf, "total") == 1, "豁免请求仍计入 total")
+    ok(counter(ngx.shared.openlitewaf, "total") == 1, "豁免请求仍计入 total")
 end
 
 -- T18 body 尺寸超限跳过检查
@@ -386,7 +386,7 @@ end
 do
     local w = fresh()
     request({ uri = "/?id=1 UNION", hit = true, ip = "16.1.1.1" })
-    ok(ngx.shared.litewaf:get("m:" .. math.floor(NOW / 60)) == 1, "分钟桶计数写入")
+    ok(ngx.shared.openlitewaf:get("m:" .. math.floor(NOW / 60)) == 1, "分钟桶计数写入")
     js = stats_json(w, "/security/stats")
     ok(js and js:find('"trends"', 1, true) ~= nil, "stats 含趋势数组")
 end

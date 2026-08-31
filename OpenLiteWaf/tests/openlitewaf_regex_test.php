@@ -1,9 +1,9 @@
-# LiteWAF 规则正误样本回归测试（PHP PCRE 与 OpenResty ngx.re 同源）
-# 用法：php LiteWAF/tests/litewaf_regex_test.php
+# OpenLiteWaf 规则正误样本回归测试（PHP PCRE 与 OpenResty ngx.re 同源）
+# 用法：php OpenLiteWaf/tests/openlitewaf_regex_test.php
 
 <?php
 $fail = 0;
-$luaFile = __DIR__ . '/../lua/litewaf.lua';
+$luaFile = __DIR__ . '/../lua/openlitewaf.lua';
 $lua = file_get_contents($luaFile);
 if (!preg_match('/-- RULES-BEGIN(.*?)-- RULES-END/s', $lua, $m)) {
     exit("未找到 RULES-BEGIN/END 标记\n");
@@ -21,7 +21,7 @@ foreach ($raw as $r) {
 }
 echo '已加载规则数：' . count($rules) . "\n";
 
-// 与 litewaf.lua 一致的匹配语义：按规则表顺序，命中即停；
+// 与 openlitewaf.lua 一致的匹配语义：按规则表顺序，命中即停；
 // URI 请求先查原始 request_uri（编码形态），未命中再查完整解码形态（与生产双 subject 一致）
 function first_hit(array $rules, string $subject): ?string {
     foreach ($rules as $rule) {
