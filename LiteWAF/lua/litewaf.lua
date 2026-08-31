@@ -30,8 +30,6 @@ local CONFIG = {
     cc = { window = 10, limit = 240, ban = 600 },
     -- 命中攻击特征后的封禁秒数
     sig_ban = 600,
-    -- 警告页是否回显规则类目（便于误报定位；不希望向攻击者泄露规则覆盖面可设为 false）
-    expose_rule = true,
     -- 攻击日志容量（环形槽位，最新覆盖最旧）
     log_capacity = 500,
     -- 攻击日志每页条数
@@ -136,11 +134,10 @@ local WARN_HTML = [==[
 <style>
 *,*::before,*::after{margin:0;padding:0;box-sizing:border-box}
 #waf-block{min-height:100vh;display:flex;justify-content:flex-start;align-items:center;background:#f1f5f9;padding:30px 24px;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale}
-.widget{background:#fff;max-width:560px;width:100%;padding:28px 28px 24px;border-radius:16px;box-shadow:0 20px 60px rgba(0,0,0,.08),0 8px 24px rgba(0,0,0,.04);border:1px solid rgba(226,232,240,.6);transition:box-shadow .2s ease}
-.widget:hover{box-shadow:0 24px 72px rgba(0,0,0,.12),0 8px 28px rgba(0,0,0,.06)}
+.widget{background:#fff;max-width:560px;width:100%;padding:28px 28px 24px;border-radius:16px;border:1px solid rgba(226,232,240,.6)}
 .row-main{display:flex;align-items:center;gap:20px}
 .icon-triangle{flex-shrink:0;display:flex;align-items:center;justify-content:center;line-height:0}
-.icon-triangle svg{width:56px;height:56px;display:block;filter:drop-shadow(0 3px 8px rgba(234,88,12,.15))}
+.icon-triangle svg{width:56px;height:56px;display:block}
 .text-group{display:flex;flex-direction:column;gap:6px}
 .title{font-size:26px;font-weight:600;color:#0f172a;line-height:1.3;letter-spacing:-.01em}
 .title .highlight{color:#ea580c;font-weight:700}
@@ -149,7 +146,6 @@ local WARN_HTML = [==[
 .sub .brand strong{color:#ea580c;font-weight:700}
 .sub a{color:inherit;text-decoration:none;cursor:pointer}
 .sub a:hover{opacity:.6}
-.waf-meta{margin-top:10px;font-size:12px;color:#94a3b8}
 @media (max-width:480px){#waf-block{padding:20px 16px}.widget{padding:20px 18px 18px}.row-main{gap:14px}.icon-triangle svg{width:44px;height:44px}.title{font-size:22px}.sub{font-size:15px}}
 @media (max-width:380px){#waf-block{padding:16px 14px}.widget{padding:16px 14px 14px}.row-main{gap:12px;align-items:flex-start}.icon-triangle svg{width:36px;height:36px}.title{font-size:19px}.sub{font-size:14px}}
 </style>
@@ -158,12 +154,7 @@ local WARN_HTML = [==[
     <div class="row-main">
       <div class="icon-triangle" role="img" aria-label="警告三角">
         <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-          <defs>
-            <filter id="shadow" x="-10%" y="-10%" width="120%" height="120%">
-              <feDropShadow dx="0" dy="2" stdDeviation="4" flood-color="#ea580c" flood-opacity="0.18" />
-            </filter>
-          </defs>
-          <path d="M12 2L1 21H23L12 2Z" stroke="#ea580c" stroke-width="2" stroke-linejoin="round" filter="url(#shadow)" />
+          <path d="M12 2L1 21H23L12 2Z" stroke="#ea580c" stroke-width="2" stroke-linejoin="round" />
           <path d="M12 9V14" stroke="#ea580c" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" />
           <circle cx="12" cy="18" r="1.5" fill="#ea580c" />
         </svg>
@@ -171,7 +162,6 @@ local WARN_HTML = [==[
       <div class="text-group">
         <div class="title">{{TITLE}}</div>
         <div class="sub"><span class="brand">安全与性能由<strong>LiteWaf</strong></span> 提供。<a href="mailto:lyl518@outlook.com">联系管理员</a></div>
-        <div class="waf-meta">LiteWAF v{{VERSION}} · {{REASON}}</div>
       </div>
     </div>
   </div>
@@ -433,22 +423,14 @@ local function deny(d, category)
         " rule=", category or "ban", " uri=", ngx.var.uri or "-")
     -- 标题按拦截状态区分：特征命中 / CC 频率 / 封禁期。高亮词随文案变化。
     local title
-    local reason
     if category == "cc" then
         title = '您的请求<span class="highlight">频率过高</span>。'
-        reason = "CC 请求频率超限"
     elseif category == nil then
         title = '您的访问已被<span class="highlight">临时封禁</span>。'
-        reason = "访问已被临时封禁"
     else
         title = '我们认为您的请求是<span class="highlight">恶意</span>的。'
-        reason = "恶意攻击特征"
     end
     local page = tpl_replace(WARN_HTML, "{{TITLE}}", title)
-    page = tpl_replace(page, "{{REASON}}", reason)
-    page = tpl_replace(page, "{{VERSION}}", _M._VERSION)
-    page = tpl_replace(page, "{{RULE}}",
-        CONFIG.expose_rule and (category or "ban") or "-")
     ngx.status = 403
     ngx.header.content_type = "text/html; charset=utf-8"
     ngx.say(page)
