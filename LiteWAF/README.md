@@ -22,7 +22,7 @@ LiteWAF/
 
 请求体检查只对 POST/PUT/PATCH 生效：带 `Content-Length` 的请求超过 2MB（大文件上传）直接跳过；chunked 请求没有 `Content-Length`，始终走读取路径。实际扫描范围为 body 的前 64KB——body 超出 nginx `client_body_buffer_size` 落盘时读文件头部。payload 置于 64KB 之后或拆入超过 2MB 的请求可以绕过，这是内存与 IO 成本上的取舍。日志上传端点（`/v1/log`、`/1/log`）整体豁免 body 检查：日志原文中出现攻击特征属于正常业务，做扫描会误伤；若新增接收任意文本的端点，应将其加入 `body_exempt_prefixes`。
 
-命中特征后，模块封禁该 IP（默认 600 秒）、按类目计数、写入攻击日志与分钟趋势，并返回 403 页面，页面包含拦截原因、模块版本与规则类目（`expose_rule` 设为 false 可隐藏类目）。
+命中特征后，模块封禁该 IP（默认 600 秒）、按类目计数、写入攻击日志与分钟趋势，并返回 403 页面（卡片组件，无页面外壳，支持 iframe 嵌入；拦截原因仅写入 nginx error log，不在页面上展示）。
 
 ## 统计页
 
@@ -87,7 +87,6 @@ OpenResty 默认开启 `lua_code_cache`，`git pull` 只更新磁盘文件，不
 | `log_field_max` | 160 | 攻击日志单字段（URI / UA）最大长度 |
 | `stats_prefix` | `/security` | 统计页前缀 |
 | `dict_name` | `litewaf` | 须与 `lua_shared_dict` 名一致 |
-| `expose_rule` | true | 警告页是否显示规则类目 |
 
 CC 阈值与 nginx 静态限速有联动关系：`limit_req`（PREACCESS 阶段，当前 30r/s burst=60）先于本模块（ACCESS 阶段）执行，超额请求以 503 丢弃、不进入计数，因此 `cc.limit` 折算（`limit / window`）必须低于 `limit_req` 速率，否则 CC 封禁不会触发。调整任一侧时检查另一侧。短时高频脉冲会被 `limit_req` 直接丢弃，不会计入 LiteWAF。
 
