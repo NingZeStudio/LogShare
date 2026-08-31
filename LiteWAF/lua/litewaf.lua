@@ -133,8 +133,7 @@ _M.RULES = {
 local WARN_HTML = [==[
 <style>
 *,*::before,*::after{margin:0;padding:0;box-sizing:border-box}
-#waf-block{min-height:100vh;display:flex;justify-content:flex-start;align-items:center;background:#f1f5f9;padding:30px 24px;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale}
-.widget{background:#fff;max-width:560px;width:100%;padding:28px 28px 24px;border-radius:16px;border:1px solid rgba(226,232,240,.6)}
+.widget{max-width:560px;width:100%;padding:28px 28px 24px;background:#fff;border:1px solid rgba(226,232,240,.6);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale}
 .row-main{display:flex;align-items:center;gap:20px}
 .icon-triangle{flex-shrink:0;display:flex;align-items:center;justify-content:center;line-height:0}
 .icon-triangle svg{width:56px;height:56px;display:block}
@@ -146,23 +145,21 @@ local WARN_HTML = [==[
 .sub .brand strong{color:#ea580c;font-weight:700}
 .sub a{color:inherit;text-decoration:none;cursor:pointer}
 .sub a:hover{opacity:.6}
-@media (max-width:480px){#waf-block{padding:20px 16px}.widget{padding:20px 18px 18px}.row-main{gap:14px}.icon-triangle svg{width:44px;height:44px}.title{font-size:22px}.sub{font-size:15px}}
-@media (max-width:380px){#waf-block{padding:16px 14px}.widget{padding:16px 14px 14px}.row-main{gap:12px;align-items:flex-start}.icon-triangle svg{width:36px;height:36px}.title{font-size:19px}.sub{font-size:14px}}
+@media (max-width:480px){.widget{padding:20px 18px 18px}.row-main{gap:14px}.icon-triangle svg{width:44px;height:44px}.title{font-size:22px}.sub{font-size:15px}}
+@media (max-width:380px){.widget{padding:16px 14px 14px}.row-main{gap:12px;align-items:flex-start}.icon-triangle svg{width:36px;height:36px}.title{font-size:19px}.sub{font-size:14px}}
 </style>
-<div id="waf-block">
-  <div class="widget">
-    <div class="row-main">
-      <div class="icon-triangle" role="img" aria-label="警告三角">
-        <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-          <path d="M12 2L1 21H23L12 2Z" stroke="#ea580c" stroke-width="2" stroke-linejoin="round" />
-          <path d="M12 9V14" stroke="#ea580c" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" />
-          <circle cx="12" cy="18" r="1.5" fill="#ea580c" />
-        </svg>
-      </div>
-      <div class="text-group">
-        <div class="title">{{TITLE}}</div>
-        <div class="sub"><span class="brand">安全与性能由<strong>LiteWaf</strong></span> 提供。<a href="mailto:lyl518@outlook.com">联系管理员</a></div>
-      </div>
+<div class="widget">
+  <div class="row-main">
+    <div class="icon-triangle" role="img" aria-label="警告三角">
+      <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <path d="M12 2L1 21H23L12 2Z" stroke="#ea580c" stroke-width="2" stroke-linejoin="round" />
+        <path d="M12 9V14" stroke="#ea580c" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" />
+        <circle cx="12" cy="18" r="1.5" fill="#ea580c" />
+      </svg>
+    </div>
+    <div class="text-group">
+      <div class="title">{{TITLE}}</div>
+      <div class="sub"><span class="brand">安全与性能由<strong>LiteWaf</strong></span> 提供。被误封了？<a href="mailto:lyl518@outlook.com">联系管理员</a>。</div>
     </div>
   </div>
 </div>
