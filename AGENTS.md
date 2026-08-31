@@ -10,6 +10,7 @@
 ## Setup and verification
 
 ```bash
+git submodule update --init --recursive   # OpenLiteWaf（边缘 WAF）以 submodule 引入，pull 部署后必须执行
 composer install
 cp Config.inc.example.php Config.inc.php
 composer test
