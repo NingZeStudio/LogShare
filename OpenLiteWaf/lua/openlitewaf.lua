@@ -1,9 +1,9 @@
--- LiteWAF — 极简 Nginx Lua WAF
+-- OpenLiteWaf — 极简 Nginx Lua WAF
 -- CC 防御 + 常见攻击特征拦截（SQL 注入 / XSS / 路径穿越 / 命令执行 / 探测扫描），
 -- 触发时返回 403 红色极简警告页；提供公开安全统计页（/security）：
 -- 实时拦截趋势图、类别分布、来源 IP Top（脱敏）、攻击日志分页（最近 500 条）、
 -- 当前封禁 IP 近似计数。
--- 文档与集成方式见 LiteWAF/README.md。
+-- 文档与集成方式见 OpenLiteWaf/README.md。
 
 local _M = { _VERSION = "1.1.0" }
 
@@ -12,7 +12,7 @@ local cjson = require "cjson.safe"
 -- ───────────────────────── 配置 ─────────────────────────
 local CONFIG = {
     -- shared dict 名称，须与 nginx.conf 中 lua_shared_dict 一致
-    dict_name = "litewaf",
+    dict_name = "openlitewaf",
     -- 公开统计页前缀：跳过特征匹配（仍受 CC 限流），HTML 为前缀本身，JSON 为前缀 + /stats 与 /logs
     stats_prefix = "/security",
     -- 完全白名单前缀：跳过所有检查（ACME HTTP-01 等）
@@ -159,7 +159,7 @@ local WARN_HTML = [==[
     </div>
     <div class="text-group">
       <div class="title">{{TITLE}}</div>
-      <div class="sub"><span class="brand">安全与性能由<strong>LiteWaf</strong></span> 提供。被误封了？<a href="mailto:lyl518@outlook.com">联系管理员</a>。</div>
+      <div class="sub"><span class="brand">安全与性能由<strong>OpenLiteWaf</strong></span> 提供。被误封了？<a href="mailto:lyl518@outlook.com">联系管理员</a>。</div>
     </div>
   </div>
 </div>
@@ -235,7 +235,7 @@ local function get_rules()
             local re, err = ngx.re.compile(rule[2], "ji")
             if not re then
                 -- 规则非法：警告并降级到 ngx.re.find 字符串缓存路径（沿用 "ijo"）
-                ngx.log(ngx.WARN, "[LiteWAF] invalid rule #" .. i .. " ("
+                ngx.log(ngx.WARN, "[OpenLiteWaf] invalid rule #" .. i .. " ("
                     .. rule[1] .. "): " .. tostring(err) .. "; fallback to string cache")
                 compiled_rules = nil
                 return _M.RULES
@@ -416,7 +416,7 @@ local function deny(d, category)
         bump_trend(d)
     end
     -- 服务端审计日志（含 IP，仅入 nginx error log，不影响统计页隐私约定）
-    ngx.log(ngx.WARN, "[LiteWAF] block ip=", ngx.var.remote_addr or "?",
+    ngx.log(ngx.WARN, "[OpenLiteWaf] block ip=", ngx.var.remote_addr or "?",
         " rule=", category or "ban", " uri=", ngx.var.uri or "-")
     -- 标题按拦截状态区分：特征命中 / CC 频率 / 封禁期。高亮词随文案变化。
     local title
@@ -516,7 +516,7 @@ local STATS_HTML = [==[<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>LiteWAF 安全统计</title>
+<title>OpenLiteWaf 安全统计</title>
 <style>
 body{font-family:system-ui,-apple-system,"PingFang SC",sans-serif;max-width:720px;margin:2.5rem auto;padding:0 1rem;color:#1f2937;background:#fafafa}
 h1{font-size:1.25rem;margin:0 0 1.2rem}
@@ -544,7 +544,7 @@ footer{color:#9ca3af;font-size:.75rem;margin-top:1.5rem;line-height:1.6}
 </style>
 </head>
 <body>
-<h1>LiteWAF 安全统计</h1>
+<h1>OpenLiteWaf 安全统计</h1>
 
 <div class="cards">
   <div class="card muted"><b id="st-req">–</b><span>累计请求</span></div>
@@ -573,7 +573,7 @@ footer{color:#9ca3af;font-size:.75rem;margin-top:1.5rem;line-height:1.6}
   <button id="pg-next">下一页</button>
 </div>
 
-<footer id="foot">LiteWAF · 计数保存在内存中，进程重启后清零 · 数据每 30 秒自动刷新</footer>
+<footer id="foot">OpenLiteWaf · 计数保存在内存中，进程重启后清零 · 数据每 30 秒自动刷新</footer>
 
 <noscript><p style="color:#b91c1c">此页面需要启用 JavaScript 才能展示统计数据。</p></noscript>
 
@@ -649,7 +649,7 @@ function fetchStats(){
     setText("st-blocked",j.blocked_total);
     setText("st-active",j.banned_active);
     setText("st-bantotal",j.banned_total);
-    el("foot").textContent="LiteWAF v"+j.version+" · 运行 "+j.uptime_seconds+" 秒 · 日志缓存 "+j.logs_total+" 条 · 计数保存在内存中，进程重启后清零 · 数据每 30 秒自动刷新";
+    el("foot").textContent="OpenLiteWaf v"+j.version+" · 运行 "+j.uptime_seconds+" 秒 · 日志缓存 "+j.logs_total+" 条 · 计数保存在内存中，进程重启后清零 · 数据每 30 秒自动刷新";
     drawTrend(j.trends);
     drawCats(j.blocked||{});
     drawTopIps(j.top_ips);
@@ -707,7 +707,7 @@ local function build_stats(d)
     end
 
     return {
-        name = "LiteWAF",
+        name = "OpenLiteWaf",
         version = _M._VERSION,
         uptime_seconds = math.floor(now - started),
         requests_total = c("total"),

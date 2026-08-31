@@ -48,9 +48,9 @@ docker compose -f docker/compose.yaml up -d --build
 
 完整的业务配置（推理密钥、语义 RAG 供应商、生产域名）通过挂载项目根目录的 `Config.inc.php` 注入容器，服务器上放置好该文件后执行上面的命令即可。该文件包含密钥，已被 Git 与 Docker 构建上下文排除，只需在服务器上手动放置，不要提交进仓库。挂载后 AI 配置以文件为准；`DB_*` 与 `REDIS_*` 的容器网络寻址仍由 compose 环境变量提供。
 
-Compose 定义五个服务：**nginx**（OpenResty 反向代理，对外监听 80/443，承载 LiteWAF 与 TLS 证书）；**hyperf**（应用主进程，仅在内部网络监听 9501，启动时自动构建 RAG 索引，构建采用临时数据库加原子替换，失败时保留旧索引）；**mariadb**（数据存储，表结构由 `docker/mariadb-init.sql` 在首次创建卷时初始化）；**mariadb-events**（在数据库可用后创建过期日志清理 Event）；**redis**（缓存与限流）。
+Compose 定义五个服务：**nginx**（OpenResty 反向代理，对外监听 80/443，承载 OpenLiteWaf 与 TLS 证书）；**hyperf**（应用主进程，仅在内部网络监听 9501，启动时自动构建 RAG 索引，构建采用临时数据库加原子替换，失败时保留旧索引）；**mariadb**（数据存储，表结构由 `docker/mariadb-init.sql` 在首次创建卷时初始化）；**mariadb-events**（在数据库可用后创建过期日志清理 Event）；**redis**（缓存与限流）。
 
-LiteWAF（`LiteWAF/`）是 nginx 容器内的 OpenResty Lua 模块，在反向代理层做按 IP 的固定窗口 CC 限速与封禁，以及 SQL 注入、XSS、路径穿越、命令执行、扫描器探测等特征检查；检查范围包括 URL（原始与解码形态）、User-Agent 和请求体（日志上传端点豁免），拦截时返回 403 页面。统计页 `https://<域名>/security`（JSON 汇总：`/security/stats`，攻击日志分页：`/security/logs`）展示内存计数与脱敏后的攻击记录，进程重启后清零。工作方式、配置与规则编写见 `LiteWAF/README.md`；改动 Lua 文件后执行 `docker compose -f docker/compose.yaml exec nginx nginx -s reload` 生效（`git pull` 只更新文件，不 reload 不生效）。应用层安全由 Hyperf 负责，参数化查询、输出转义与脱敏过滤链不依赖本模块。
+OpenLiteWaf（`OpenLiteWaf/`）是 nginx 容器内的 OpenResty Lua 模块，在反向代理层做按 IP 的固定窗口 CC 限速与封禁，以及 SQL 注入、XSS、路径穿越、命令执行、扫描器探测等特征检查；检查范围包括 URL（原始与解码形态）、User-Agent 和请求体（日志上传端点豁免），拦截时返回 403 页面。统计页 `https://<域名>/security`（JSON 汇总：`/security/stats`，攻击日志分页：`/security/logs`）展示内存计数与脱敏后的攻击记录，进程重启后清零。工作方式、配置与规则编写见 `OpenLiteWaf/README.md`；改动 Lua 文件后执行 `docker compose -f docker/compose.yaml exec nginx nginx -s reload` 生效（`git pull` 只更新文件，不 reload 不生效）。应用层安全由 Hyperf 负责，参数化查询、输出转义与脱敏过滤链不依赖本模块。
 
 ### HTTPS 证书
 
@@ -141,7 +141,7 @@ app/                      核心类库（App\ 命名空间）
 config/autoload/          Hyperf 框架配置（server、databases、middlewares 等）
 rag/                      内置 RAG：knowledge/ 静态知识库，index.db 索引（构建生成，勿提交）
 docker/                   Compose 编排、nginx 站点配置、镜像构建
-LiteWAF/                  边缘 WAF（OpenResty Lua，含独立文档与测试）
+OpenLiteWaf/                  边缘 WAF（OpenResty Lua，含独立文档与测试）
 Config.inc.php            全部配置（gitignored）
 Config.inc.example.php    配置模板
 AGENTS.md                 项目上下文文档（架构约定与协作规范）
@@ -164,7 +164,7 @@ docs/                     历史过程文档（迁移计划、审查报告、排
 
 ### 限速
 
-公开流量的限速由边缘承担：nginx `limit_req`（30r/s burst=60）与 LiteWAF 的 CC 封禁（10 秒窗口 240 次，超限封禁 IP 600 秒）。仓库中存在 `RateLimitMiddleware`（Redis INCR 按应用层计数，默认 600 次/60 秒，键为 IP + 方法 + 归一化路径，动态资源段折叠共享计数桶），但当前未注册到中间件链，属预留实现；如启用需注意其 Redis 故障路径为返回 503（fail-closed），与注释中的 fail-open 描述不符，见 `app/Middleware/RateLimitMiddleware.php`。
+公开流量的限速由边缘承担：nginx `limit_req`（30r/s burst=60）与 OpenLiteWaf 的 CC 封禁（10 秒窗口 240 次，超限封禁 IP 600 秒）。仓库中存在 `RateLimitMiddleware`（Redis INCR 按应用层计数，默认 600 次/60 秒，键为 IP + 方法 + 归一化路径，动态资源段折叠共享计数桶），但当前未注册到中间件链，属预留实现；如启用需注意其 Redis 故障路径为返回 503（fail-closed），与注释中的 fail-open 描述不符，见 `app/Middleware/RateLimitMiddleware.php`。
 
 ## 开发说明
 
@@ -176,7 +176,7 @@ composer test:architecture  # Pest 架构约束测试
 composer stan               # PHPStan 静态分析（level 5）
 ```
 
-测试覆盖过滤器、存储、上传解析、MCP 客户端、LogAgent 工具循环、RAG 检索、Controller 集成与架构约束。存储链路的集成测试需要本地 MariaDB 与 Redis（可用 `docker compose -f docker/compose.yaml up -d` 启动）。Termux 环境运行 PHPStan 需加前缀 `PHPSTAN_TURBO=0`。LiteWAF 有独立的回归测试，见 `LiteWAF/README.md`。
+测试覆盖过滤器、存储、上传解析、MCP 客户端、LogAgent 工具循环、RAG 检索、Controller 集成与架构约束。存储链路的集成测试需要本地 MariaDB 与 Redis（可用 `docker compose -f docker/compose.yaml up -d` 启动）。Termux 环境运行 PHPStan 需加前缀 `PHPSTAN_TURBO=0`。OpenLiteWaf 有独立的回归测试，见 `OpenLiteWaf/README.md`。
 
 ### 路由注册
 

@@ -298,7 +298,7 @@ jobs:
             docker compose -f docker/compose.yaml down
             exit 1
           fi
-          # LiteWAF 统计页（经 nginx 的 OpenResty Lua 直接响应）
+          # OpenLiteWaf 统计页（经 nginx 的 OpenResty Lua 直接响应）
           curl -skf https://localhost/security/stats || { echo '=== nginx 日志 ==='; docker compose -f docker/compose.yaml logs nginx; docker compose -f docker/compose.yaml down; exit 1; }
           echo "smoke test 通过"
           docker compose -f docker/compose.yaml down

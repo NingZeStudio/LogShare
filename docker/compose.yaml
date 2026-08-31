@@ -8,8 +8,8 @@ x-logging: &default-logging
 services:
   nginx:
     logging: *default-logging
-    # OpenResty = Nginx + lua-nginx-module，LiteWAF（../LiteWAF/）运行其上；
-    # 版本固定，升级时同步检查 LiteWAF/nginx/nginx.conf 与镜像内置配置的差异
+    # OpenResty = Nginx + lua-nginx-module，OpenLiteWaf（../OpenLiteWaf/）运行其上；
+    # 版本固定，升级时同步检查 OpenLiteWaf/nginx/nginx.conf 与镜像内置配置的差异
     image: openresty/openresty:1.27.1.2-alpine
     container_name: logshare-nginx
     ports:
@@ -17,9 +17,9 @@ services:
       - "443:443"
     volumes:
       - ./nginx:/etc/nginx/conf.d:ro
-      # LiteWAF：主配置（http 级 lua 指令）与 Lua 模块，详见 LiteWAF/README.md
-      - ../LiteWAF/nginx/nginx.conf:/usr/local/openresty/nginx/conf/nginx.conf:ro
-      - ../LiteWAF/lua:/usr/local/openresty/nginx/lua:ro
+      # OpenLiteWaf：主配置（http 级 lua 指令）与 Lua 模块，详见 OpenLiteWaf/README.md
+      - ../OpenLiteWaf/nginx/nginx.conf:/usr/local/openresty/nginx/conf/nginx.conf:ro
+      - ../OpenLiteWaf/lua:/usr/local/openresty/nginx/lua:ro
       - ./certs:/etc/letsencrypt:ro
       - ./acme:/var/www/acme:ro
     depends_on:
@@ -29,7 +29,7 @@ services:
     restart: unless-stopped
     healthcheck:
       # 探测 /security（nginx Lua 直接响应，不依赖 hyperf）。
-      # 探测会使 LiteWAF 累计请求计数每 30s +1，属预期行为
+      # 探测会使 OpenLiteWaf 累计请求计数每 30s +1，属预期行为
       test: ["CMD", "wget", "-q", "--spider", "--no-check-certificate", "https://127.0.0.1/security"]
       interval: 30s
       timeout: 10s
