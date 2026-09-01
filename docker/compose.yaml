@@ -20,6 +20,11 @@ services:
       # OpenLiteWaf：主配置（http 级 lua 指令）与 Lua 模块，详见 OpenLiteWaf/README.md
       - ../OpenLiteWaf/nginx/nginx.conf:/usr/local/openresty/nginx/conf/nginx.conf:ro
       - ../OpenLiteWaf/lua:/usr/local/openresty/nginx/lua:ro
+      # OpenLiteWaf 快照持久化目录（计数/攻击日志/封禁名单，重启恢复）
+      - ../OpenLiteWaf/data:/data/openlitewaf
+      # OpenLiteStats：站点访问统计，详见 OpenLiteStats/README.md
+      - ../OpenLiteStats/lua:/usr/local/openresty/nginx/lstats:ro
+      - ../OpenLiteStats/data:/data/openlitestats
       - ./certs:/etc/letsencrypt:ro
       - ./acme:/var/www/acme:ro
     depends_on:
