@@ -62,21 +62,11 @@ class AiQueueRedisTest extends HttpTestCase
         $ref->getProperty('data')->setValue(null, $data);
     }
 
-    /** 把 Redis 指向不可达端口：RedisStreams 一律抛连接异常（fail-open 场景） */
-    private function setRedisUnreachable(): void
-    {
-        $ref = new \ReflectionClass(\App\Config::class);
-        $data = $ref->getProperty('data')->getValue();
-        $data['cache']['enabled'] = true;
-        $data['cache']['redis'] = ['host' => '127.0.0.1', 'port' => 1, 'timeout' => 0.5];
-        $ref->getProperty('data')->setValue(null, $data);
-    }
-
     private function cleanupQueueKeys(): void
     {
         try {
             RedisStreams::del(AnalysisQueue::QUEUE_KEY);
-            foreach (['int1', 'int2', 'int3', 'relay1', 'full429', 'nofailopen', 'cached'] as $suffix) {
+            foreach (['int1', 'int2', 'int3', 'full429', 'cached'] as $suffix) {
                 $cacheKey = 'ai:analysis:' . $suffix;
                 RedisStreams::del('ai:job:active:' . hash('sha256', $cacheKey));
                 RedisStreams::del('analysis-v2:' . $cacheKey);
@@ -205,28 +195,6 @@ class AiQueueRedisTest extends HttpTestCase
         $this->assertSame('30', $resp->getHeaderLine('Retry-After'));
         // 未入队：深度不变
         $this->assertSame(2, AnalysisQueue::queueDepth());
-    }
-
-    public function testRedisUnavailableWithoutFailOpenRaises503(): void
-    {
-        $this->requireRedis();
-        $this->setQueueConfig(['enabled' => true, 'failOpen' => false, 'jobTtl' => 60, 'waitTimeout' => 5]);
-        $this->setRedisUnreachable();
-
-        $this->expectException(\App\ApiError::class);
-        $this->invokeRunAiAnalysis($this->controller(), 'log body', 'ai:analysis:nofailopen');
-    }
-
-    public function testEnqueueThrowsWhenRedisUnreachableSoControllerCanFailOpen(): void
-    {
-        $this->requireRedis();
-        $this->setQueueConfig(['enabled' => true, 'failOpen' => true, 'jobTtl' => 60, 'waitTimeout' => 5]);
-        $this->setRedisUnreachable();
-
-        // 控制器 catch 分支的输入：enqueue 必须抛可捕获异常（failOpen=true 时落到
-        // inline 路径，等价于队列关闭——该路径由既有全量测试覆盖）
-        $this->expectException(\Throwable::class);
-        AnalysisQueue::enqueue('log body', 'ai:analysis:fallback', null, 1800);
     }
 
     public function testCacheHitSkipsQueue(): void

@@ -26,13 +26,16 @@ beforeEach(function () {
     // ext-redis 存在时 RedisClient 走真实连接，mock 被整体旁路、跨用例状态互串。
     // 真 Redis 环境的同等语义由 tests/Integration/AiQueueRedisTest.php 覆盖。
     if (extension_loaded('redis')) {
-        test()->skip('本文件依赖 RedisMock；ext-redis 环境由 AiQueueRedisTest 覆盖');
+        $this->markTestSkipped('本文件依赖 RedisMock；ext-redis 环境由 AiQueueRedisTest 覆盖');
     }
     \Tests\Mocks\RedisMock::reset();
     $this->orig = queueOrigConfig();
 });
 
 afterEach(function () {
+    if (($this->orig ?? null) === null) {
+        return;
+    }
     [$prop, $orig] = $this->orig;
     $prop->setValue(null, $orig);
     \Tests\Mocks\RedisMock::reset();

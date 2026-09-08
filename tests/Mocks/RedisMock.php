@@ -181,12 +181,12 @@ class RedisMock
                 $entry = self::$streams[$key][$g['delivered']];
                 $g['delivered']++;
                 $g['pending'][$entry['id']] = ['consumer' => $consumer, 'at' => microtime(true)];
-                $entries[] = [$entry['id'] => $entry['fields']];
+                $entries[$entry['id']] = $entry['fields'];
             }
             unset($g);
             if ($entries !== []) {
-                // 与 phpredis 一致：外层为 [streamKey => entries] 的数字列表
-                $out[] = [$key => $entries];
+                // 与 phpredis 一致：[streamKey => [entryId => fields]]
+                $out[$key] = $entries;
             }
         }
         return $out;
@@ -201,14 +201,14 @@ class RedisMock
             $entries = [];
             foreach (self::$streams[$key] ?? [] as $entry) {
                 if (self::idSeq($entry['id']) > $fromSeq) {
-                    $entries[] = [$entry['id'] => $entry['fields']];
+                    $entries[$entry['id']] = $entry['fields'];
                     if (count($entries) >= $count) {
                         break;
                     }
                 }
             }
             if ($entries !== []) {
-                $out[] = [$key => $entries];
+                $out[$key] = $entries;
             }
         }
         return $out;
