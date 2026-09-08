@@ -62,6 +62,20 @@ final class AnalysisQueue
     }
 
     /**
+     * payload / active 映射 / 运行锁的存活秒数。
+     *
+     * 有排队超时（waitTimeout > 0）时取 jobTtl + waitTimeout，覆盖「排队等待 + 执行」
+     * 全程；无排队超时（waitTimeout <= 0）时中继端无限等待，jobTtl 本身即任务总寿命，
+     * 直接取 jobTtl（此时应把 jobTtl 配得足够长，如 15 天）。
+     */
+    public static function jobLifetime(): int
+    {
+        $cfg = self::config();
+        $wait = (int) $cfg['waitTimeout'];
+        return $wait > 0 ? (int) $cfg['jobTtl'] + $wait : (int) $cfg['jobTtl'];
+    }
+
+    /**
      * 与 inline 路径一致的缓存键：agent 路径用原键，legacy 路径带 analysis-v2: 前缀。
      * 生产者预检与消费者回源共用，避免两处前缀逻辑演化不一致。
      * agent 判定与 AbstractController::runAiAnalysis 同口径（宽松真值）。
@@ -100,8 +114,7 @@ final class AnalysisQueue
      */
     public static function enqueue(string $content, string $cacheKey, ?string $logId, int $cacheTTL): array
     {
-        $cfg = self::config();
-        $ttl = $cfg['jobTtl'] + $cfg['waitTimeout'];
+        $ttl = self::jobLifetime();
 
         $existing = RedisStreams::get(self::activeKey($cacheKey));
         if ($existing !== null && $existing !== '') {
@@ -131,7 +144,8 @@ final class AnalysisQueue
     }
 
     /**
-     * SSE 中继：把 job 事件流原样转发给客户端，直至 done/error 或 waitTimeout。
+     * SSE 中继：把 job 事件流原样转发给客户端，直至 done/error；
+     * waitTimeout > 0 时超时以 error 收尾，waitTimeout <= 0 表示无排队超时（无限等待）。
      *
      * 客户端断连（SseWriter 抛 ClientDisconnectedException）只结束中继，
      * 任务继续执行并写缓存；中继自身异常以 error 帧收尾，不向上逃逸。
@@ -148,9 +162,10 @@ final class AnalysisQueue
                 self::FRAME_JSON_FLAGS
             ) . "\n\n");
 
-            $deadline = time() + max(1, (int) $cfg['waitTimeout']);
+            $waitTimeout = (int) $cfg['waitTimeout'];
+            $deadline = $waitTimeout > 0 ? time() + $waitTimeout : null;
             $lastId = '0-0';
-            while (!$finished && time() < $deadline) {
+            while (!$finished && ($deadline === null || time() < $deadline)) {
                 $entries = RedisStreams::xRead($eventsKey, $lastId, 2000);
                 if ($entries === []) {
                     // 服务端未阻塞（测试 mock）时防空转
@@ -216,7 +231,7 @@ final class AnalysisQueue
         // job 级运行锁：XAUTOCLAIM 重投时原消费者可能仍在慢执行，锁被持有则跳过，
         // 条目保持 pending 等待下一轮回收，避免双跑与事件流交错。
         // TTL 覆盖 payload 生命周期：payload 过期后重投本就会被丢弃，锁无需更长。
-        if (!RedisStreams::setNxEx(self::runningKey($jobId), $entryId, $cfg['jobTtl'] + $cfg['waitTimeout'])) {
+        if (!RedisStreams::setNxEx(self::runningKey($jobId), $entryId, self::jobLifetime())) {
             return;
         }
 
