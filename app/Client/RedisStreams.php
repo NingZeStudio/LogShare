@@ -64,11 +64,55 @@ class RedisStreams extends RedisClient
     }
 
     /**
-     * XLEN：队列深度（近似排队位置的数据源）。
+     * XLEN：Stream 累计条目数（注意：XACK 不移除条目，此值不是「排队深度」）。
      */
     public static function xLen(string $key): int
     {
         return (int) self::connection()->xlen($key);
+    }
+
+    /**
+     * XPENDING summary：组内已投递未确认（in-flight）条目数。
+     */
+    public static function xPendingCount(string $key, string $group): int
+    {
+        $summary = self::connection()->xpending($key, $group);
+        return is_array($summary) ? (int) ($summary[0] ?? 0) : 0;
+    }
+
+    /**
+     * XINFO GROUPS：该消费组未投递（lag）条目数；组不支持 lag 字段时返回 null。
+     *
+     * @throws \Throwable 组不存在（NOGROUP）等 Redis 错误原样抛出
+     */
+    public static function xGroupLag(string $key, string $group): ?int
+    {
+        $groups = self::connection()->xinfo('GROUPS', $key);
+        if (!is_array($groups)) {
+            return null;
+        }
+        // phpredis 单组时可能直接返回该组的 map，统一成组列表遍历
+        $lists = isset($groups['name']) ? [$groups] : $groups;
+        foreach ($lists as $g) {
+            if (!is_array($g)) {
+                continue;
+            }
+            $pairs = [];
+            if (isset($g[0])) {
+                // 部分版本返回扁平数组 [field, value, field, value...]
+                for ($i = 0; $i + 1 < count($g); $i += 2) {
+                    if (is_string($g[$i])) {
+                        $pairs[$g[$i]] = $g[$i + 1];
+                    }
+                }
+            } else {
+                $pairs = $g;
+            }
+            if (($pairs['name'] ?? null) === $group && array_key_exists('lag', $pairs)) {
+                return $pairs['lag'] === null ? null : (int) $pairs['lag'];
+            }
+        }
+        return null;
     }
 
     /**

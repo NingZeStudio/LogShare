@@ -261,6 +261,56 @@ class RedisMock
         return (int) explode('-', $id)[0];
     }
 
+    public function xpending(string $key, string $group, ...$args): array
+    {
+        self::guard();
+        $gk = $key . '|' . $group;
+        if (!isset(self::$groups[$gk])) {
+            throw new \RuntimeException("NOGROUP No such consumer group '{$group}' for key name '{$key}'");
+        }
+        $g = self::$groups[$gk];
+        $ids = array_keys($g['pending']);
+        $perConsumer = [];
+        foreach ($g['pending'] as $info) {
+            $perConsumer[$info['consumer']] = ($perConsumer[$info['consumer']] ?? 0) + 1;
+        }
+        $consumers = [];
+        foreach ($perConsumer as $c => $n) {
+            $consumers[] = [$c, (string) $n];
+        }
+        // XPENDING summary：[count, min-id, max-id, [[consumer, count], ...]]
+        return [count($ids), $ids[0] ?? null, $ids ? end($ids) : null, $consumers];
+    }
+
+    public function xinfo(string $operation, string $key, ?string $arg = null): array
+    {
+        self::guard();
+        if (strtoupper($operation) !== 'GROUPS') {
+            throw new \RuntimeException('RedisMock: only GROUPS is supported');
+        }
+        if (!isset(self::$streams[$key])) {
+            throw new \RuntimeException('ERR no such key: ' . $key);
+        }
+        $total = count(self::$streams[$key]);
+        $out = [];
+        foreach (self::$groups as $gk => $g) {
+            [$gkey, $gname] = explode('|', $gk, 2);
+            if ($gkey !== $key) {
+                continue;
+            }
+            $out[] = [
+                'name' => $gname,
+                'consumers' => count(array_unique(array_column($g['pending'], 'consumer'))),
+                'pending' => count($g['pending']),
+                'last-delivered-id' => $g['delivered'] > 0 && isset(self::$streams[$key][$g['delivered'] - 1])
+                    ? self::$streams[$key][$g['delivered'] - 1]['id']
+                    : '0-0',
+                'lag' => max(0, $total - $g['delivered']),
+            ];
+        }
+        return $out;
+    }
+
     /** 测试辅助：直接读取事件流全部条目 [id, fields] */
     public static function peekStream(string $key): array
     {
