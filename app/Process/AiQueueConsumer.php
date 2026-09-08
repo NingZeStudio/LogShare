@@ -27,6 +27,9 @@ class AiQueueConsumer extends AbstractProcess
 
     /**
      * 队列关闭时不启动（App\Config 在 core.php 已加载，事件触发期读取安全）。
+     *
+     * @param mixed $server 父类签名透传的 Swoole Server；此处不使用，
+     *                      显式 mixed 以免静态分析环境（无 swoole 扩展）解析不到类型
      */
     public function isEnable($server): bool
     {

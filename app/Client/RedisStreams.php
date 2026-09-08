@@ -102,15 +102,34 @@ class RedisStreams extends RedisClient
     }
 
     /**
-     * 把 phpredis 的 [stream => [[id => fields], ...]] 回复拉平为 [id, fields] 列表。
+     * 把 phpredis 的流读取回复拉平为 [id, fields] 列表。
+     *
+     * phpredis 真实格式为外层数字列表：[ [streamKey => [ [id => fields], ... ]], ... ]；
+     * 兼容直接以 streamKey 为键的 map 形态（测试 mock）。
      */
     private static function flattenStreamReply(mixed $reply, string $key): array
     {
-        if (!is_array($reply) || !isset($reply[$key]) || !is_array($reply[$key])) {
+        if (!is_array($reply)) {
             return [];
         }
+
+        $entries = null;
+        if (isset($reply[$key]) && is_array($reply[$key])) {
+            $entries = $reply[$key];
+        } else {
+            foreach ($reply as $chunk) {
+                if (is_array($chunk) && isset($chunk[$key]) && is_array($chunk[$key])) {
+                    $entries = $chunk[$key];
+                    break;
+                }
+            }
+        }
+        if ($entries === null) {
+            return [];
+        }
+
         $out = [];
-        foreach ($reply[$key] as $entry) {
+        foreach ($entries as $entry) {
             if (!is_array($entry)) {
                 continue;
             }
