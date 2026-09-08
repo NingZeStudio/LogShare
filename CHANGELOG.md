@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.7.7 — 2026-09-08
+
+### 修复
+
+- **队列满判定口径错误导致误 429（线上事故）**：排队深度此前取 `XLEN`——Stream 的累计消息数，`XACK` 不删除条目，消费完毕深度也不下降，累计达到 `maxQueue` 后所有 AI 分析被永久 429；改用「未投递 lag + 在途 pending」真实深度（消费组未创建时保守回退 XLEN）
+- **`waitTimeout=0` 下 payload 过期任务让中继端永挂**：消费者发现任务载荷过期时补发 error 终态帧，等待中的 SSE 中继得以正常收尾
+
+### 新功能
+
+- **`ai.queue.waitTimeout` 支持无排队超时**：配为 `0` 或负数时中继端无限等待至 `done`/`error` 或客户端断开；此模式下任务总寿命即 `jobTtl`（新增 `AnalysisQueue::jobLifetime()` 统一 payload/活跃映射/运行锁三处 TTL 口径）
+
 ## 1.7.6 — 2026-09-08
 
 ### 修复
