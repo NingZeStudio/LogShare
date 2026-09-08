@@ -39,3 +39,21 @@ test('resolveMappingsDir resolves relative paths against project root', function
     expect($method->invoke(null, '/opt/spinyarn/mappings'))->toBe('/opt/spinyarn/mappings');
     expect($method->invoke(null, 'spinyarn/mappings'))->toBe(CORE_PATH . '/spinyarn/mappings');
 });
+test('supportsRedisArg is false when the extension is absent', function () {
+    if (function_exists('spinyarn_init')) {
+        $this->markTestSkipped('spinyarn 扩展已加载，缺席场景不适用');
+    }
+    $ref = new ReflectionClass(SpinYarnClient::class);
+    $method = $ref->getMethod('supportsRedisArg');
+    expect($method->invoke(null))->toBeFalse();
+});
+
+test('supportsRedisArg matches the loaded extension signature', function () {
+    if (!function_exists('spinyarn_init')) {
+        $this->markTestSkipped('需要 spinyarn 扩展');
+    }
+    $ref = new ReflectionClass(SpinYarnClient::class);
+    $method = $ref->getMethod('supportsRedisArg');
+    $expected = (new ReflectionFunction('spinyarn_init'))->getNumberOfParameters() >= 5;
+    expect($method->invoke(null))->toBe($expected);
+});

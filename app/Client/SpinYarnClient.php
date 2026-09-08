@@ -63,6 +63,28 @@ class SpinYarnClient
     }
 
     /**
+     * 已加载扩展的 spinyarn_init 是否接受第 5 个 redis_url 参数。
+     *
+     * v1.0.0（线上镜像 pin 版本）只声明 4 参、无 Redis 支持；redis_url 是
+     * main 分支未发布能力。对旧扩展盲传 5 参会抛 ArgumentCountError，被
+     * fail-open 捕获后整个进程生命周期反混淆永久停用（2026-09 线上故障根因）。
+     * 以反射探测签名，按版本适配传参。
+     */
+    private static function supportsRedisArg(): bool
+    {
+        static $supports = null;
+        if ($supports === null) {
+            try {
+                $rf = new \ReflectionFunction('spinyarn_init');
+                $supports = $rf->getNumberOfParameters() >= 5;
+            } catch (\Throwable $e) {
+                $supports = false;
+            }
+        }
+        return $supports;
+    }
+
+    /**
      * Lazily create (and reuse) the extension handle for this request.
      *
      * 协程安全性说明：Swoole 协程为单线程模型，`spinyarn_deobfuscate` 是同步
@@ -81,14 +103,30 @@ class SpinYarnClient
             $cacheMax = (int) ($config['cache_max_entries'] ?? 44);
             $cacheHigh = (int) ($config['cache_high_watermark'] ?? 40);
             $cacheLow = (int) ($config['cache_low_watermark'] ?? 30);
-            $redisUrl = self::resolveRedisUrl();
+            $configuredRedisUrl = self::resolveRedisUrl();
+            $redisUrl = self::supportsRedisArg() ? $configuredRedisUrl : null;
+
+            if ($configuredRedisUrl !== null && $redisUrl === null) {
+                // Redis 已配置但扩展签名不支持第 5 参：提示一次，按本地 LRU 模式继续
+                static $notified = false;
+                if (!$notified) {
+                    $notified = true;
+                    \App\Syslog::error("SpinYarn", "loaded spinyarn extension has no redis support (spinyarn_init takes 4 params); continuing with local LRU cache");
+                }
+            }
 
             try {
                 $handle = $redisUrl !== null
                     ? spinyarn_init($mappingsDir, $cacheMax, $cacheHigh, $cacheLow, $redisUrl)
                     : spinyarn_init($mappingsDir, $cacheMax, $cacheHigh, $cacheLow);
+                // redis 模式初始化被扩展拒绝（返回 false）：回退本地缓存模式，
+                // 缓存层缺失不应拖垮反混淆本身
+                if ($handle === false && $redisUrl !== null) {
+                    \App\Syslog::error("SpinYarn", "redis-backed init failed, retrying with local cache");
+                    $handle = spinyarn_init($mappingsDir, $cacheMax, $cacheHigh, $cacheLow);
+                }
             } catch (\Throwable $e) {
-                // 有意 fail-open：初始化失败（扩展缺失/映射目录不可读）后整个进程
+                // 有意 fail-open：初始化失败（映射目录不可读等）后整个进程
                 // 生命周期内反混淆降级为原样透传，不再重试——日志可读性降级优于
                 // 上传链路不可用。失败原因见 error log。
                 \App\Syslog::error("SpinYarn", "初始化失败: " . $e->getMessage());
