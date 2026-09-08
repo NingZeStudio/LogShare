@@ -185,7 +185,8 @@ class RedisMock
             }
             unset($g);
             if ($entries !== []) {
-                $out[$key] = $entries;
+                // 与 phpredis 一致：外层为 [streamKey => entries] 的数字列表
+                $out[] = [$key => $entries];
             }
         }
         return $out;
@@ -207,7 +208,7 @@ class RedisMock
                 }
             }
             if ($entries !== []) {
-                $out[$key] = $entries;
+                $out[] = [$key => $entries];
             }
         }
         return $out;
