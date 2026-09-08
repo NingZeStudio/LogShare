@@ -289,3 +289,148 @@ $data['ai']['rag'] = [
     expect($titles)->toContain('OOM 排查');
     expect($titles)->toContain('崩溃日志分析');
 });
+
+/* ─── topic 定向检索（Agentic RAG Plus） ─────────────────── */
+
+test('search filters by topic on FTS path', function () {
+    $pdo = $this->rag->getPdo();
+    $pdo->exec("INSERT INTO docs(title, body, source) VALUES
+        ('Mixin 注入失败', 'MixinApplyError raised during transform', 'patterns/mixin-apply-failed.md'),
+        ('Forge Mixin 文档', 'MixinApplyError also documented here', 'forge/mixin.md')");
+
+    $results = $this->rag->search('MixinApplyError', 5, 'patterns');
+
+    expect($results)->not->toBe([]);
+    foreach ($results as $r) {
+        expect($r['source'])->toStartWith('patterns/');
+    }
+});
+
+test('search filters by topic on LIKE path in AND and OR states', function () {
+    $pdo = $this->rag->getPdo();
+    // AND 态：两个词都在；OR 态：无文档同时含两词
+    $pdo->exec("INSERT INTO docs(title, body, source) VALUES
+        ('内存专题', '内存不足导致崩溃', 'patterns/oom.md'),
+        ('内存泄漏', '内存不足在 forge 侧', 'forge/mem.md'),
+        ('闪退', '只有闪退没有内存', 'misc/crash.md')");
+
+    $and = $this->rag->search('内存 不足', 5, 'patterns');
+    expect($and)->not->toBe([]);
+    foreach ($and as $r) {
+        expect($r['source'])->toStartWith('patterns/');
+    }
+
+    $or = $this->rag->search('内存 闪退', 5, 'patterns');
+    expect($or)->not->toBe([]);
+    foreach ($or as $r) {
+        expect($r['source'])->toStartWith('patterns/');
+    }
+});
+
+test('search topic null behaves like before', function () {
+    $pdo = $this->rag->getPdo();
+    $pdo->exec("INSERT INTO docs(title, body, source) VALUES
+        ('Mixin', 'MixinApplyError here', 'patterns/m.md'),
+        ('Mixin2', 'MixinApplyError there', 'forge/m.md')");
+
+    $before = array_column($this->rag->search('MixinApplyError', 5), 'source');
+    $null = array_column($this->rag->search('MixinApplyError', 5, null), 'source');
+    expect($null)->toBe($before);
+});
+
+test('search topic escaping prevents wildcard overreach', function () {
+    $pdo = $this->rag->getPdo();
+    $pdo->exec("INSERT INTO docs(title, body, source) VALUES
+        ('下划线目录', 'alpha content', 'weird_/dir_x.md'),
+        ('相似目录', 'alpha content', 'weirdx/a.md'),
+        ('其他', 'alpha content', 'wildcard/y.md')");
+
+    // '_' 被转义：weird_ 目录不得匹配 weirdx/
+    $results = $this->rag->search('alpha', 5, 'weird_');
+    expect($results)->not->toBe([]);
+    foreach ($results as $r) {
+        expect($r['source'])->toBe('weird_/dir_x.md');
+    }
+
+    // '%' 被转义：不存在字面名为 w% 的目录，不得退化为通配
+    expect($this->rag->search('alpha', 5, 'w%'))->toBe([]);
+});
+
+test('search topic invalid falls back safely', function () {
+    $empty = array_column($this->rag->search('OutOfMemoryError', 5, ''), 'source');
+    $slashes = array_column($this->rag->search('OutOfMemoryError', 5, '  /  '), 'source');
+    $null = array_column($this->rag->search('OutOfMemoryError', 5, null), 'source');
+    expect($empty)->toBe($null);
+    expect($slashes)->toBe($null);
+});
+
+test('topics returns description when registered', function () {
+    $pdo = $this->rag->getPdo();
+    $pdo->exec("INSERT INTO docs(title, body, source) VALUES
+        ('Mixin 注入失败', '正文', 'patterns/mixin-apply-failed.md')");
+
+    $topics = $this->rag->topics();
+    $patterns = array_values(array_filter($topics, fn($t) => $t['dir'] === 'patterns'));
+    expect($patterns)->toHaveCount(1);
+    expect($patterns[0]['description'])->toBeString()->not->toBe('');
+});
+
+test('topics falls back for unknown dir', function () {
+    $pdo = $this->rag->getPdo();
+    $pdo->exec("INSERT INTO docs(title, body, source) VALUES
+        ('X', '正文', 'zzz-unknown-dir/a.md')");
+
+    $topics = $this->rag->topics();
+    $unknown = array_values(array_filter($topics, fn($t) => $t['dir'] === 'zzz-unknown-dir'));
+    expect($unknown)->toHaveCount(1);
+    expect($unknown[0]['description'])->toBe('');
+    expect($unknown[0])->toHaveKeys(['dir', 'description', 'count', 'files']);
+});
+
+test('normalizeTopic shared normalization', function () {
+    expect(RagSearch::normalizeTopic('/patterns/'))->toBe('patterns');
+    expect(RagSearch::normalizeTopic('  patterns '))->toBe('patterns');
+    expect(RagSearch::normalizeTopic(''))->toBeNull();
+    expect(RagSearch::normalizeTopic('///'))->toBeNull();
+    expect(RagSearch::normalizeTopic(null))->toBeNull();
+
+    expect(fn() => RagSearch::normalizeTopic(str_repeat('x', 65)))->toThrow(InvalidArgumentException::class);
+    expect(fn() => RagSearch::normalizeTopic('a/../b'))->toThrow(InvalidArgumentException::class);
+    expect(fn() => RagSearch::normalizeTopic(['patterns']))->toThrow(InvalidArgumentException::class);
+});
+
+test('formatTopics output length bounded', function () {
+    $desc = (new ReflectionClass(RagSearch::class))->getConstant('TOPIC_DESCRIPTIONS');
+    $method = new ReflectionMethod(\App\Controller\RagController::class, 'formatTopics');
+
+    // fixture 对齐当前真实索引形态（28 目录、描述表全量、样本 2×24B 略高于实测均值）；
+    // 知识库增长（新目录/描述变长）超预算时此用例失败，强制显式决策
+    $topics = [];
+    foreach (array_keys($desc) as $dir) {
+        $topics[] = [
+            'dir' => $dir,
+            'description' => $desc[$dir],
+            'count' => 12,
+            'files' => [str_repeat('a', 24), str_repeat('b', 24)],
+        ];
+    }
+    $out = $method->invoke(null, $topics, ['chunks' => 2250]);
+    expect(strlen($out))->toBeLessThanOrEqual(5120);
+});
+
+test('topic descriptions cover all knowledge directories', function () {
+    $kbDir = CORE_PATH . '/rag/knowledge';
+    if (!is_dir($kbDir)) {
+        test()->skip('rag/knowledge not present in this checkout');
+    }
+
+    $desc = (new ReflectionClass(RagSearch::class))->getConstant('TOPIC_DESCRIPTIONS');
+    $dirs = array_values(array_filter(
+        scandir($kbDir),
+        fn($e) => $e !== '.' && $e !== '..' && is_dir($kbDir . '/' . $e)
+    ));
+
+    // 双向断言：漏登记目录 fail、描述表残留已删目录的 key 也 fail
+    expect(array_diff($dirs, array_keys($desc)))->toBe([]);
+    expect(array_diff(array_keys($desc), $dirs))->toBe([]);
+});

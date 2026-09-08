@@ -21,6 +21,14 @@ class LogAgent
     private const MAX_RETRIEVAL_RESULT_BYTES = 32000;
     private const STATUS_SUMMARY_BYTES = 400;
 
+    /**
+     * 检索预算的代码兜底（与提示词「检索策略」段的数字保持一致）：
+     * web_search_exa 是外部网络调用成本最高，超限硬拦截；
+     * rag_search 本地 FTS 成本低，合计达阈值只注入收敛提示（软）。
+     */
+    private const MAX_WEB_SEARCH_CALLS = 5;
+    private const MAX_TOTAL_RETRIEVAL_CALLS = 6;
+
     /** SSE 帧统一 JSON 编码 flags：非法 UTF-8 时替换为 U+FFFD，避免 json_encode 返回 false 产生空帧 */
     private const SSE_JSON_FLAGS = JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE;
 
@@ -188,11 +196,12 @@ class LogAgent
                 'type' => 'function',
                 'function' => [
                     'name' => 'web_search_exa',
-                    'description' => '搜索互联网，查找 Minecraft 报错信息、mod 兼容性等解决方案。返回与查询相关的网页内容。',
+                    'description' => '搜索互联网，查找知识库未覆盖的公开问题：新版本 mod/服务端兼容性、小众报错、官方公告等。'
+                        . '知识库检索无果后再使用；查询词与 rag_search 相同，使用错误类名或报错关键词原文。',
                     'parameters' => [
                         'type' => 'object',
                         'properties' => [
-                            'query' => ['type' => 'string', 'description' => '搜索关键词，使用错误类名或报错关键词'],
+                            'query' => ['type' => 'string', 'description' => '搜索关键词，使用错误类名或报错关键词原文'],
                         ],
                         'required' => ['query'],
                     ],
@@ -205,11 +214,15 @@ class LogAgent
                 'type' => 'function',
                 'function' => [
                     'name' => 'rag_search',
-                    'description' => '在内部知识库中检索相关文档片段。用于查找已知错误与解决方案。',
+                    'description' => '在内置知识库中检索已验证的实战资料。知识库覆盖：常见崩溃与故障模式（mixin 注入失败、内存不足、Java 版本错误等）、'
+                        . '移动端启动器生态实战案例蒸馏（FCL/Zalith/Amethyst/PGW/MobileGlues，含排障决策树）、三大日志文件格式解读、'
+                        . 'Fabric/Forge/NeoForge 与 PaperMC/Purpur/Geyser 等开发文档。日志中出现异常类名、崩溃特征或启动器相关问题时优先使用；'
+                        . '纯常识问题不必使用。返回带来源路径的文档片段，多数条目按「签名-含义-解决方案」组织。',
                     'parameters' => [
                         'type' => 'object',
                         'properties' => [
-                            'query' => ['type' => 'string', 'description' => '检索关键词'],
+                            'query' => ['type' => 'string', 'description' => '检索词。直接使用日志中的原文信号：英文异常类名或错误串（如 MixinApplyError、SIGSEGV、OutOfMemoryError），或中文症状关键词（如 内存不足、启动闪退）。不要翻译或改写异常类名。'],
+                            'topic' => ['type' => 'string', 'description' => '可选。限定在某个主题目录内检索（目录名来自 list_topics 的主题地图），如 "patterns"、"日志分析"。省略则全库检索。'],
                             'k' => ['type' => 'number', 'description' => '返回片段数量，默认 5'],
                         ],
                         'required' => ['query'],
@@ -220,7 +233,8 @@ class LogAgent
                 'type' => 'function',
                 'function' => [
                     'name' => 'list_topics',
-                    'description' => '列出内部知识库涵盖的主题与文档分布。在不知道检索方向、或搜索无结果时，先调用本工具了解知识库有什么，再针对性搜索。',
+                    'description' => '列出内置知识库的主题地图（目录、说明与内容样本）。不确定检索方向、或 rag_search 连续无结果时调用；'
+                        . '看完地图后应带着明确目标词去 rag_search（可配合 topic 参数定向），不要看完地图就停止分析。',
                     'parameters' => [
                         'type' => 'object',
                         'properties' => new \stdClass(),
@@ -268,12 +282,21 @@ class LogAgent
     {
         $system = $config['systemPrompt'] ?? self::defaultSystemPrompt($logId);
 
-        $system .= "\n\n强制执行规则（优先级高于其他分析习惯）：\n"
-            . "- 任何日志分析都必须先调用一次 rag_search；不得仅凭日志内容直接给出最终结论。\n"
-            . "- rag_search 返回无关或无结果时，必须换用错误关键词、异常类名、模组名或版本号再次调用。\n"
-            . "- 内部知识库仍无法确认时，必须调用 web_search_exa；只有检索完成后才能输出最终分析。\n"
-            . "- list_topics 仅用于了解知识库范围，不能替代 rag_search。\n"
-            . "- read_log_file 返回的主日志和附加日志均已经过与上传主日志相同的脱敏过滤；不得声称附加日志未脱敏，也不得要求用户重新提供其中的敏感信息。";
+        $system .= "\n\n检索策略（证据驱动）：\n"
+            . "- 先通读日志，提取具体信号：异常类名、模组名、启动器名、版本号、错误串原文。\n"
+            . "- 发起 rag_search 前先对照主题地图判断信号归属：明确报错条目 → 日志分析；通用崩溃模式（内存/Java 版本/mixin 等）→ patterns；启动器与渲染器问题 → 对应启动器 issue 蒸馏库（fcl-issues/zl2-issues/amc-issues/pgw-issues/mg-issues）与 renderers；mod 开发类 API 报错 → 对应 modloader 文档目录（fabric_develop/forge/neoforge 等）。地图上没有对应目录时全库检索，不要硬套目录。\n"
+            . "- 检索词直接用信号原词（英文异常类名/错误串原样保留，中文症状直接用中文），可配合 topic 参数限定目录。\n"
+            . "- 检索结果必须与日志中的异常真正对应才可采用；无关结果不进入分析。\n"
+            . "- 无结果时换词重试最多一次，按以下方向改写（选一，不要叠加）：① 长类名去包路径取简短类名（org.spongepowered...MixinApplyError → MixinApplyError）；② 英文异常类名与中文症状词互译（OutOfMemoryError → 内存不足）；③ 叠加限定词（模组名/加载器名/启动器名）；④ 改用其他目录或放大全库。仍无结果说明知识库未覆盖，改用 web_search_exa。\n"
+            . "- 预算按信息缺口计数：每个独立待核实的信号或问题，检索类调用不超过 2 次（信号原词 1 次 + 改写重试 1 次）；全对话 rag_search 与 web_search_exa 合计约 6 次时代码会注入收敛提示，此后应立即基于已有证据输出并标注未核实项。web_search_exa 全对话最多 5 次，超出将被工具直接拒绝。\n"
+            . "- 引用来源：知识库结论标注条目来源路径（检索结果自带）；网络结论标注返回内容中的 URL 或站点名。\n"
+            . "- 知识库结论与日志证据矛盾时，以日志为准；结论中注明哪些方面未能核实，不要臆测。\n"
+            . "- 附件中存在 crash-reports 类文件时，优先用 read_log_file 读取它：崩溃报告含完整堆栈、系统状态与 mod 列表，信息密度高于 latest.log 尾部；主日志仅用于补充崩溃报告未覆盖的时间线。\n"
+            . "- read_log_file 返回的主日志和附加日志均已经过与上传主日志相同的脱敏过滤；不得声称附加日志未脱敏，也不得要求用户重新提供其中的敏感信息。\n\n"
+            . "示例（正确的检索路径）：\n"
+            . "日志片段「Caused by: org.spongepowered.asm.mixin.transformer.MixinApplyError: ...」\n"
+            . "→ 调用 rag_search(query: \"MixinApplyError\") → 命中 patterns/mixin-apply-failed.md，条目含签名与修复步骤\n"
+            . "→ 直接基于日志与该条目给出结论，不再追加检索。";
 
         if ($topicsText !== '') {
             $system .= "\n\n以下是你可检索的内部知识库所涵盖的主题（帮助判断检索方向）：\n" . $topicsText;
@@ -361,17 +384,18 @@ class LogAgent
     private static function defaultSystemPrompt(?string $logId): string
     {
         $prompt = <<<PROMPT
-你是一个专业的 Minecraft 服务器日志分析助手。你的任务是分析玩家提交的日志，定位问题并提供解决方案。
+你是一个专业的 Minecraft 服务器日志分析助手。你的任务是分析玩家提交的日志，定位问题并提供解决方案。用户正在实时等待分析结果，追求速度、适可而止：日志内容本身通常已包含定位问题所需的全部证据，通读后若足以形成结论，直接开始分析并输出，不要为了求稳而追加工具调用。每次调用工具前先自问：这个结果会改变结论吗？不会就不要调用。
 
 工作方式：
 1. 如需查看日志文件，先用 `list_log_files` 查看有哪些文件，然后调用 `read_log_file`。默认不传范围参数以读取完整文件；需要聚焦局部内容时，由你传入 `line_start` 和 `line_end` 指定行区间。超大内容需要续读时，使用返回的 `next_offset`。
-2. 调用 `rag_search` 之前，必须先调用 `list_topics` 了解知识库涵盖的主题与文档分布，据此选择贴合知识库的关键词检索；首次检索无结果时也应回看主题列表换词重试。知识库查不到的公开问题，再用 `web_search_exa` 搜索网络。
-3. 若知识库检索结果被截断（出现"…"或"已截断"标记），基于被截断处再次检索补全，不需要重复读取文件。
+2. 若知识库检索结果被截断（出现"…"或"已截断"标记），基于被截断处再次检索补全，不需要重复读取文件。
 
 重要停止规则：
 - 不要在已经有完整日志内容的情况下再次调用 `read_log_file`，重复调用会被拒绝并浪费预算。
 - 严禁使用相同的 `read_log_file` 参数调用两次；已读取内容可直接用于分析。
 - 当某一个工具调用能覆盖全部问题时，不要再发起新的工具调用；应直接给出结论。
+- 整个分析一般 2 至 4 轮工具调用即可完成（指工具循环轮次；检索类调用的次数预算见检索策略，两者是不同维度）；接近这个量级时优先收敛，基于已有证据给出结论，检索与文件读取都是服务于结论的手段，不是必须走完的流程。
+- 文件工具失败或超时时，最多重试一次；仍不行就跳过它，基于现有证据继续分析，并在结论中说明哪些方面未能核实。不要反复重试，更不要因个别工具不可用而搁置结论。
 
 回答使用简体中文，结构清晰。全程禁止使用 emoji 或表情符号。
 PROMPT;
@@ -436,12 +460,26 @@ PROMPT;
         try {
             switch ($name) {
                 case 'web_search_exa':
+                    // 硬拦截：达上限不再发起 MCP 调用；拦截分支不累加计数
+                    // （避免超限后计数器无限增长）
+                    if ($session->webSearchCalls >= self::MAX_WEB_SEARCH_CALLS) {
+                        return '网络搜索次数已达本次分析上限。请基于已有证据完成分析，未能核实的信息在结论中明确标注。';
+                    }
+                    $session->webSearchCalls++;
                     $endpoint = $mcp['webSearch'] ?? [];
                     return self::callMcpTool('web_search_exa', $arguments, $endpoint, $session);
 
                 case 'rag_search':
+                    $session->ragSearchCalls++;
                     $endpoint = $mcp['rag'] ?? [];
-                    return self::callMcpTool('rag_search', $arguments, $endpoint, $session);
+                    $result = self::callMcpTool('rag_search', $arguments, $endpoint, $session);
+                    // 软提醒：检索本身仍执行（本地 FTS 成本低，且最后一次结果可能正是所需），
+                    // 仅在结果末尾追加收敛提示
+                    if ($session->ragSearchCalls + $session->webSearchCalls >= self::MAX_TOTAL_RETRIEVAL_CALLS) {
+                        $budget = self::MAX_TOTAL_RETRIEVAL_CALLS;
+                        $result .= "\n\n[检索预算提示] 本次分析的知识库与网络检索合计已达约 {$budget} 次，请基于已有证据收敛并输出结论，未能核实的信息明确标注。";
+                    }
+                    return $result;
 
                 case 'list_topics':
                     $endpoint = $mcp['rag'] ?? [];
@@ -496,11 +534,25 @@ PROMPT;
             "日志 {$logId} 文件列表：",
             sprintf('- main（主文件，%d 字节，%d 行）', $log->getSize(), $log->getLineNumbers()),
         ];
-        foreach ($log->getFiles() as $file) {
-            $lines[] = sprintf('- %s（%d 字节，%d 行）', $file['name'], $file['size'], $log->getFileLineNumbers($file['name']));
+
+        // crash-reports 类附件置顶并标注 [优先]：崩溃报告信息密度高于普通日志尾部，
+        // 与提示词「检索策略」的优先读取规则呼应；其余文件保持原有顺序
+        $files = $log->getFiles();
+        usort($files, fn($a, $b) => (int) self::isCrashReportName((string) $b['name']) <=> (int) self::isCrashReportName((string) $a['name']));
+        foreach ($files as $file) {
+            $mark = self::isCrashReportName((string) $file['name']) ? '[优先] ' : '';
+            $lines[] = sprintf('- %s%s（%d 字节，%d 行）', $mark, $file['name'], $file['size'], $log->getFileLineNumbers($file['name']));
         }
 
         return implode("\n", $lines);
+    }
+
+    /**
+     * 文件名（含 zip 展开后的相对路径）是否为 crash-report 类崩溃报告。
+     */
+    private static function isCrashReportName(string $name): bool
+    {
+        return stripos($name, 'crash-report') !== false;
     }
 
     /**

@@ -30,6 +30,53 @@ class RagSearch
     private const SNIPPET_HALF_WINDOW = 800;
     private const SNIPPET_BOUNDARY_LOOKBACK = 200;
 
+    /**
+     * 知识库主题目录的人工描述，是 list_topics / 系统提示词主题地图的可读性来源。
+     *
+     * 模型根据这段描述决定检索方向：目录名本身不可读的（如 mg-issues、zl2-issues）
+     * 必须写清楚内容与诊断价值；运营类内容标注「通常不必检索」以免模型空跑。
+     * 新增知识库目录时必须在此登记（与 scripts/clean_knowledge_docs.php 的
+     * UPSTREAM_DIRS 白名单约定并行）；未登记目录回退为文件名样本展示（见 topics()）。
+     *
+     * 描述文本纪律：只写定性内容，禁止写入会随知识库更新漂移的量化数字；
+     * 数量信息由 topics() 返回的动态 count 承载。
+     */
+    private const TOPIC_DESCRIPTIONS = [
+        // ── 核心诊断资产 ──
+        '日志分析' => '成体系的报错条目库（KB 编号条目），按异常类型归类，每条含现象、原因与解决方案',
+        'patterns' => '常见崩溃与故障模式库：mixin 注入失败、内存不足、Java 版本错误、mod 依赖缺失等，按「签名-含义-解决方案」组织',
+        'format' => '三大日志文件（crash-report / hs_err_pid / latest.log）的格式解读方法与信号速查',
+        'mg-issues' => 'MobileGlues 渲染器专题：定位与架构、关键设置概念、实战 issue 蒸馏与排障决策树',
+        'amc-issues' => 'Amethyst 启动器（PojavLauncher 官方续作）专题：官方立场、版本兼容、实战 issue 蒸馏',
+        'pgw-issues' => 'Pojav Glow·Worm (PGW) 专题：地位与现状、渲染器武器库、实战 issue 蒸馏',
+        'zl2-issues' => 'ZL2 启动器实战案例库：渲染器策略、账户输入联机、Mod 兼容分册',
+        'fcl-issues' => 'FCL 启动器实战案例：账户/联机、启动器本体、Mod 兼容、渲染器分册',
+        'fcl' => 'FCL 官方文档与非崩溃问题集',
+        // ── 启动器/渲染器生态 ──
+        'mobileglues' => 'MobileGlues 兼容性矩阵：mod/光影支持矩阵与真实设备实测记录',
+        'renderers' => '各渲染器家族专题文档：ANGLE、gl4es 家族、ltw、MobileGlues、Zink/Virgl 的差异与适用场景',
+        'launchers' => 'Pojav Glow·Worm (PGW) 专题文档',
+        'android-native-lib' => 'Android 原生库（lib 型 mod）加载问题：动态库缺失与插件系统',
+        'mobile_launcher' => '手机启动器常识：渲染器选择与 Minecraft 版本对应关系',
+        'zl_help' => 'Zalith 启动器用户帮助：账号登录（微软/离线/外置）、版本隔离、mod 加载器等操作说明',
+        'zl_control2_help' => 'Zalith 控制布局编辑器帮助：控件层创建、编辑器基本操作、菜单功能',
+        'zl_projects' => 'Zalith 项目介绍页（zl1/zl2 主要特点、开源信息、支持与反馈）',
+        // ── modloader / 服务端开发文档 ──
+        'fabric_develop' => 'Fabric 官方开发文档（含 Mixin、注册、事件、渲染等），用于判断 mod 侧代码与 API 问题',
+        'forge' => 'Forge 官方开发文档：访问变换器、BER、事件、注册表、资源、本地化',
+        'neoforge' => 'NeoForge 官方开发文档',
+        'quilt' => 'Quilt（QSL）开发文档',
+        'papermc' => 'PaperMC/Adventure 插件开发文档：Audiences、BossBar 等 API',
+        'purpur' => 'Purpur 服务端文档：命令、配置、权限、log4j',
+        'geyser' => 'Geyser（基岩互通）文档：Floodgate API、命令、FAQ、配置',
+        'glowstone' => 'Glowstone 服务端开发文档：代码风格、实体实现、NBT 操作',
+        // ── 其他 ──
+        'tools' => '样例崩溃报告（测试素材）',
+        // ── 运营内容（明确标注低价值，防止模型空跑）──
+        'zl_about' => 'Zalith 站点信息：关于本站、隐私政策、服务条款（运营内容，通常不必检索）',
+        'zl_announcement' => 'Zalith 站点公告（如 Discord 停运公告；运营内容，诊断价值低，通常不必检索）',
+    ];
+
     private \PDO $pdo;
 
     public function __construct(private string $dbPath)
@@ -284,18 +331,69 @@ class RagSearch
     }
 
     /**
+     * Escape LIKE wildcards (with backslash as the ESCAPE char).
+     */
+    private static function escapeLike(string $value): string
+    {
+        return str_replace(['\\', '%', '_'], ['\\\\', '\%', '\_'], $value);
+    }
+
+    /**
+     * Normalize a topic argument shared by the MCP layer and search().
+     *
+     * trim → 去首尾 '/' → 空字符串归 null；拒绝路径遍历（'..'）与超长值。
+     * RagController::tools/call 用它做入参校验，search() 内部再调用一次做
+     * 防御（幂等），两处不再各自维护归一化逻辑，避免演化不一致。
+     *
+     * @throws \InvalidArgumentException when the value is malformed
+     */
+    public static function normalizeTopic(mixed $topic): ?string
+    {
+        if ($topic === null) {
+            return null;
+        }
+        if (!is_string($topic) && !is_numeric($topic)) {
+            throw new \InvalidArgumentException('rag_search topic must be a string');
+        }
+
+        $normalized = trim((string) $topic);
+        $normalized = trim($normalized, '/');
+        if ($normalized === '') {
+            return null;
+        }
+        if (strlen($normalized) > 64) {
+            throw new \InvalidArgumentException('rag_search topic is too long');
+        }
+        if (str_contains($normalized, '..')) {
+            throw new \InvalidArgumentException('rag_search topic must not contain ".."');
+        }
+        return $normalized;
+    }
+
+    /**
      * Search the knowledge base.
      *
      * @param string $query
      * @param int $k Maximum number of results
+     * @param string|null $topic Optional directory prefix (normalized via normalizeTopic);
+     *                           restricts all retrieval paths to sources under "<topic>/"
      * @return array<int, array{title: string, body: string, source: string, score: mixed, snippet: string}>
      */
-    public function search(string $query, int $k = 5): array
+    public function search(string $query, int $k = 5, ?string $topic = null): array
     {
         $k = max(1, min((int) $k, 20));
         $query = trim($query);
         if ($query === '') {
             return [];
+        }
+
+        // 防御性二次归一化（幂等）：控制器已校验过，直接内部调用同样生效
+        $topic = self::normalizeTopic($topic);
+        $sourceFilter = '';
+        $sourceParams = [];
+        if ($topic !== null) {
+            $sourceFilter = " AND source LIKE ? ESCAPE '\\'";
+            $sourceParams = [self::escapeLike($topic) . '/%'];
         }
 
         // 候选池：语义精排前多召回一些；纯词法路径仍只输出 k 条
@@ -322,9 +420,9 @@ class RagSearch
                 }
                 $stmt = $this->pdo->prepare(
                     "SELECT rowid, title, body, source, bm25(docs, 10.0, 1.0, 1.0) AS rank
-                     FROM docs WHERE docs MATCH ? ORDER BY rank LIMIT " . $pool
+                     FROM docs WHERE docs MATCH ?{$sourceFilter} ORDER BY rank LIMIT " . $pool
                 );
-                $stmt->execute([$match]);
+                $stmt->execute(array_merge([$match], $sourceParams));
                 foreach ($stmt->fetchAll() as $row) {
                     $key = $row['source'] . '#' . $row['title'];
                     if (isset($seen[$key])) {
@@ -356,7 +454,7 @@ class RagSearch
                 $whereParams = [];
 
                 foreach ($terms as $term) {
-                    $like = '%' . str_replace(['\\', '%', '_'], ['\\\\', '\%', '\_'], $term) . '%';
+                    $like = '%' . self::escapeLike($term) . '%';
                     $rankParts[] = "(CASE WHEN title LIKE ? ESCAPE '\\' THEN 2 ELSE 0 END + CASE WHEN body LIKE ? ESCAPE '\\' THEN 1 ELSE 0 END)";
                     $rankParams[] = $like;
                     $rankParams[] = $like;
@@ -377,10 +475,10 @@ class RagSearch
                 }
 
                 $sql = "SELECT rowid, title, body, source, (" . implode(' + ', $rankParts) . ") AS rank
-                        FROM docs WHERE {$whereSql}
+                        FROM docs WHERE ({$whereSql}){$sourceFilter}
                         ORDER BY rank DESC, length(body) ASC LIMIT " . ($results === [] ? $pool : max(5, $pool - count($results)));
                 $stmt = $this->pdo->prepare($sql);
-                $stmt->execute(array_merge($rankParams, $whereParams));
+                $stmt->execute(array_merge($rankParams, $whereParams, $sourceParams));
 
                 foreach ($stmt->fetchAll() as $row) {
                     $key = $row['source'] . '#' . $row['title'];
@@ -400,7 +498,7 @@ class RagSearch
         }
 
         // 3. Semantic enhancement: vector recall is primary, lexical results supplement it.
-        return $this->applySemanticEnhancement($query, $results, $k);
+        return $this->applySemanticEnhancement($query, $results, $k, $topic);
     }
 
     /**
@@ -429,21 +527,22 @@ class RagSearch
     /** 向量余弦扫描的单批行数，控制一次性载入内存的向量总量 */
     private const VECTOR_SCAN_BATCH = 5000;
 
-    private function applySemanticEnhancement(string $query, array $lexical, int $k): array
+    private function applySemanticEnhancement(string $query, array $lexical, int $k, ?string $topic = null): array
     {
         $client = self::semanticClientFromConfig();
         if ($client === null || !$client->isConfigured()) {
             return array_slice($lexical, 0, $k);
         }
 
-        $cacheKey = 'semantic-v2:' . md5($query) . ':' . $k;
+        // 缓存键必须含 topic：不同目录同名 query 的结果不可互串
+        $cacheKey = 'semantic-v2:' . md5($query) . ':' . $k . ':' . ($topic ?? '');
         $cached = self::$semanticCache[$cacheKey] ?? null;
         if ($cached !== null && $cached['expires'] > time()) {
             return $cached['results'];
         }
 
         try {
-            $results = $this->runSemanticPipeline($query, $lexical, $k, $client);
+            $results = $this->runSemanticPipeline($query, $lexical, $k, $client, $topic);
         } catch (\Throwable $e) {
             \App\Syslog::error('RAG', 'semantic enhancement failed, falling back to lexical: ' . $e->getMessage());
             return array_slice($lexical, 0, $k);
@@ -477,7 +576,7 @@ class RagSearch
      * @param array<int, array{title: string, body: string, source: string, score: mixed, snippet: string}> $lexical
      * @return array<int, array{title: string, body: string, source: string, score: mixed, snippet: string}>
      */
-    private function runSemanticPipeline(string $query, array $lexical, int $k, SemanticClient $client): array
+    private function runSemanticPipeline(string $query, array $lexical, int $k, SemanticClient $client, ?string $topic = null): array
     {
         try {
             $queryVec = $client->embed([$query])[0] ?? null;
@@ -485,8 +584,9 @@ class RagSearch
                 throw new \RuntimeException('empty query embedding');
             }
 
-            // 向量召回：与全库嵌入算余弦，补足词法漏掉的同义表述
-            $vectorHits = $this->topByCosine($queryVec, max(20, $k * 4));
+            // 向量召回：与全库嵌入算余弦，补足词法漏掉的同义表述；
+            // topic 模式下过滤下推到召回 SQL（源头限定目录，无需扩量放大）
+            $vectorHits = $this->topByCosine($queryVec, max(20, $k * 4), $topic);
             $seen = [];
             $out = [];
             foreach (array_merge($vectorHits, $lexical) as $result) {
@@ -516,21 +616,36 @@ class RagSearch
      * Chunks without an embedding (semantic was off at build time) are skipped.
      *
      * @param array<int, float> $queryVec
+     * @param string|null $topicPrefix When set, the scan JOINs docs and filters
+     *                                 source by "<topic>/%" at the SQL level
+     *                                 (recall is restricted at the source, so
+     *                                 no over-fetch-then-filter is needed)
      * @return array<int, array{title: string, body: string, source: string, score: mixed, snippet: string}>
      */
-    private function topByCosine(array $queryVec, int $limit): array
+    private function topByCosine(array $queryVec, int $limit, ?string $topicPrefix = null): array
     {
         $qNorm = self::norm($queryVec);
         $dim = count($queryVec);
         $scored = [];
         $dimensionMismatchSeen = false;
-        $scanStmt = $this->pdo->prepare("SELECT e.rowid, e.vec FROM doc_embeddings e LIMIT ? OFFSET ?");
+        if ($topicPrefix !== null) {
+            $scanStmt = $this->pdo->prepare(
+                "SELECT e.rowid, e.vec FROM doc_embeddings e
+                 JOIN docs d ON d.rowid = e.rowid
+                 WHERE d.source LIKE ? ESCAPE '\\'
+                 LIMIT ? OFFSET ?"
+            );
+        } else {
+            $scanStmt = $this->pdo->prepare("SELECT e.rowid, e.vec FROM doc_embeddings e LIMIT ? OFFSET ?");
+        }
         $batchSize = self::VECTOR_SCAN_BATCH;
         $offset = 0;
         // 分批扫描向量：万级 chunk × 千维向量一次全量载入会占用数十 MB，
         // LIMIT/OFFSET 分批 + 逐批释放控制内存峰值
         while (true) {
-            $scanStmt->execute([$batchSize, $offset]);
+            $scanStmt->execute($topicPrefix !== null
+                ? [self::escapeLike($topicPrefix) . '/%', $batchSize, $offset]
+                : [$batchSize, $offset]);
             $batchRows = $scanStmt->fetchAll();
             if ($batchRows === []) {
                 break;
@@ -798,7 +913,7 @@ class RagSearch
      *
      * Helps the AI pick relevant search directions before querying.
      *
-     * @return array<int, array{dir: string, count: int, files: array<int, string>}>
+     * @return array<int, array{dir: string, description: string, count: int, files: array<int, string>}>
      */
     public function topics(): array
     {
@@ -818,6 +933,7 @@ class RagSearch
             $keywords = array_slice($files, 0, 12);
             $result[] = [
                 'dir' => $dir,
+                'description' => self::TOPIC_DESCRIPTIONS[$dir] ?? '',
                 'count' => count($files),
                 'files' => array_map(fn($f) => str_replace(['.txt', '_', '  '], ['', ' ', ' '], $f), $keywords),
             ];

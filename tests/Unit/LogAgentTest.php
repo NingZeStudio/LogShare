@@ -214,3 +214,103 @@ test('read_log_file does not leak other logs', function () {
     expect($result)->toContain('public from B');
     expect($result)->not->toContain('secret from A');
 });
+/* ─── Agentic RAG Plus：工具描述 / 检索策略 / 预算兜底 / crash-reports 优先 ─── */
+
+function agentSystemPrompt(array $config = [], ?string $logId = null, string $topicsText = ''): string
+{
+    $ref = new ReflectionClass(LogAgent::class);
+    $m = $ref->getMethod('buildMessages');
+    $messages = $m->invoke(null, '测试日志内容', $logId, $config, $topicsText);
+    return $messages[0]['content'];
+}
+
+test('rag_search tool schema includes topic', function () {
+    $config = ['mcp' => ['rag' => ['url' => 'http://127.0.0.1:9000']]];
+    $tools = agentCall('buildTools', [$config, null]);
+    $rag = array_values(array_filter($tools, fn($t) => $t['function']['name'] === 'rag_search'));
+
+    expect($rag)->toHaveCount(1);
+    expect($rag[0]['function']['parameters']['properties'])->toHaveKey('topic');
+    expect($rag[0]['function']['description'])->toContain('知识库');
+});
+
+test('system prompt uses evidence-driven retrieval', function () {
+    $system = agentSystemPrompt();
+
+    expect($system)->not->toContain('必须先调用一次 rag_search');
+    expect($system)->toContain('检索策略');
+    expect($system)->toContain('不超过 2 次');
+    expect($system)->toContain('最多 5 次');
+});
+
+test('topic routing rule present', function () {
+    $system = agentSystemPrompt();
+    expect($system)->toContain('patterns');
+    expect($system)->toContain('不要硬套目录');
+    expect($system)->toContain('topic 参数');
+});
+
+test('few-shot example present', function () {
+    $system = agentSystemPrompt();
+    expect($system)->toContain('MixinApplyError');
+    expect($system)->toContain('示例（正确的检索路径）');
+});
+
+test('system prompt has crash-report priority', function () {
+    $system = agentSystemPrompt();
+    expect($system)->toContain('crash-reports');
+    expect($system)->toContain('信息密度高于 latest.log');
+});
+
+test('web search hard-capped at 5', function () {
+    $session = new \App\Agent\ToolSession();
+    $session->webSearchCalls = 5;
+
+    $ref = new ReflectionClass(LogAgent::class);
+    $m = $ref->getMethod('executeTool');
+    // 空配置下若不拦截会返回「未配置」；拦截分支必须返回上限文案且不发起调用
+    $result = $m->invoke(null, 'web_search_exa', ['query' => 'x'], [], null, $session);
+
+    expect($result)->toContain('网络搜索次数已达本次分析上限');
+    expect($session->webSearchCalls)->toBe(5);
+});
+
+test('retrieval budget reminder injected', function () {
+    $session = new \App\Agent\ToolSession();
+    $session->ragSearchCalls = 5;
+    $session->webSearchCalls = 0;
+
+    $ref = new ReflectionClass(LogAgent::class);
+    $m = $ref->getMethod('executeTool');
+    // rag_search 仍执行（此处未配置端点，返回未配置文案），但合计达 6 需追加收敛提示
+    $result = $m->invoke(null, 'rag_search', ['query' => 'x'], [], null, $session);
+
+    expect($session->ragSearchCalls)->toBe(6);
+    expect($result)->toContain('检索预算提示');
+});
+
+test('list_log_files ranks crash reports first', function () {
+    $log = new \App\Log();
+    $id = $log->put(
+        "main\n",
+        null,
+        [],
+        null,
+        [
+            ['name' => 'debug.txt', 'data' => "d\n"],
+            ['name' => 'crash-reports/crash-2024-01-01_12.00.00.txt', 'data' => "c\n"],
+            ['name' => 'latest.log', 'data' => "l\n"],
+            ['name' => 'crash-reports.txt', 'data' => "x\n"],
+        ]
+    )->get();
+
+    $result = agentCall('executeTool', ['list_log_files', [], [], $id, []]);
+    $lines = array_values(array_filter(explode("\n", $result), fn($l) => str_starts_with($l, '- ')));
+
+    // crash-report 类（含目录形态与裸文件名）置顶并标注 [优先]，其余保持原顺序
+    expect($lines[1])->toContain('[优先] crash-reports/crash-2024-01-01_12.00.00.txt');
+    expect($lines[2])->toContain('[优先] crash-reports.txt');
+    expect($lines[3])->toContain('debug.txt');
+    expect($lines[4])->toContain('latest.log');
+    expect($lines[3])->not->toContain('[优先]');
+});

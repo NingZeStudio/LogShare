@@ -117,11 +117,15 @@ class RagController extends AbstractController
                         'tools' => [
                             [
                                 'name' => 'rag_search',
-                                'description' => '在内部知识库中检索相关文档片段。用于查找已知错误与解决方案。',
+                                'description' => '在内置知识库中检索已验证的实战资料。知识库覆盖：常见崩溃与故障模式（mixin 注入失败、内存不足、Java 版本错误等）、'
+                                    . '移动端启动器生态实战案例蒸馏（FCL/Zalith/Amethyst/PGW/MobileGlues，含排障决策树）、三大日志文件格式解读、'
+                                    . 'Fabric/Forge/NeoForge 与 PaperMC/Purpur/Geyser 等开发文档。日志中出现异常类名、崩溃特征或启动器相关问题时优先使用；'
+                                    . '纯常识问题不必使用。返回带来源路径的文档片段，多数条目按「签名-含义-解决方案」组织。',
                                 'inputSchema' => [
                                     'type' => 'object',
                                     'properties' => [
-                                        'query' => ['type' => 'string', 'description' => '检索关键词，使用错误类名或报错关键词'],
+                                        'query' => ['type' => 'string', 'description' => '检索词。直接使用日志中的原文信号：英文异常类名或错误串（如 MixinApplyError、SIGSEGV、OutOfMemoryError），或中文症状关键词（如 内存不足、启动闪退）。不要翻译或改写异常类名。'],
+                                        'topic' => ['type' => 'string', 'description' => '可选。限定在某个主题目录内检索（目录名来自 list_topics 的主题地图），如 "patterns"、"日志分析"。省略则在全库检索。'],
                                         'k' => ['type' => 'number', 'description' => '返回片段数量，默认 5'],
                                     ],
                                     'required' => ['query'],
@@ -129,7 +133,8 @@ class RagController extends AbstractController
                             ],
                             [
                                 'name' => 'list_topics',
-                                'description' => '列出知识库涵盖的主题与文档分布，帮助你决定检索方向。搜索前可先调用本工具了解知识库有什么。',
+                                'description' => '列出内置知识库的主题地图（目录、说明与内容样本）。不确定检索方向、或 rag_search 连续无结果时调用；'
+                                    . '看完地图后应带着明确目标词去 rag_search（可配合 topic 参数定向），不要看完地图就停止分析。',
                                 'inputSchema' => [
                                     'type' => 'object',
                                     'properties' => new \stdClass(),
@@ -144,7 +149,7 @@ class RagController extends AbstractController
                     $arguments = is_array($params['arguments'] ?? null) ? $params['arguments'] : [];
 
                     if ($name === 'list_topics') {
-                        $text = $this->formatTopics($rag->topics(), $rag->stats());
+                        $text = self::formatTopics($rag->topics(), $rag->stats());
                         $response['result'] = ['content' => [['type' => 'text', 'text' => $text]]];
                         break;
                     }
@@ -161,10 +166,14 @@ class RagController extends AbstractController
                         throw new \InvalidArgumentException('rag_search query is too long');
                     }
 
-                    $k = isset($arguments['k']) ? (int) $arguments['k'] : 5;
-                    $results = $rag->search($query, $k);
+                    // 归一化与校验统一在 RagSearch::normalizeTopic()：非法值抛
+                    // InvalidArgumentException，自动落入下方 -32602 分支回传模型
+                    $topic = RagSearch::normalizeTopic($arguments['topic'] ?? null);
 
-                    $text = $this->formatResults($results, $rag->stats());
+                    $k = isset($arguments['k']) ? (int) $arguments['k'] : 5;
+                    $results = $rag->search($query, $k, $topic);
+
+                    $text = self::formatResults($results, $rag->stats(), $topic);
                     $response['result'] = [
                         'content' => [
                             ['type' => 'text', 'text' => $text],
@@ -197,12 +206,22 @@ class RagController extends AbstractController
     /**
      * @param array $results
      * @param array $stats
+     * @param string|null $topic 归一化后的定向目录（回显用）
      * @return string
      */
-    private function formatResults(array $results, array $stats): string
+    private static function formatResults(array $results, array $stats, ?string $topic = null): string
     {
         if (empty($results)) {
-            return "未在知识库中找到相关文档（共 " . $stats['chunks'] . " 个分块）。可尝试更换关键词，或使用 web_search_exa 搜索网络。";
+            $scope = $topic !== null ? '，目录范围：' . $topic : '';
+            $lines = ['未在知识库中找到相关文档（共 ' . $stats['chunks'] . ' 个分块' . $scope . '）。下一步建议：'];
+            $lines[] = '1. 换用日志中的异常类名或错误串原词（如 MixinApplyError）再检索一次；';
+            if ($topic !== null) {
+                $lines[] = '2. 去掉 topic 限定扩大到全库（list_topics 可查看目录清单）；';
+            } else {
+                $lines[] = '2. 调用 list_topics 查看目录清单，用 topic 参数定向检索；';
+            }
+            $lines[] = '3. 若知识库确实未覆盖此问题，改用 web_search_exa 搜索网络。';
+            return implode("\n", $lines);
         }
 
         $lines = ["在知识库中找到 " . count($results) . " 条相关文档：", ""];
@@ -221,18 +240,30 @@ class RagController extends AbstractController
      * @param array $stats
      * @return string
      */
-    private function formatTopics(array $topics, array $stats): string
+    private static function formatTopics(array $topics, array $stats): string
     {
         if (empty($topics)) {
             return "知识库为空（共 " . $stats['chunks'] . " 个分块）。";
         }
 
-        $lines = ["知识库共 " . count($topics) . " 个主题目录、" . $stats['chunks'] . " 个分块：", ""];
+        $lines = [
+            '知识库共 ' . count($topics) . ' 个主题目录、' . $stats['chunks'] . ' 个分块。'
+            . '检索前先浏览目录与说明选定方向；rag_search 可用 topic 参数在目录内定向检索。',
+        ];
         foreach ($topics as $topic) {
-            $lines[] = '■ ' . $topic['dir'] . '（' . $topic['count'] . ' 篇）';
-            $sample = implode(' / ', $topic['files']);
-            $lines[] = '   ' . $sample;
-            $lines[] = '';
+            $head = '■ ' . $topic['dir'] . '（' . $topic['count'] . ' 篇）';
+            if (($topic['description'] ?? '') !== '') {
+                $head .= '— ' . $topic['description'];
+            }
+            $lines[] = $head;
+            // 样本压缩到 4 个/目录、单个样本名截断至 48 字节、条目间不留空行：
+            // 实测全量渲染 7KB 超预算，紧凑版 ~5KB（守门上限 5120B，
+            // 见单测 formatTopics output length bounded）
+            $names = array_map(
+                fn($f) => strlen($f) > 48 ? mb_strcut($f, 0, 48) . '…' : $f,
+                array_slice($topic['files'], 0, 4)
+            );
+            $lines[] = '  样本：' . implode(' / ', $names);
         }
 
         return implode("\n", $lines);
