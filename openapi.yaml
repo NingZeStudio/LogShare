@@ -817,6 +817,14 @@ paths:
         When `ai.agent.enabled` is true this runs the LogAgent tool loop bound to this
         log ID (file tools `list_log_files` / `read_log_file` are scoped to it) and emits
         additional `event: status` events (`type`: thinking / tool / tool_result / limit).
+
+        When `ai.queue.enabled` is true the analysis executes in the Redis Streams
+        micro-queue and this endpoint only relays the job event stream (an extra
+        `event: status` with `{"type":"queued","position":N}` precedes the analysis
+        frames). Queue full returns `429` with `Retry-After` before the SSE stream
+        starts; a client disconnect does not cancel the job (the result is still
+        cached). If Redis is unavailable the request falls back to inline execution
+        (`ai.queue.failOpen`).
       operationId: getAIAnalysisV1
       parameters:
         - name: id
@@ -900,6 +908,7 @@ paths:
       summary: Stream AI analysis of raw content
       description: |
         Same as `/v1/ai/{id}` but analyses provided content directly without storage.
+        Queue-mode behavior (queued event, 429 on full queue, fail-open) is identical.
         
         When `id` (a stored log ID) is provided, the AI agent gains access to that
         log's files for multi-file comparison; `content` may then be omitted.

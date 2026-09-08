@@ -4,7 +4,8 @@ namespace App\Agent;
 
 use App\Client\AIClient;
 use App\Client\MCPClient;
-use App\Sse\SseWriter;
+use App\Sse\AnalysisEmitter;
+use App\Sse\SseEmitter;
 use Hyperf\HttpServer\Response;
 
 /**
@@ -36,6 +37,9 @@ class LogAgent
     private static ?string $topicsCache = null;
     private static int $topicsCacheExpiresAt = 0;
 
+    /** 当前协程的事件发射端（SSE 直写或 Redis Stream），随协程上下文销毁 */
+    private const EMITTER_CTX = 'logshare_analysis_emitter';
+
     /**
      * Run the agent loop and stream the result as SSE.
      *
@@ -44,6 +48,7 @@ class LogAgent
      *                       - cacheKey: string|null
      *                       - cacheTTL: int
      *                       - logId: string|null (bound log id enabling file tools)
+     *                       - emitter: AnalysisEmitter|null (default: SseEmitter, direct SSE write)
      * @return void
      */
     public static function analyze(string $content, array $options = [], ?Response $response = null): void
@@ -52,7 +57,10 @@ class LogAgent
         $cacheTTL = $options['cacheTTL'] ?? 1800;
         $logId = $options['logId'] ?? null;
 
-        SseWriter::begin($response);
+        // 发射端绑定在协程级 Context（常驻进程下静态会被并发请求串扰，与 SseWriter 同模式）
+        $emitter = $options['emitter'] ?? new SseEmitter($response);
+        \Hyperf\Context\Context::set(self::EMITTER_CTX, $emitter);
+        $emitter->begin();
 
         // try 边界紧贴 begin()：SSE 开始输出后任何异常都必须以流内 error 收尾，
         // 不能逃逸到全局 JSON handler 造成坏帧。
@@ -687,19 +695,28 @@ PROMPT;
 
     /* ─── SSE emission ─────────────────────────────────────── */
 
+    private static function emitter(): AnalysisEmitter
+    {
+        $emitter = \Hyperf\Context\Context::get(self::EMITTER_CTX);
+        if (!$emitter instanceof AnalysisEmitter) {
+            throw new \RuntimeException('analysis emitter not bound');
+        }
+        return $emitter;
+    }
+
     private static function emitContent(string $delta): void
     {
-        SseWriter::write("data: " . json_encode(['choices' => [['delta' => ['content' => $delta]]]], self::SSE_JSON_FLAGS) . "\n\n");
+        self::emitter()->emit('', json_encode(['choices' => [['delta' => ['content' => $delta]]]], self::SSE_JSON_FLAGS));
     }
 
     private static function emitThinking(string $reasoning): void
     {
-        SseWriter::write("event: status\ndata: " . json_encode(['type' => 'thinking', 'delta' => $reasoning], self::SSE_JSON_FLAGS) . "\n\n");
+        self::emitter()->emit('status', json_encode(['type' => 'thinking', 'delta' => $reasoning], self::SSE_JSON_FLAGS));
     }
 
     private static function emitTool(string $name, array $arguments): void
     {
-        SseWriter::write("event: status\ndata: " . json_encode(['type' => 'tool', 'name' => $name, 'arguments' => $arguments], self::SSE_JSON_FLAGS) . "\n\n");
+        self::emitter()->emit('status', json_encode(['type' => 'tool', 'name' => $name, 'arguments' => $arguments], self::SSE_JSON_FLAGS));
     }
 
     private static function emitToolResult(string $name, string $result): void
@@ -710,12 +727,12 @@ PROMPT;
             default => mb_strcut($result, 0, self::STATUS_SUMMARY_BYTES),
         };
 
-        SseWriter::write("event: status\ndata: " . json_encode([
+        self::emitter()->emit('status', json_encode([
             'type' => 'tool_result',
             'name' => $name,
             'summary' => $summary,
             'truncated' => strlen($result) > strlen($summary),
-        ], self::SSE_JSON_FLAGS) . "\n\n");
+        ], self::SSE_JSON_FLAGS));
     }
 
     /**
@@ -780,19 +797,17 @@ PROMPT;
 
     private static function emitLimit(int $rounds): void
     {
-        SseWriter::write("event: status\ndata: " . json_encode(['type' => 'limit', 'rounds' => $rounds], self::SSE_JSON_FLAGS) . "\n\n");
+        self::emitter()->emit('status', json_encode(['type' => 'limit', 'rounds' => $rounds], self::SSE_JSON_FLAGS));
     }
 
     private static function emitDone(): void
     {
-        SseWriter::write("event: done\ndata: {\"status\":\"completed\"}\n\n");
-        SseWriter::end();
+        self::emitter()->finish('done', '{"status":"completed"}');
     }
 
     private static function emitError(string $message): void
     {
-        SseWriter::write("event: error\ndata: " . json_encode(['error' => $message], self::SSE_JSON_FLAGS) . "\n\n");
-        SseWriter::end();
+        self::emitter()->finish('error', json_encode(['error' => $message], self::SSE_JSON_FLAGS));
     }
 
     /* ─── Cache ────────────────────────────────────────────── */

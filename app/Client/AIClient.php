@@ -304,19 +304,21 @@ class AIClient
      * @param string $content
      * @param string|null $cacheKey
      * @param int $cacheTTL
+     * @param \App\Sse\AnalysisEmitter|null $emitter 缺省 SseEmitter（直写请求连接）；
+     *                                                队列模式传 StreamEmitter（帧入 Redis Stream）
      * @return void
      */
-    public static function analyzeStream(string $content, ?string $cacheKey = null, int $cacheTTL = self::CACHE_TTL, ?Response $response = null): void
+    public static function analyzeStream(string $content, ?string $cacheKey = null, int $cacheTTL = self::CACHE_TTL, ?Response $response = null, ?\App\Sse\AnalysisEmitter $emitter = null): void
     {
-        \App\Sse\SseWriter::begin($response);
+        $emitter = $emitter ?? new \App\Sse\SseEmitter($response);
+        $emitter->begin();
 
         if ($cacheKey !== null) {
             $cacheKey = 'analysis-v2:' . $cacheKey;
             $cached = self::checkCache($cacheKey);
             if ($cached !== null) {
-                \App\Sse\SseWriter::write("data: " . json_encode(['choices' => [['delta' => ['content' => $cached]]]], JSON_UNESCAPED_UNICODE) . "\n\n");
-                \App\Sse\SseWriter::write("event: done\ndata: {\"status\":\"completed\"}\n\n");
-                \App\Sse\SseWriter::end();
+                $emitter->emit('', json_encode(['choices' => [['delta' => ['content' => $cached]]]], JSON_UNESCAPED_UNICODE));
+                $emitter->finish('done', '{"status":"completed"}');
                 return;
             }
         }
@@ -325,8 +327,8 @@ class AIClient
             self::streamChat(
                 self::analysisMessages($content),
                 [],
-                function (string $delta) {
-                    \App\Sse\SseWriter::write("data: " . json_encode(['choices' => [['delta' => ['content' => $delta]]]], JSON_UNESCAPED_UNICODE) . "\n\n");
+                function (string $delta) use ($emitter) {
+                    $emitter->emit('', json_encode(['choices' => [['delta' => ['content' => $delta]]]], JSON_UNESCAPED_UNICODE));
                 },
                 function (string $reasoning) {
                     // Legacy plain analysis does not forward the thinking trace
@@ -334,20 +336,18 @@ class AIClient
                 function (array $toolCalls) {
                     // No tools are registered for legacy analysis
                 },
-                function (string $fullContent, bool $hasToolCalls) use ($cacheKey, $cacheTTL) {
+                function (string $fullContent, bool $hasToolCalls) use ($emitter, $cacheKey, $cacheTTL) {
                     if ($cacheKey !== null && $fullContent !== '') {
                         self::writeCache($cacheKey, $fullContent, $cacheTTL);
                     }
-                    \App\Sse\SseWriter::write("event: done\ndata: {\"status\":\"completed\"}\n\n");
-                    \App\Sse\SseWriter::end();
+                    $emitter->finish('done', '{"status":"completed"}');
                 }
             );
         } catch (\App\Exception\ClientDisconnectedException $e) {
             // 客户端已断开：无法再写任何 SSE 帧，记日志后静默中止
             \App\Syslog::error('AI Client', '客户端已断开，分析中止: ' . $e->getMessage());
         } catch (\Exception $e) {
-            \App\Sse\SseWriter::write("event: error\ndata: " . json_encode(['error' => $e->getMessage()], JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE) . "\n\n");
-            \App\Sse\SseWriter::end();
+            $emitter->finish('error', json_encode(['error' => $e->getMessage()], JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE));
         }
     }
 
