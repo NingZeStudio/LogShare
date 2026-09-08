@@ -1,5 +1,23 @@
 # Changelog
 
+## 1.7.5 — 2026-09-08
+
+### 新功能
+
+- **Agentic RAG Plus（知识库发现层重构）**：新增 `RagSearch::TOPIC_DESCRIPTIONS` 主题描述表，`list_topics` 返回可读主题地图（目录 + 描述 + 样本，紧凑渲染守门 ≤5120B）；`rag_search` 支持 `topic` 参数定向检索（FTS/LIKE/向量召回均在源头过滤）；工具描述按 docstring 标准重写；提示词链由「强制执行规则」改为证据驱动检索策略（目录选择闭环、改写方向清单、按缺口计数预算），并加代码兜底：`web_search_exa` 全对话 5 次硬拦截、检索合计达 6 次注入收敛提示；crash-reports 类附件在文件列表置顶标注 `[优先]` 并优先读取
+- **AI 分析 Redis Streams 微队列**（`ai.queue`，默认关闭）：开启后全部 `/v1/ai/*` 分析经 `ai-queue-consumer` 进程执行，请求侧仅做 SSE 中继（新增 `queued` 首帧）；`maxConcurrent` 约束上游并发、`maxQueue` 约束排队深度（满队返回 429 + `Retry-After`）、`waitTimeout` 约束中继等待；客户端断连不取消任务（结果照常写缓存），崩溃任务由 XAUTOCLAIM 回收（job 级运行锁防双跑）；日志正文只存短 TTL payload 键不进 Stream，同缓存键任务自动去重挂接；Redis 不可用按 `failOpen` 回退请求内执行
+- **SpinYarn Redis 映射缓存**：`SpinYarnClient` 反射探测已加载扩展的 `spinyarn_init` 签名并适配传参，扩展支持时传入 `cache.redis` 的 Redis URL，跨进程共享解析结果
+
+### 修复
+
+- **线上 SpinYarn 反混淆完全失效**：镜像 pin 的扩展 v1.0.0 只接受 4 参，配置了 Redis 时盲传第 5 参抛 `ArgumentCountError`，fail-open 后整个进程生命周期反混淆停用；现按实际签名适配，旧扩展走本地模式并一次性提示，Redis 初始化被拒时回退重试
+- **PHPStan 并行 worker 超默认 128M 内存上限崩溃**：`composer stan` 脚本补 `--memory-limit=512M`
+
+### 改进
+
+- SSE 输出统一经 `AnalysisEmitter` 抽象（`SseEmitter` 直写 / `StreamEmitter` 入流），两实现产出逐字节相同帧；发射端随协程 Context 绑定，常驻进程无跨请求串扰
+- API.md / openapi.yaml / postman_collection.json 同步队列模式协议（`queued` 帧、429 语义、断连不取消）与 Agentic RAG Plus 后的工具定义；README 配置表补 `ai.queue`
+
 ## 1.7.4 — 2026-08-30
 
 ### 新功能
