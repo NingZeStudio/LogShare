@@ -12,8 +12,11 @@ class IPv4Filter extends Filter
      */
     protected static function getPatterns(): array
     {
+        // 后顾内禁用量词（version:? 形态）：PCRE2 < 10.43 不支持变长后顾，
+        // CI runner 与 bookworm 镜像编译失败会静默降级为不脱敏（IP 泄露）。
+        // 等价的定长写法：分别排除 "version " 与 "version: " 前缀。
         return [
-            new PatternWithReplacement('(?<!version:? )(?<!([0-9]|-|\w))([0-9]{1,3}\.){3}[0-9]{1,3}(?![0-9])', '**.**.**.**'),
+            new PatternWithReplacement('(?<!version )(?<!version: )(?<!([0-9]|-|\w))([0-9]{1,3}\.){3}[0-9]{1,3}(?![0-9])', '**.**.**.**'),
         ];
     }
 
