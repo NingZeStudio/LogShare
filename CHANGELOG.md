@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.7.6 — 2026-09-08
+
+### 修复
+
+- **IPv4 地址在 PCRE2 < 10.43 环境下静默不脱敏（IP 泄露）**：`(?<!version:? )` 为变长后顾，CI runner 与 bookworm 基础镜像（PCRE2 10.42）编译失败，过滤器 safe 降级返回原文；改用两个定长后顾 `(?<!version )(?<!version: )`，语义等价
+- **微队列在真 Redis 下读取恒为空**：`flattenStreamReply` 此前只匹配 `[[stream => entries]]` 形态，按 phpredis 实际回复 `[stream => [entryId => fields]]` 修正（其官方测试为据）；CI 集成测试（入队→消费→ACK→XAUTOCLAIM→中继帧序）已全链路通过
+- **消费者进程在 CI 静态分析报 `class.notFound`**：`isEnable()` 补 `@param mixed` docblock（分析环境无 swoole 扩展）
+
+### 构建
+
+- Docker 构建 rust 镜像 pin 1.85.0 → 1.90.0：SpinYarn v1.1.0 依赖链（url→idna→icu 2.x）MSRV ≥1.88
+
 ## 1.7.5 — 2026-09-08
 
 ### 新功能
