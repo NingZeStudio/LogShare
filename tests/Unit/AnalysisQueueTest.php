@@ -251,3 +251,28 @@ test('cache hit skips the queue entirely', function () {
     expect($method->invoke(queueTestController(), 'ai:analysis:cached'))->toBeTrue();
     expect(AnalysisQueue::queueDepth())->toBe(0);
 });
+
+test('jobLifetime covers queue wait when timeout set, equals jobTtl when no timeout', function () {
+    queueConfig(['enabled' => true, 'jobTtl' => 600, 'waitTimeout' => 300]);
+    expect(AnalysisQueue::jobLifetime())->toBe(900);
+
+    // waitTimeout <= 0 = 无排队超时：jobTtl 即任务总寿命
+    queueConfig(['enabled' => true, 'jobTtl' => 7200, 'waitTimeout' => 0]);
+    expect(AnalysisQueue::jobLifetime())->toBe(7200);
+    queueConfig(['enabled' => true, 'jobTtl' => 7200, 'waitTimeout' => -1]);
+    expect(AnalysisQueue::jobLifetime())->toBe(7200);
+});
+
+test('relay with no waitTimeout forwards frames without emitting timeout', function () {
+    queueConfig(['enabled' => true, 'waitTimeout' => 0]);
+    $events = StreamEmitter::eventsKey('no-timeout-job');
+    RedisStreams::xAdd($events, ['event' => '', 'data' => '{"choices":[{"delta":{"content":"x"}}]}']);
+    RedisStreams::xAdd($events, ['event' => 'done', 'data' => '{"status":"completed"}']);
+
+    ob_start();
+    AnalysisQueue::relay('no-timeout-job', null);
+    $out = ob_get_clean();
+
+    expect($out)->toContain("event: done\ndata: {\"status\":\"completed\"}\n\n");
+    expect($out)->not->toContain('排队等待超时');
+});

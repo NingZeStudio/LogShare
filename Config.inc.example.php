@@ -99,9 +99,12 @@ return [
         ],
         // AI 分析微队列（Redis Streams 消费者组）：enabled 后全量分析经
         // ai:analyse:queue 入队、由 ai-queue-consumer 进程以 maxConcurrent 个
-        // 协程执行，请求侧只做 SSE 中继。maxQueue 为队列深度上限（XLEN），
-        // 超限直接 429 + Retry-After；waitTimeout 是中继端最长等待秒数。
-        // claimIdleMs 之后 pending 条目被 XAUTOCLAIM 重投（消费者崩溃恢复）。
+        // 协程执行，请求侧只做 SSE 中继（首帧推送 queued 状态与排队位置）。
+        // maxQueue 为队列深度上限（XLEN），超限直接 429 + Retry-After。
+        // waitTimeout 为中继端最长等待秒数，0 或负数 = 无排队超时（等到
+        // done/error 或客户端断开为止）。claimIdleMs 之后 pending 条目被
+        // XAUTOCLAIM 重投（消费者崩溃恢复，应大于单任务最长执行时间）。
+        // jobTtl 为任务 payload/事件流存活秒数（无排队超时时即任务总寿命）。
         // failOpen=true 时 Redis 故障回退请求内 inline 执行（Redis 为可选依赖）。
         // 依赖 ext-redis 与 cache.redis 可用；关闭时行为与旧版逐字节一致。
         'queue' => [
