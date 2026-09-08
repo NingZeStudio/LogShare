@@ -276,3 +276,47 @@ test('relay with no waitTimeout forwards frames without emitting timeout', funct
     expect($out)->toContain("event: done\ndata: {\"status\":\"completed\"}\n\n");
     expect($out)->not->toContain('排队等待超时');
 });
+
+test('queueDepth counts undelivered and in-flight, not cumulative XLEN', function () {
+    queueConfig(['enabled' => true]);
+
+    // 无消费组：保守回退 XLEN
+    AnalysisQueue::enqueue('a', 'ai:analysis:dq1', null, 1800);
+    expect(AnalysisQueue::queueDepth())->toBe(1);
+
+    RedisStreams::xGroupCreate(AnalysisQueue::QUEUE_KEY, AnalysisQueue::GROUP);
+    expect(AnalysisQueue::queueDepth())->toBe(1); // lag=1
+
+    // 已投递未确认：仍计入深度（pending=1，lag=0）
+    $first = RedisStreams::xReadGroup(AnalysisQueue::GROUP, 'w1', AnalysisQueue::QUEUE_KEY, 0, 2);
+    expect(AnalysisQueue::queueDepth())->toBe(1);
+
+    // 再入队一个：lag=1 + pending=1 = 2
+    AnalysisQueue::enqueue('b', 'ai:analysis:dq2', null, 1800);
+    expect(AnalysisQueue::queueDepth())->toBe(2);
+
+    // ACK 第一个：深度只降一个
+    RedisStreams::xAck(AnalysisQueue::QUEUE_KEY, AnalysisQueue::GROUP, $first[0][0]);
+    expect(AnalysisQueue::queueDepth())->toBe(1);
+
+    // 第二个读取并 ACK：Stream 累计条目 XLEN 仍为 2，但真实深度必须归零
+    // （2026-09-08 线上误 429 事故的回归点）
+    $second = RedisStreams::xReadGroup(AnalysisQueue::GROUP, 'w1', AnalysisQueue::QUEUE_KEY, 0, 2);
+    RedisStreams::xAck(AnalysisQueue::QUEUE_KEY, AnalysisQueue::GROUP, $second[0][0]);
+    expect(RedisStreams::xLen(AnalysisQueue::QUEUE_KEY))->toBe(2);
+    expect(AnalysisQueue::queueDepth())->toBe(0);
+});
+
+test('consumeJob sends terminal error frame when payload expired', function () {
+    queueConfig(['enabled' => true]);
+    RedisStreams::xGroupCreate(AnalysisQueue::QUEUE_KEY, AnalysisQueue::GROUP);
+    RedisStreams::xAdd(AnalysisQueue::QUEUE_KEY, ['jobId' => 'ghost-exp']);
+    $entries = RedisStreams::xReadGroup(AnalysisQueue::GROUP, 'w1', AnalysisQueue::QUEUE_KEY, 0);
+
+    AnalysisQueue::consumeJob($entries[0][0], 'ghost-exp');
+
+    // payload 缺失不再静默丢弃：补 error 终态帧，防止 waitTimeout=0 的中继端永挂
+    $frames = \Tests\Mocks\RedisMock::peekStream(StreamEmitter::eventsKey('ghost-exp'));
+    expect($frames)->not->toBe([]);
+    expect($frames[count($frames) - 1][1]['event'])->toBe('error');
+});

@@ -86,9 +86,23 @@ final class AnalysisQueue
         return $agent ? $cacheKey : 'analysis-v2:' . $cacheKey;
     }
 
+    /**
+     * 真实排队深度 = 未投递条目（组 lag）+ 已投递未确认（in-flight pending）。
+     *
+     * 不能用 XLEN：XACK 不从 Stream 移除条目，XLEN 是累计消息数——
+     * 用它判满会导致「消费完毕但计数不减」的永久 429（2026-09-08 线上事故）。
+     * 消费组尚未创建（NOGROUP，如消费者进程未启动）时保守回退 XLEN。
+     */
     public static function queueDepth(): int
     {
-        return RedisStreams::xLen(self::QUEUE_KEY);
+        try {
+            $lag = RedisStreams::xGroupLag(self::QUEUE_KEY, self::GROUP);
+            $pending = RedisStreams::xPendingCount(self::QUEUE_KEY, self::GROUP);
+            return max(0, (int) ($lag ?? 0)) + max(0, $pending);
+        } catch (\Throwable $e) {
+            // NOGROUP：无人消费过，全部条目都在排队
+            return RedisStreams::xLen(self::QUEUE_KEY);
+        }
     }
 
     public static function payloadKey(string $jobId): string
@@ -223,7 +237,15 @@ final class AnalysisQueue
 
         $payloadRaw = RedisStreams::get(self::payloadKey($jobId));
         if ($payloadRaw === null) {
-            // payload 已过期：等待的中继早已超时离开，条目直接丢弃
+            // payload 已过期：补发终态帧收尾，否则 waitTimeout=0 的中继端会无限等待
+            try {
+                (new StreamEmitter($jobId, (int) $cfg['jobTtl']))->finish('error', json_encode(
+                    ['error' => '分析任务已超过排队存活时限，请重新提交。'],
+                    self::FRAME_JSON_FLAGS
+                ));
+            } catch (\Throwable $e) {
+                \App\Syslog::error('AiQueue', 'job ' . $jobId . ' expiry notice failed: ' . $e->getMessage());
+            }
             RedisStreams::xAck(self::QUEUE_KEY, self::GROUP, $entryId);
             return;
         }
