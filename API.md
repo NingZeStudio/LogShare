@@ -230,7 +230,7 @@ POST /v1/analyse
 
 > **禁用开关**：配置 `ai.enabled = false`（或环境变量 `AI_ENABLED=false`）时，所有 `/v1/ai/*` 接口统一返回 HTTP 404（`{"success":false,"error":"AI analysis is disabled.","code":404}`）。默认 `true` 启用。
 
-当配置 `ai.agent.enabled` 为 `true` 时，AI 接口走 LogAgent（模型驱动工具循环）；否则保持旧版直连分析。SSE 事件协议见下。
+当配置 `ai.agent.enabled` 为 `true` 时，AI 接口走 LogAgent（模型驱动工具循环）；否则保持旧版直连分析。当配置 `ai.queue.enabled` 为 `true` 时，分析经 Redis Streams 微队列执行（并发与排队深度可配置），SSE 事件协议不变；详见「SSE 事件协议」下的队列模式说明。
 
 ### 基于已存储日志
 
@@ -269,6 +269,7 @@ LogAgent 模式（`ai.agent.enabled`）会输出额外的 `event: status` 事件
 
 | 事件 | 载荷 `data` | 说明 |
 |------|-------------|------|
+| `event: status` | `{"type":"queued","position":N}` | 仅队列模式（`ai.queue.enabled`）：任务已入队，`position` 为入队时的近似队列深度 |
 | `event: status` | `{"type":"thinking","delta":"..."}` | 模型思维链（reasoning_content）逐段推送，供前端展示 |
 | `event: status` | `{"type":"tool","name":"web_search_exa","arguments":{...}}` | 即将调用某工具 |
 | `event: status` | `{"type":"tool_result","name":"web_search_exa","summary":"...","truncated":true}` | 工具返回摘要（完整结果进 LLM 上下文） |
@@ -276,26 +277,28 @@ LogAgent 模式（`ai.agent.enabled`）会输出额外的 `event: status` 事件
 | `data:`（原有） | `{"choices":[{"delta":{"content":"..."}}]}` | 正文增量 |
 | `event: done` | `{"status":"completed"}` | 流结束 |
 
+**队列模式（`ai.queue.enabled`）：** 全部 AI 分析经 Redis Streams 微队列执行，端点本身只做 SSE 中继，事件协议不变（仅多首帧 `queued`）。三个行为差异：① 队列已满（深度达 `ai.queue.maxQueue`）时，在 SSE 开始前返回 `429` JSON（带 `Retry-After: 30`）；② 客户端断开不取消任务，分析继续跑完并写入结果缓存，后续请求（含缓存命中路径）直接取用；③ Redis 不可用时按 `ai.queue.failOpen` 回退请求内直连执行（默认回退），行为与队列关闭时一致。中继端最长等待 `ai.queue.waitTimeout` 秒，超时以 `event: error` 收尾。
+
 **前端 SSE 解析注意事项：** 一个 SSE 事件以空行（`\n\n`）结束；`event: status` 后紧跟其 `data:` JSON，未声明 `event:` 的 `data:` 行是正文增量。正文应拼接 `data.choices[0].delta.content`，思考内容拼接 `data.delta`。除 `done` 外还需处理 `event: error`（`data.error`）和 `event: status` 的 `tool`、`tool_result`、`limit`。
 **可注册的工具：** 工具会作为 OpenAI-compatible `tools` 字段发送给模型；只有满足注册条件时才会出现在该次会话中。工具调用过程本身不会作为客户端请求发送，前端只接收对应的 SSE 状态事件。
 
 | 工具 | 注册条件 | 参数 | 返回给模型的内容 |
 |------|----------|------|------------------|
 | `web_search_exa` | `ai.mcp.webSearch.url` 非空 | `query: string`（必填，错误类名、报错关键词或 mod 名称） | Exa MCP 文本搜索结果，多个文本块以空行拼接 |
-| `rag_search` | `ai.mcp.rag.url` 非空 | `query: string`（必填）；`k: number`（可选，默认 5，服务端限制 1–20） | SQLite FTS5/BM25 知识库结果，包含标题、来源、片段和分数 |
-| `list_topics` | `ai.mcp.rag.url` 非空 | 无参数，`properties: {}` | 知识库主题目录、文档数量和示例文件名 |
-| `list_log_files` | 当前会话绑定日志 ID | 无参数，`properties: {}` | 主文件 `main` 及附加文件的名称、字节数、行数 |
+| `rag_search` | `ai.mcp.rag.url` 非空 | `query: string`（必填）；`topic: string`（可选，限定主题目录内检索）；`k: number`（可选，默认 5，服务端限制 1–20） | SQLite FTS5/BM25 知识库结果，包含标题、来源、片段和分数 |
+| `list_topics` | `ai.mcp.rag.url` 非空 | 无参数，`properties: {}` | 知识库主题地图：目录、描述、文档数量和示例文件名 |
+| `list_log_files` | 当前会话绑定日志 ID | 无参数，`properties: {}` | 主文件 `main` 及附加文件的名称、字节数、行数（crash-reports 类文件置顶并标注 `[优先]`） |
 | `read_log_file` | 当前会话绑定日志 ID | `filename: string`（必填） | 返回该文件的**完整内容**（无行区间参数）；单次字节上限由 `ai.agent.maxFileBytes` 控制（默认 512 KiB），超出时截断并附提示；同一会话内重复读取同一文件会被拒绝并返回提示 |
 
 ### 工具定义示例
 
 ```json
 [
-  {"type":"function","function":{"name":"web_search_exa","description":"搜索互联网，查找 Minecraft 报错信息、mod 兼容性等解决方案。返回与查询相关的网页内容。","parameters":{"type":"object","properties":{"query":{"type":"string","description":"搜索关键词，使用错误类名或报错关键词"}},"required":["query"]}}},
-  {"type":"function","function":{"name":"rag_search","description":"在内部知识库中检索相关文档片段。用于查找已知错误与解决方案。","parameters":{"type":"object","properties":{"query":{"type":"string","description":"检索关键词"},"k":{"type":"number","description":"返回片段数量，默认 5"}},"required":["query"]}}},
-  {"type":"function","function":{"name":"list_topics","description":"列出内部知识库涵盖的主题与文档分布。在不知道检索方向、或搜索无结果时，先调用本工具了解知识库有什么，再针对性搜索。","parameters":{"type":"object","properties":{}}}},
+  {"type":"function","function":{"name":"web_search_exa","description":"搜索互联网，查找知识库未覆盖的公开问题：新版本 mod/服务端兼容性、小众报错、官方公告等。知识库检索无果后再使用；查询词与 rag_search 相同，使用错误类名或报错关键词原文。","parameters":{"type":"object","properties":{"query":{"type":"string","description":"搜索关键词，使用错误类名或报错关键词原文"}},"required":["query"]}}},
+  {"type":"function","function":{"name":"rag_search","description":"在内置知识库中检索已验证的实战资料。知识库覆盖：常见崩溃与故障模式（mixin 注入失败、内存不足、Java 版本错误等）、移动端启动器生态实战案例蒸馏（FCL/Zalith/Amethyst/PGW/MobileGlues，含排障决策树）、三大日志文件格式解读、Fabric/Forge/NeoForge 与 PaperMC/Purpur/Geyser 等开发文档。日志中出现异常类名、崩溃特征或启动器相关问题时优先使用；纯常识问题不必使用。返回带来源路径的文档片段，多数条目按「签名-含义-解决方案」组织。","parameters":{"type":"object","properties":{"query":{"type":"string","description":"检索词。直接使用日志中的原文信号：英文异常类名或错误串（如 MixinApplyError、SIGSEGV、OutOfMemoryError），或中文症状关键词（如 内存不足、启动闪退）。不要翻译或改写异常类名。"},"topic":{"type":"string","description":"可选。限定在某个主题目录内检索（目录名来自 list_topics 的主题地图），如 \"patterns\"、\"日志分析\"。省略则全库检索。"},"k":{"type":"number","description":"返回片段数量，默认 5"}},"required":["query"]}}},
+  {"type":"function","function":{"name":"list_topics","description":"列出内置知识库的主题地图（目录、说明与内容样本）。不确定检索方向、或 rag_search 连续无结果时调用；看完地图后应带着明确目标词去 rag_search（可配合 topic 参数定向），不要看完地图就停止分析。","parameters":{"type":"object","properties":{}}}},
   {"type":"function","function":{"name":"list_log_files","description":"列出当前日志 ID 下的所有文件（含主文件与附加文件）。","parameters":{"type":"object","properties":{}}}},
-  {"type":"function","function":{"name":"read_log_file","description":"读取当前日志下指定文件的完整内容（不设行区间，直接返回全文）。为避免重复调用，仅对未读取过的文件调用；已读过的文件使用已内容进行分析，不要再次读取。主文件名为 main。","parameters":{"type":"object","properties":{"filename":{"type":"string","description":"文件名（主文件为 main，或使用 list_log_files 列出的名称）"}},"required":["filename"]}}}
+  {"type":"function","function":{"name":"read_log_file","description":"读取当前日志下指定文件的内容。默认返回完整文件；需要控制范围时可使用 line_start/line_end 指定行区间，或使用 offset/max_bytes 指定字节区间。主文件名为 main。","parameters":{"type":"object","properties":{"filename":{"type":"string","description":"文件名（主文件为 main，或使用 list_log_files 列出的名称）"},"line_start":{"type":"integer","description":"起始行号，从 1 开始；省略则从第 1 行开始"},"line_end":{"type":"integer","description":"结束行号，包含该行；省略则读取到文件末尾"},"offset":{"type":"integer","description":"字节起始位置；使用行区间时不要设置"},"max_bytes":{"type":"integer","description":"字节读取模式下的最大字节数；使用行区间时不要设置"}},"required":["filename"]}}}
 ]
 ```
 

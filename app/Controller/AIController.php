@@ -26,16 +26,6 @@ class AIController extends AbstractController
 
         $log->renew();
 
-        $agentConfig = \App\Config::Get('ai')['agent'] ?? [];
-        if ($agentConfig['enabled'] ?? false) {
-            \App\Agent\LogAgent::analyze($log->getContent(), [
-                'cacheKey' => "ai:analysis:" . $logId->getRaw(),
-                'logId' => $logId->get(),
-            ], $this->response);
-            return $this->response;
-        }
-
-        \App\Client\AIClient::analyzeStream($log->getContent(), "ai:analysis:" . $logId->getRaw(), 1800, $this->response);
-        return $this->response;
+        return $this->runAiAnalysis($log->getContent(), "ai:analysis:" . $logId->getRaw(), $logId->get());
     }
 }

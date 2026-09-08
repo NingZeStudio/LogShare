@@ -40,27 +40,13 @@ class AIAnalyseController extends AbstractController
                 $content = $log->getContent();
             }
 
-            return $this->runAnalysis($content, "ai:analysis:" . $id->getRaw());
+            return $this->runAiAnalysis($content, "ai:analysis:" . $id->getRaw());
         }
 
         if (empty($content)) {
             throw new ApiError(400, "Content is required.");
         }
 
-        return $this->runAnalysis($content, "ai:analysis:hash:" . hash('sha256', $content));
-    }
-
-    private function runAnalysis(string $content, string $cacheKey): ResponseInterface
-    {
-        $agentConfig = \App\Config::Get('ai')['agent'] ?? [];
-        if ($agentConfig['enabled'] ?? false) {
-            \App\Agent\LogAgent::analyze($content, [
-                'cacheKey' => $cacheKey,
-            ], $this->response);
-            return $this->response;
-        }
-
-        \App\Client\AIClient::analyzeStream($content, $cacheKey, 1800, $this->response);
-        return $this->response;
+        return $this->runAiAnalysis($content, "ai:analysis:hash:" . hash('sha256', $content));
     }
 }

@@ -35,7 +35,7 @@ php bin/hyperf.php start
 | `cache` | Redis 缓存：开关、TTL、大小限制与连接信息 |
 | `filter` | 上传前的预处理过滤链（脱敏规则），按配置顺序执行 |
 | `id` | 日志 ID 的字符集与长度（修改会破坏已有 ID） |
-| `ai` | AI 相关：API Key 列表、接口地址、模型名称、`agent`（LogAgent 开关）、`mcp`（webSearch / rag 端点） |
+| `ai` | AI 相关：API Key 列表、接口地址、模型名称、`agent`（LogAgent 开关）、`queue`（Redis Streams 分析微队列：并发数、排队上限、fail-open）、`mcp`（webSearch / rag 端点） |
 | `rateLimit` | 应用层限流（limit / window，Redis INCR 实现） |
 | `spinyarn` | 反混淆扩展：映射目录与缓存水位 |
 | `urls` | 前端与 API 的基础 URL |

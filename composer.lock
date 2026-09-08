@@ -4,7 +4,7 @@
         "Read more about it at https://getcomposer.org/doc/01-basic-usage.md#installing-dependencies",
         "This file is @generated automatically"
     ],
-    "content-hash": "990e577a3e3b2fc50e192e65383866ec",
+    "content-hash": "3bb9588c19512caaeda3d18329a1b45c",
     "packages": [
         {
             "name": "aternos/codex",
@@ -2209,6 +2209,78 @@
                 }
             ],
             "time": "2026-06-15T09:37:20+00:00"
+        },
+        {
+            "name": "hyperf/process",
+            "version": "v3.2.0",
+            "source": {
+                "type": "git",
+                "url": "https://github.com/hyperf/process.git",
+                "reference": "44d87aba430e9a955a2e41e45d011661dd47922c"
+            },
+            "dist": {
+                "type": "zip",
+                "url": "https://api.github.com/repos/hyperf/process/zipball/44d87aba430e9a955a2e41e45d011661dd47922c",
+                "reference": "44d87aba430e9a955a2e41e45d011661dd47922c",
+                "shasum": ""
+            },
+            "require": {
+                "hyperf/contract": "~3.2.0",
+                "hyperf/coordinator": "~3.2.0",
+                "hyperf/coroutine": "~3.2.0",
+                "hyperf/engine": "^2.0",
+                "hyperf/support": "~3.2.0",
+                "php": ">=8.2",
+                "psr/container": "^1.0 || ^2.0",
+                "psr/event-dispatcher": "^1.0"
+            },
+            "suggest": {
+                "hyperf/di": "Required to use annotations.",
+                "hyperf/event": "Required to dump the message before and after process.",
+                "hyperf/framework": "Required to use BootProcessListener."
+            },
+            "type": "library",
+            "extra": {
+                "hyperf": {
+                    "config": "Hyperf\\Process\\ConfigProvider"
+                },
+                "branch-alias": {
+                    "dev-master": "3.2-dev"
+                }
+            },
+            "autoload": {
+                "psr-4": {
+                    "Hyperf\\Process\\": "src/"
+                }
+            },
+            "notification-url": "https://packagist.org/downloads/",
+            "license": [
+                "MIT"
+            ],
+            "description": "A process component for hyperf.",
+            "homepage": "https://hyperf.io",
+            "keywords": [
+                "hyperf",
+                "php",
+                "process"
+            ],
+            "support": {
+                "docs": "https://hyperf.wiki",
+                "issues": "https://github.com/hyperf/hyperf/issues",
+                "pull-request": "https://github.com/hyperf/hyperf/pulls",
+                "source": "https://github.com/hyperf/hyperf"
+            },
+            "funding": [
+                {
+                    "url": "https://hyperf.wiki/#/zh-cn/donate",
+                    "type": "custom"
+                },
+                {
+                    "url": "https://opencollective.com/hyperf",
+                    "type": "open_collective"
+                }
+            ],
+            "time": "2026-06-07T09:04:32+00:00"
         },
         {
             "name": "hyperf/serializer",

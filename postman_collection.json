@@ -3474,7 +3474,7 @@
                     "request": {
                         "name": "Stream AI analysis of a stored log",
                         "description": {
-                            "content": "Streams AI-generated analysis (markdown) via SSE. Requires NVIDIA API keys in config.\nResponse is `text/event-stream` with `data: <chunk>` lines.\n\n(Deprecated; use /v1/ai/{id} instead)\n",
+                            "content": "Streams AI-generated analysis (markdown) via SSE. Requires NVIDIA API keys in config.\nResponse is `text/event-stream` with `data: <chunk>` lines.\n\nWhen `ai.agent.enabled` is true this runs the LogAgent tool loop bound to this log ID and emits additional `event: status` events (thinking / tool / tool_result / limit).\n\nWhen `ai.queue.enabled` is true the analysis executes in the Redis Streams micro-queue and this endpoint only relays the job event stream (an extra `event: status` with `{\"type\":\"queued\",\"position\":N}` precedes the analysis frames). Queue full returns `429` with `Retry-After` before the SSE stream starts; a client disconnect does not cancel the job (the result is still cached). If Redis is unavailable the request falls back to inline execution (`ai.queue.failOpen`).\n\n(Deprecated; use /v1/ai/{id} instead)\n",
                             "type": "text/plain"
                         },
                         "url": {
@@ -3742,7 +3742,7 @@
                     "request": {
                         "name": "Stream AI analysis of a stored log",
                         "description": {
-                            "content": "Streams AI-generated analysis (markdown) via SSE. Requires NVIDIA API keys in config.\nResponse is `text/event-stream` with `data: <chunk>` lines.\n",
+                            "content": "Streams AI-generated analysis (markdown) via SSE. Requires NVIDIA API keys in config.\nResponse is `text/event-stream` with `data: <chunk>` lines.\n\nWhen `ai.agent.enabled` is true this runs the LogAgent tool loop bound to this log ID and emits additional `event: status` events (thinking / tool / tool_result / limit).\n\nWhen `ai.queue.enabled` is true the analysis executes in the Redis Streams micro-queue and this endpoint only relays the job event stream (an extra `event: status` with `{\"type\":\"queued\",\"position\":N}` precedes the analysis frames). Queue full returns `429` with `Retry-After` before the SSE stream starts; a client disconnect does not cancel the job (the result is still cached). If Redis is unavailable the request falls back to inline execution (`ai.queue.failOpen`).\n",
                             "type": "text/plain"
                         },
                         "url": {
@@ -4010,7 +4010,7 @@
                     "request": {
                         "name": "Stream AI analysis of raw content",
                         "description": {
-                            "content": "Same as `/1/ai/{id}` but analyses provided content directly without storage.\n\n(Deprecated; use /v1/ai/analyse instead)\n",
+                            "content": "Same as `/1/ai/{id}` but analyses provided content directly without storage.\n\n(Deprecated; use /v1/ai/analyse instead)\nQueue-mode behavior (queued event, 429 on full queue, fail-open) is identical to /v1/ai/{id}.\n",
                             "type": "text/plain"
                         },
                         "url": {
@@ -4280,7 +4280,7 @@
                     "request": {
                         "name": "Stream AI analysis of raw content",
                         "description": {
-                            "content": "Same as `/v1/ai/{id}` but analyses provided content directly without storage.\n",
+                            "content": "Same as `/v1/ai/{id}` but analyses provided content directly without storage.\nQueue-mode behavior (queued event, 429 on full queue, fail-open) is identical to /v1/ai/{id}.\n",
                             "type": "text/plain"
                         },
                         "url": {
