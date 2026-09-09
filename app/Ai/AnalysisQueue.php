@@ -91,16 +91,24 @@ final class AnalysisQueue
      *
      * 不能用 XLEN：XACK 不从 Stream 移除条目，XLEN 是累计消息数——
      * 用它判满会导致「消费完毕但计数不减」的永久 429（2026-09-08 线上事故）。
-     * 消费组尚未创建（NOGROUP，如消费者进程未启动）时保守回退 XLEN。
+     * 组是否存在必须以 XINFO GROUPS 返回列表判定（phpredis 对缺失组的 XPENDING
+     * 不一定抛异常，可能返回 false）；组尚未创建（消费者未启动）时全部条目都在
+     * 排队，保守回退 XLEN。Redis 故障时 xLen 同样抛出，由调用方 fail-open。
      */
     public static function queueDepth(): int
     {
         try {
-            $lag = RedisStreams::xGroupLag(self::QUEUE_KEY, self::GROUP);
-            $pending = RedisStreams::xPendingCount(self::QUEUE_KEY, self::GROUP);
-            return max(0, (int) ($lag ?? 0)) + max(0, $pending);
+            foreach (RedisStreams::xInfoGroups(self::QUEUE_KEY) as $g) {
+                if (($g['name'] ?? null) !== self::GROUP) {
+                    continue;
+                }
+                if (($g['lag'] ?? null) === null) {
+                    break; // Redis < 7 无 lag 字段：回退 XLEN
+                }
+                return max(0, (int) $g['lag']) + max(0, (int) ($g['pending'] ?? 0));
+            }
+            return RedisStreams::xLen(self::QUEUE_KEY);
         } catch (\Throwable $e) {
-            // NOGROUP：无人消费过，全部条目都在排队
             return RedisStreams::xLen(self::QUEUE_KEY);
         }
     }

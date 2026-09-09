@@ -72,47 +72,45 @@ class RedisStreams extends RedisClient
     }
 
     /**
-     * XPENDING summary：组内已投递未确认（in-flight）条目数。
-     */
-    public static function xPendingCount(string $key, string $group): int
-    {
-        $summary = self::connection()->xpending($key, $group);
-        return is_array($summary) ? (int) ($summary[0] ?? 0) : 0;
-    }
-
-    /**
-     * XINFO GROUPS：该消费组未投递（lag）条目数；组不支持 lag 字段时返回 null。
+     * XINFO GROUPS 归一化为组信息 map 列表（field => value）。
      *
-     * @throws \Throwable 组不存在（NOGROUP）等 Redis 错误原样抛出
+     * phpredis 不同版本/不同组数下可能返回 map 或扁平 [k,v,k,v] 数组，
+     * 统一展开；单组时兼容直接返回该组的 map。
+     * 注意：phpredis 对组不存在的 XPENDING 不一定抛异常（可能返回 false），
+     * 「组是否存在」必须以本命令的返回列表判定，不能依赖 xpending 的异常。
+     *
+     * @return array<int, array<string, mixed>>
+     * @throws \Throwable key 不存在等 Redis 错误
      */
-    public static function xGroupLag(string $key, string $group): ?int
+    public static function xInfoGroups(string $key): array
     {
-        $groups = self::connection()->xinfo('GROUPS', $key);
-        if (!is_array($groups)) {
-            return null;
+        $reply = self::connection()->xinfo('GROUPS', $key);
+        if (!is_array($reply)) {
+            return [];
         }
-        // phpredis 单组时可能直接返回该组的 map，统一成组列表遍历
-        $lists = isset($groups['name']) ? [$groups] : $groups;
+        // 单组时 phpredis 可能直接返回该组的 field=>value map
+        $lists = array_is_list($reply) ? $reply : [$reply];
+        $out = [];
         foreach ($lists as $g) {
             if (!is_array($g)) {
                 continue;
             }
-            $pairs = [];
-            if (isset($g[0])) {
-                // 部分版本返回扁平数组 [field, value, field, value...]
-                for ($i = 0; $i + 1 < count($g); $i += 2) {
-                    if (is_string($g[$i])) {
-                        $pairs[$g[$i]] = $g[$i + 1];
-                    }
-                }
-            } else {
-                $pairs = $g;
+            if (!array_is_list($g)) {
+                $out[] = $g;
+                continue;
             }
-            if (($pairs['name'] ?? null) === $group && array_key_exists('lag', $pairs)) {
-                return $pairs['lag'] === null ? null : (int) $pairs['lag'];
+            // RESP 扁平数组 [field, value, field, value...]
+            $pairs = [];
+            for ($i = 0; $i + 1 < count($g); $i += 2) {
+                if (is_string($g[$i])) {
+                    $pairs[$g[$i]] = $g[$i + 1];
+                }
+            }
+            if ($pairs !== []) {
+                $out[] = $pairs;
             }
         }
-        return null;
+        return $out;
     }
 
     /**
