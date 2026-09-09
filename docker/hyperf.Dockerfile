@@ -23,12 +23,20 @@ RUN chmod +x /usr/local/bin/install-php-extensions \
     && install-php-extensions pdo_mysql pdo_sqlite redis zip pcntl posix sockets mbstring
 
 # 编译 Swoole（固定版本，保证构建可复现且满足 Hyperf 3.2 + PHP 8.5 所需的 6.2+）
+# libjemalloc2：替换 glibc malloc 作为分配器。glibc 的 free 只在堆顶可连续收缩
+# 时才 munmap 归还（brk 语义），常驻进程（尤其 ai-queue-consumer 长连接大分配）
+# 峰值后 RSS 永不回落；jemalloc 按 dirty/muzzy decay 主动 purge 归还页面。
 ARG SWOOLE_VERSION=6.2.0
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        autoconf build-essential libcurl4-openssl-dev libssl-dev zlib1g-dev libc-ares-dev libbrotli-dev \
+        autoconf build-essential libcurl4-openssl-dev libssl-dev zlib1g-dev libc-ares-dev libbrotli-dev libjemalloc2 \
     && pecl install swoole-${SWOOLE_VERSION} \
     && docker-php-ext-enable swoole \
     && rm -rf /var/lib/apt/lists/*
+
+# jemalloc 生效：全容器进程（php/hyperf/composer/rag:build）统一走 jemalloc；
+# decay 1s 加速空闲页归还（默认 10s，对 3.6G 小机器再激进一点，收益是 RSS 紧跟真实用量）
+ENV LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libjemalloc.so.2 \
+    MALLOC_CONF=dirty_decay_ms:1000,muzzy_decay_ms:1000,background_thread:true
 
 # 编译 SpinYarn PHP 扩展（C ABI 来自阶段 1），编译完成后删除源码与构建产物，
 # 仅保留 /usr/local/lib 下的共享库，减小镜像体积与攻击面
