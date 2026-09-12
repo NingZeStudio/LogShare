@@ -274,9 +274,10 @@ LogAgent 模式（`ai.agent.enabled`）会输出额外的 `event: status` 事件
 | `event: status` | `{"type":"thinking","delta":"..."}` | 模型思维链（reasoning_content）逐段推送，供前端展示 |
 | `event: status` | `{"type":"tool","name":"web_search_exa","arguments":{...}}` | 即将调用某工具 |
 | `event: status` | `{"type":"tool_result","name":"web_search_exa","summary":"...","truncated":true}` | 工具返回摘要（完整结果进 LLM 上下文） |
-| `event: status` | `{"type":"limit","rounds":3}` | 达到工具循环上限 |
-| `data:`（原有） | `{"choices":[{"delta":{"content":"..."}}]}` | 正文增量 |
-| `event: done` | `{"status":"completed"}` | 流结束 |
+| `event: status` | `{"type":"limit","rounds":3}` | 达到工具循环上限（默认 50 轮） |
+| `data:`（原有） | `{"choices":[{"delta":{"content":"..."}}]}` | 正文增量（OpenAI 兼容格式） |
+| `event: error` | `{"error":"..."}` | 流异常终止（排队超时、队列故障或上游异常） |
+| `event: done` | `{"status":"completed"}` | 流正常结束 |
 
 **队列模式（`ai.queue.enabled`）：** 全部 AI 分析经 Redis Streams 微队列执行，端点本身只做 SSE 中继，事件协议不变（仅多首帧 `queued`）。三个行为差异：① 队列已满（深度达 `ai.queue.maxQueue`）时，在 SSE 开始前返回 `429` JSON（带 `Retry-After: 30`）；② 客户端断开不取消任务，分析继续跑完并写入结果缓存，后续请求（含缓存命中路径）直接取用；③ Redis 不可用时按 `ai.queue.failOpen` 回退请求内直连执行（默认回退），行为与队列关闭时一致。中继端最长等待 `ai.queue.waitTimeout` 秒，超时以 `event: error` 收尾。
 

@@ -816,7 +816,10 @@ paths:
         
         When `ai.agent.enabled` is true this runs the LogAgent tool loop bound to this
         log ID (file tools `list_log_files` / `read_log_file` / `grep_log_file` are scoped to it) and emits
-        additional `event: status` events (`type`: thinking / tool / tool_result / limit).
+        additional `event: status` events (`type`: thinking / tool / tool_result / limit) as well as
+        `event: error` on failure and `event: done` on completion. Logs <12KB are passed in full; logs >=12KB
+        undergo targeted error localization (12KB window around the first error or prompt guidance with
+        grep_log_file keywords when no explicit error matches).
 
         When `ai.queue.enabled` is true the analysis executes in the Redis Streams
         micro-queue and this endpoint only relays the job event stream (an extra
@@ -841,7 +844,7 @@ paths:
             text/event-stream:
               schema:
                 type: string
-              example: "data: ## Analysis\n\ndata: Found 3 errors...\n\ndata: [DONE]\n\n"
+              example: "event: status\ndata: {\"type\":\"queued\",\"position\":1}\n\nevent: status\ndata: {\"type\":\"thinking\",\"delta\":\"Analyzing logs...\"}\n\ndata: {\"choices\":[{\"delta\":{\"content\":\"# Analysis\\n...\"}}]}\n\nevent: done\ndata: {\"status\":\"completed\"}\n\n"
           headers:
             Cache-Control:
               schema:
@@ -915,7 +918,8 @@ paths:
         
         When `ai.agent.enabled` is true the endpoint runs the LogAgent tool loop and
         emits additional `event: status` events (`type`: thinking / tool / tool_result / limit)
-        alongside the legacy `data:` content lines.
+        alongside the legacy `data:` content lines, `event: error` on failure, and `event: done`
+        on completion. Supports request body compression via `Content-Encoding` (br / gzip / deflate).
       operationId: aiAnalyseRawV1
       requestBody:
         required: true
