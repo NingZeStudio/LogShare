@@ -159,7 +159,7 @@ class LogAgent
                     // 其余工具保留 12000 字节上限，超限时附带可见标记。
                     $toolContent = match ($name) {
                         'read_log_file' => $result,
-                        'rag_search', 'web_search_exa' => self::truncateForModel($result, self::MAX_RETRIEVAL_RESULT_BYTES),
+                        'rag_search', 'web_search_exa', 'grep_log_file' => self::truncateForModel($result, self::MAX_RETRIEVAL_RESULT_BYTES),
                         default => self::truncateForModel($result),
                     };
 
@@ -281,6 +281,25 @@ class LogAgent
                     ],
                 ],
             ];
+            $tools[] = [
+                'type' => 'function',
+                'function' => [
+                    'name' => 'grep_log_file',
+                    'description' => '在当前日志的指定文件中按关键词逐行检索（类似 grep），返回匹配行号、行内容与前后上下文。'
+                        . '适合定位特定异常、报错关键字、mod ID 或崩溃特征，避免通读超大文件；获取行号后可按需配合 read_log_file 精确读取。',
+                    'parameters' => [
+                        'type' => 'object',
+                        'properties' => [
+                            'query' => ['type' => 'string', 'description' => '检索关键词或文本短语（如异常类名、模组名、错误关键字）'],
+                            'filename' => ['type' => 'string', 'description' => '文件名（主文件为 main，或使用 list_log_files 列出的名称；省略则默认 main）'],
+                            'case_sensitive' => ['type' => 'boolean', 'description' => '是否区分大小写，默认 false（忽略大小写）'],
+                            'context_lines' => ['type' => 'integer', 'description' => '命中行前后各显示的上下文行数（0-5，默认 1）'],
+                            'max_matches' => ['type' => 'integer', 'description' => '最大返回匹配项数（1-30，默认 10）'],
+                        ],
+                        'required' => ['query'],
+                    ],
+                ],
+            ];
         }
 
         return $tools;
@@ -300,6 +319,8 @@ class LogAgent
             . "- 引用来源：知识库结论标注条目来源路径（检索结果自带）；网络结论标注返回内容中的 URL 或站点名。\n"
             . "- 知识库结论与日志证据矛盾时，以日志为准；结论中注明哪些方面未能核实，不要臆测。\n"
             . "- 附件中存在 crash-reports 类文件时，优先用 read_log_file 读取它：崩溃报告含完整堆栈、系统状态与 mod 列表，信息密度高于 latest.log 尾部；主日志仅用于补充崩溃报告未覆盖的时间线。\n"
+            . "- 大日志与多附件定位：排查特定异常类名、报错文本、mod ID 或配置行时，优先使用 grep_log_file 检索行号与上下文，避免通读无用段落；确认具体行号后再使用 read_log_file(filename, line_start, line_end) 定向扩展。\n"
+            . "- 长日志未定位到显式错误时：先按提示的基础常用 grep 关键词快速探测；若排查后确认无异常，应适可而止给出未发现异常的客观结论，切勿为了寻找不存在的问题而陷入盲目循环调用。\n"
             . "- read_log_file 返回的主日志和附加日志均已经过与上传主日志相同的脱敏过滤；不得声称附加日志未脱敏，也不得要求用户重新提供其中的敏感信息。\n\n"
             . "示例（正确的检索路径）：\n"
             . "日志片段「Caused by: org.spongepowered.asm.mixin.transformer.MixinApplyError: ...」\n"
@@ -310,18 +331,192 @@ class LogAgent
             $system .= "\n\n以下是你可检索的内部知识库所涵盖的主题（帮助判断检索方向）：\n" . $topicsText;
         }
 
-        // 用户消息截断使用专属提示（不用工具结果的标记文案）
-        $userContent = "需要分析的日志内容：\n\n" . $content;
-        if (strlen($content) > self::MAX_TOOL_RESULT_BYTES) {
-            $userContent = "需要分析的日志内容：\n\n"
-                . mb_strcut($content, 0, self::MAX_TOOL_RESULT_BYTES)
-                . "\n\n[日志内容过长已截断，如需要可用文件工具读取完整内容]";
+        // 初始日志内容：长度 < 12KB 时不触发定位并直接塞入；>= 12KB 时统一触发定位，定位到塞聚焦窗口，未定位到不塞日志正文
+        $initialWindow = self::buildInitialLogWindow($content, self::MAX_TOOL_RESULT_BYTES);
+
+        if ($initialWindow !== null) {
+            $userContent = "需要分析的日志内容：\n\n" . $initialWindow;
+        } else {
+            $totalLines = substr_count($content, "\n") + 1;
+            $totalBytes = strlen($content);
+            $userContent = "待分析日志概况：\n"
+                . "- 日志总大小：{$totalBytes} 字节，共 {$totalLines} 行。\n"
+                . "- 预扫描结果：日志总长度超出单次上下文预算，且系统预扫描未在日志中匹配到显式崩溃或致命错误标记（如 Caused by / Traceback / FATAL / Exception 等）。为防止开服期正常启动日志产生误导，初始未截取前置日志正文。\n\n"
+                . "排查指引与常用 grep 关键词（遵循适可而止思维链）：\n"
+                . "1. 推荐优先使用 `grep_log_file` 工具进行 1 至 2 次定向检索，基础常用关键词包括：\n"
+                . "   - 异常与报错级别：`ERROR`、`FATAL`、`Exception`、`Throwable`\n"
+                . "   - 根本原因与堆栈：`Caused by`、`Stacktrace`、`Traceback`\n"
+                . "   - 停机与崩溃谓词：`Failed to`、`Shutting down`、`Stopping server`、`crash`\n"
+                . "   - 常见故障特征：`MixinApplyError`、`OutOfMemory`、`NoSuchMethod`、`ClassNotFound`\n"
+                . "2. 适可而止思维链：\n"
+                . "   - 结合可能的问题线索，从中选择最具针对性的 1~2 个关键词检索即可；\n"
+                . "   - 若通过 `grep_log_file` 定位到明确报错且上下文足够，立即输出分析结论；需要局部扩展时再使用 `read_log_file` 指定行区间读取；\n"
+                . "   - 若经基础关键词排查后仍未发现致命错误或崩溃迹象，应适可而止，直接向用户客观说明“在当前日志中未检索到明显致命错误”，并给出常规排障或配置检查建议，切勿盲目反复试词或通读无用段落。";
         }
 
         return [
             ['role' => 'system', 'content' => $system],
             ['role' => 'user', 'content' => $userContent],
         ];
+    }
+
+    /**
+     * 将长日志智能聚焦到首个关键错误/异常的上下文窗口（预留前置因果与完整后置堆栈）。
+     * 规则与前端 logParser.worker.ts 错误检测算法严格对齐。
+     *
+     * 当日志总长度 < $maxBytes 时不触发定位算法，原样返回完整内容；
+     * 其他时候（总长度 >= $maxBytes）统一触发定位正则：
+     * - 若定位到错误锚点，以其为核心截取聚焦上下文窗口（整行对齐，至多约 $maxBytes）；
+     * - 若未定位到任何显式错误，返回 null，不再盲目截取前缀日志塞入 user message。
+     *
+     * @param string $content
+     * @param int $maxBytes
+     * @return string|null 聚焦窗口文本；若超出预算且未匹配到错误特征则返回 null
+     */
+    public static function buildInitialLogWindow(string $content, int $maxBytes = self::MAX_TOOL_RESULT_BYTES): ?string
+    {
+        if (strlen($content) < $maxBytes) {
+            return $content;
+        }
+
+        $lines = explode("\n", $content);
+        $totalLines = count($lines);
+
+        // 寻找首个关键错误锚点行
+        $anchorIndex = self::findErrorAnchorLine($lines);
+
+        // 未定位到任何显式错误特征：返回 null，交由上层生成指引与常用 grep 词
+        if ($anchorIndex === null) {
+            return null;
+        }
+
+        // 找到错误锚点行：以该行为核心构建约 $maxBytes 的窗口
+        // 为错误发生前保留前置因果上下文（预留约 2500 字节）
+        $preContextBytesLimit = (int) min(2500, $maxBytes * 0.25);
+        $anchorLineBytes = strlen($lines[$anchorIndex]) + 1;
+        $totalBytes = $anchorLineBytes;
+
+        // 1. 向前扫描确定起始行
+        $startIndex = $anchorIndex;
+        while ($startIndex > 0) {
+            $prevLineBytes = strlen($lines[$startIndex - 1]) + 1;
+            if ($totalBytes + $prevLineBytes > $preContextBytesLimit + $anchorLineBytes) {
+                break;
+            }
+            $startIndex--;
+            $totalBytes += $prevLineBytes;
+        }
+
+        // 2. 向后扩展至预算上限或文件末尾
+        $endIndex = $anchorIndex;
+        while ($endIndex + 1 < $totalLines) {
+            $nextLineBytes = strlen($lines[$endIndex + 1]) + 1;
+            if ($totalBytes + $nextLineBytes > $maxBytes) {
+                break;
+            }
+            $endIndex++;
+            $totalBytes += $nextLineBytes;
+        }
+
+        // 3. 若后置已到底但预算仍有结余，继续向前吸收前置行
+        while ($startIndex > 0) {
+            $prevLineBytes = strlen($lines[$startIndex - 1]) + 1;
+            if ($totalBytes + $prevLineBytes > $maxBytes) {
+                break;
+            }
+            $startIndex--;
+            $totalBytes += $prevLineBytes;
+        }
+
+        $windowLines = array_slice($lines, $startIndex, $endIndex - $startIndex + 1);
+        $windowText = implode("\n", $windowLines);
+
+        $startLineNum = $startIndex + 1;
+        $endLineNum = $endIndex + 1;
+        $anchorLineNum = $anchorIndex + 1;
+
+        $headerNotice = '';
+        if ($startIndex > 0) {
+            $headerNotice = "[前文已省略第 1 - " . ($startLineNum - 1) . " 行 ...]\n\n";
+        }
+
+        $footerNotice = '';
+        if ($endIndex < $totalLines - 1) {
+            $footerNotice = "\n\n[后文已省略第 " . ($endLineNum + 1) . " - {$totalLines} 行。当前已自动定位到第 {$anchorLineNum} 行错误发生处（截取上下文第 {$startLineNum} - {$endLineNum} 行，共 {$totalLines} 行）；如需查看其它区间请使用 read_log_file 工具]";
+        } else {
+            $footerNotice = "\n\n[已自动定位到第 {$anchorLineNum} 行错误发生处直至文件末尾（截取上下文第 {$startLineNum} - {$endLineNum} 行，共 {$totalLines} 行）]";
+        }
+
+        return $headerNotice . $windowText . $footerNotice;
+    }
+
+    /**
+     * 扫描日志行数组，匹配首个高置信度错误锚点行（0-indexed）。
+     *
+     * @param string[] $lines
+     * @return int|null 匹配到的行索引，未匹配到返回 null
+     */
+    public static function findErrorAnchorLine(array $lines): ?int
+    {
+        // 第一优先级（Tier 1）：确凿致命错误、异常堆栈、根因、崩溃报告标记
+        // 与前端 RE_CAUSED_BY, RE_PYTHON_TRACEBACK, RE_ERROR_LEVEL, RE_FATAL_LEVEL, RE_EXCEPTION_NAME, Crash Report 标记对齐
+        $tier1Patterns = [
+            '/^Caused by:\s*/i',
+            '/^Traceback\s*\(most\s+recent\s+call\s+last\)\s*:/i',
+            '/^\s*(?:Stacktrace|Details):/i',
+            '/^-- Affected level --$/i',
+            '/Exception in thread "[^"]+"/i',
+            '/(?:\[|:\s*|(?:\/\s*))(?:FATAL|CRITICAL|EMERGENCY|SEVERE)(?:\]|:|\s)/i',
+            '/(?:\[|:\s*|(?:\/\s*))ERR(?:OR)?(?:\]|:|\s)/i',
+            '/^(?:\s*\[?\s*)?(?:(?:ERROR?|FATAL|CRITICAL)\s*[:;])/i',
+            '/\b[A-Za-z0-9_$]+(?:Exception|Error|Throwable)(?::\s+|\s+at\s+|$)/',
+        ];
+
+        // 第二优先级（Tier 2）：堆栈帧、明确失败谓词、Python 文件行
+        // 与前端 RE_STACK_AT, RE_FAIL_KEYWORDS, RE_PYTHON_FILE 对齐
+        $tier2Patterns = [
+            '/^\s*at\s+[A-Za-z0-9_$]+(?:\.[A-Za-z0-9_$]+)+/',
+            '/^\s*File\s+"[^"]*",\s+line\s+\d+/i',
+            '/^\s*Suppressed:\s+/i',
+            '/^\s*(?:Failed\s+to|Cannot\s+|Unable\s+to|Could\s+not|Illegal\s+|Invalid\s+|Unsupported\s+|Not\s+found\s*[:;]|Missing\s+)/i',
+        ];
+
+        $firstTier2Index = null;
+
+        foreach ($lines as $index => $line) {
+            $trimmed = trim($line);
+            if ($trimmed === '') {
+                continue;
+            }
+
+            foreach ($tier1Patterns as $pattern) {
+                if (preg_match($pattern, $line)) {
+                    return $index;
+                }
+            }
+
+            if ($firstTier2Index === null) {
+                foreach ($tier2Patterns as $pattern) {
+                    if (preg_match($pattern, $line)) {
+                        $firstTier2Index = $index;
+                        break;
+                    }
+                }
+            }
+        }
+
+        // 如果首个次级命中是堆栈帧（at ...），向前探查最多 3 行以定位抛出异常的描述行
+        if ($firstTier2Index !== null && preg_match('/^\s*at\s+/i', $lines[$firstTier2Index])) {
+            for ($k = $firstTier2Index - 1; $k >= max(0, $firstTier2Index - 3); $k--) {
+                $prev = trim($lines[$k]);
+                if ($prev !== '' && !preg_match('/^\s*at\s+/i', $prev)) {
+                    $firstTier2Index = $k;
+                    break;
+                }
+            }
+        }
+
+        return $firstTier2Index;
     }
 
     /**
@@ -395,7 +590,10 @@ class LogAgent
 你是一个专业的 Minecraft 服务器日志分析助手。你的任务是分析玩家提交的日志，定位问题并提供解决方案。用户正在实时等待分析结果，追求速度、适可而止：日志内容本身通常已包含定位问题所需的全部证据，通读后若足以形成结论，直接开始分析并输出，不要为了求稳而追加工具调用。每次调用工具前先自问：这个结果会改变结论吗？不会就不要调用。
 
 工作方式：
-1. 如需查看日志文件，先用 `list_log_files` 查看有哪些文件，然后调用 `read_log_file`。默认不传范围参数以读取完整文件；需要聚焦局部内容时，由你传入 `line_start` 和 `line_end` 指定行区间。超大内容需要续读时，使用返回的 `next_offset`。
+1. 如需查看或定位日志内容：
+   - 先用 `list_log_files` 查看有哪些文件。
+   - 若需在长日志或多个附件中查找特定异常、报错关键字、mod ID 或配置，优先使用 `grep_log_file` 快速获取匹配行号与上下文，避免盲目通读整篇。
+   - 若需通读完整文件或特定行区间，调用 `read_log_file`。默认不传范围参数以读取完整文件；需要聚焦局部内容时，由你传入 `line_start` 和 `line_end` 指定行区间。超大内容需要续读时，使用返回的 `next_offset`。
 2. 若知识库检索结果被截断（出现"…"或"已截断"标记），基于被截断处再次检索补全，不需要重复读取文件。
 
 重要停止规则：
@@ -404,12 +602,13 @@ class LogAgent
 - 当某一个工具调用能覆盖全部问题时，不要再发起新的工具调用；应直接给出结论。
 - 整个分析一般 2 至 4 轮工具调用即可完成（指工具循环轮次；检索类调用的次数预算见检索策略，两者是不同维度）；接近这个量级时优先收敛，基于已有证据给出结论，检索与文件读取都是服务于结论的手段，不是必须走完的流程。
 - 文件工具失败或超时时，最多重试一次；仍不行就跳过它，基于现有证据继续分析，并在结论中说明哪些方面未能核实。不要反复重试，更不要因个别工具不可用而搁置结论。
+- 若长日志初始未匹配到显式错误，按推荐的基础关键词使用 grep_log_file 快速探测 1 至 2 次；若确实未发现异常信号，应适可而止并客观告知用户未发现明显致命错误，切勿无休止更换关键词试错。
 
 回答使用简体中文，结构清晰。全程禁止使用 emoji 或表情符号。
 PROMPT;
 
         if ($logId !== null) {
-            $prompt .= "\n\n你正在分析的日志 ID 是 {$logId}。你可以使用 list_log_files 查看该日志下的文件列表，使用 read_log_file 读取文件内容进行对比分析。";
+            $prompt .= "\n\n你正在分析的日志 ID 是 {$logId}。你可以使用 list_log_files 查看该日志下的文件列表，使用 grep_log_file 检索关键内容，使用 read_log_file 读取文件内容进行对比分析。";
         }
 
         return $prompt;
@@ -498,6 +697,9 @@ PROMPT;
 
                 case 'read_log_file':
                     return self::readLogFile($logId, $arguments, $session);
+
+                case 'grep_log_file':
+                    return self::grepLogFile($logId, $arguments);
 
                 default:
                     return '未知工具: ' . $name;
@@ -666,6 +868,121 @@ PROMPT;
     }
 
     /**
+     * Grep matching lines from a log file bound to the current session.
+     *
+     * @param string|null $logId
+     * @param array $arguments
+     * @return string
+     */
+    private static function grepLogFile(?string $logId, array $arguments): string
+    {
+        if ($logId === null) {
+            return '当前会话未绑定日志文件';
+        }
+
+        $query = (string) ($arguments['query'] ?? '');
+        if ($query === '') {
+            return '检索关键词 query 不能为空';
+        }
+
+        $log = self::loadSessionLog($logId);
+        if ($log === null) {
+            return '日志不存在: ' . $logId;
+        }
+
+        $filename = $arguments['filename'] ?? '';
+        $sessionKey = ($filename === '' || $filename === 'main') ? 'main' : $filename;
+
+        if ($sessionKey === 'main') {
+            $content = $log->getContent();
+        } else {
+            $content = $log->getFile($sessionKey);
+            if ($content === null) {
+                return '文件不存在: ' . $filename;
+            }
+        }
+
+        $lines = explode("\n", $content);
+        $totalLines = count($lines);
+
+        $caseSensitive = (bool) ($arguments['case_sensitive'] ?? false);
+        $contextLines = max(0, min(5, (int) ($arguments['context_lines'] ?? 1)));
+        $maxMatches = max(1, min(30, (int) ($arguments['max_matches'] ?? 10)));
+
+        $matchingLines = [];
+        foreach ($lines as $idx => $line) {
+            $matched = $caseSensitive
+                ? str_contains($line, $query)
+                : (stripos($line, $query) !== false);
+
+            if ($matched) {
+                $matchingLines[] = $idx + 1; // 1-indexed
+            }
+        }
+
+        $totalFound = count($matchingLines);
+        if ($totalFound === 0) {
+            return sprintf('在文件 %s 中未找到包含 "%s" 的行。', $sessionKey, $query);
+        }
+
+        $displayedMatches = array_slice($matchingLines, 0, $maxMatches);
+        $matchSet = array_fill_keys($displayedMatches, true);
+
+        // 合并重叠或连续的上下文行区间
+        $ranges = [];
+        foreach ($displayedMatches as $matchLine) {
+            $start = max(1, $matchLine - $contextLines);
+            $end = min($totalLines, $matchLine + $contextLines);
+
+            if (!empty($ranges) && $start <= $ranges[count($ranges) - 1]['end'] + 1) {
+                $lastIdx = count($ranges) - 1;
+                $ranges[$lastIdx]['end'] = max($ranges[$lastIdx]['end'], $end);
+            } else {
+                $ranges[] = [
+                    'start' => $start,
+                    'end' => $end,
+                ];
+            }
+        }
+
+        // 计算行号最大宽度以对齐输出
+        $padWidth = strlen((string) $totalLines);
+
+        $blocks = [];
+        foreach ($ranges as $range) {
+            $blockLines = [];
+            for ($lineNum = $range['start']; $lineNum <= $range['end']; $lineNum++) {
+                $isMatch = isset($matchSet[$lineNum]);
+                $marker = $isMatch ? '> ' : '  ';
+                $paddedNum = str_pad((string) $lineNum, $padWidth, ' ', STR_PAD_LEFT);
+                $blockLines[] = sprintf('%s%s | %s', $marker, $paddedNum, $lines[$lineNum - 1]);
+            }
+            $blocks[] = implode("\n", $blockLines);
+        }
+
+        $header = sprintf(
+            '在文件 %s（共 %d 行）中检索 "%s"（%s）：共找到 %d 处匹配%s',
+            $sessionKey,
+            $totalLines,
+            $query,
+            $caseSensitive ? '区分大小写' : '忽略大小写',
+            $totalFound,
+            $totalFound > $maxMatches ? sprintf('（已展示前 %d 处）：', $maxMatches) : '：'
+        );
+
+        $footer = '';
+        if ($totalFound > $maxMatches) {
+            $footer = sprintf(
+                "\n\n[已达上限 %d 处，后续 %d 处匹配已省略；若需查看更多可增大 max_matches，或配合 read_log_file 精准读取对应行区间]",
+                $maxMatches,
+                $totalFound - $maxMatches
+            );
+        }
+
+        return $header . "\n\n" . implode("\n--\n", $blocks) . $footer;
+    }
+
+    /**
      * @param string|null $logId
      * @return \App\Log|null
      */
@@ -722,7 +1039,7 @@ PROMPT;
     private static function emitToolResult(string $name, string $result): void
     {
         $summary = match ($name) {
-            'read_log_file', 'list_log_files', 'list_topics' => self::buildCompactSummary($name, $result),
+            'read_log_file', 'list_log_files', 'list_topics', 'grep_log_file' => self::buildCompactSummary($name, $result),
             'rag_search' => self::buildHitListSummary($result),
             default => mb_strcut($result, 0, self::STATUS_SUMMARY_BYTES),
         };
@@ -738,7 +1055,8 @@ PROMPT;
     /**
      * Compact summaries for tools whose full output is meaningless to the user:
      * read_log_file 的原文是给模型的，用户只需知道「读了哪个文件、多少行」；
-     * list_topics 只需知道知识库覆盖哪些主题目录。
+     * list_topics 只需知道知识库覆盖哪些主题目录；
+     * grep_log_file 展示命中了多少处及关键匹配行。
      */
     private static function buildCompactSummary(string $tool, string $result): string
     {
@@ -753,6 +1071,19 @@ PROMPT;
                 }
             }
             return $summary;
+        }
+
+        if ($tool === 'grep_log_file') {
+            // 首行即检索概况：「在文件 main（共 N 行）中检索 "..."：共找到 M 处匹配」
+            // 附带匹配行指示标记行（形如 "> 142 | ..."），限制在 STATUS_SUMMARY_BYTES 内
+            $summaryLines = [trim($lines[0])];
+            foreach ($lines as $line) {
+                $trim = trim($line);
+                if (str_starts_with($trim, '>')) {
+                    $summaryLines[] = $trim;
+                }
+            }
+            return mb_strcut(implode("\n", $summaryLines), 0, self::STATUS_SUMMARY_BYTES);
         }
 
         if ($tool === 'list_topics') {

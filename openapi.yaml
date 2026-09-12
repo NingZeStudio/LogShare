@@ -815,7 +815,7 @@ paths:
         with `data: <chunk>` lines.
         
         When `ai.agent.enabled` is true this runs the LogAgent tool loop bound to this
-        log ID (file tools `list_log_files` / `read_log_file` are scoped to it) and emits
+        log ID (file tools `list_log_files` / `read_log_file` / `grep_log_file` are scoped to it) and emits
         additional `event: status` events (`type`: thinking / tool / tool_result / limit).
 
         When `ai.queue.enabled` is true the analysis executes in the Redis Streams
