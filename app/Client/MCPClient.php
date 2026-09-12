@@ -162,6 +162,7 @@ class MCPClient
             CURLOPT_RETURNTRANSFER => true,
             CURLOPT_TIMEOUT => $this->timeout,
             CURLOPT_CONNECTTIMEOUT => $this->connectTimeout,
+            CURLOPT_FORBID_REUSE => true,
             CURLOPT_HEADERFUNCTION => function ($curl, $headerLine) {
                 $trimmed = trim($headerLine);
                 if (stripos($trimmed, 'mcp-session-id:') === 0) {
@@ -171,35 +172,39 @@ class MCPClient
             },
         ]);
 
-        $body = curl_exec($ch);
-        $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-        $curlError = curl_error($ch);
+        try {
+            $body = curl_exec($ch);
+            $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+            $curlError = curl_error($ch);
 
-        if ($body === false) {
-            throw new \Exception('MCP request failed: ' . $curlError);
-        }
-        if ($httpCode === 429) {
-            throw new \Exception('MCP request rate limited (HTTP 429).');
-        }
-        if ($httpCode >= 400) {
-            throw new \Exception('MCP request failed with HTTP ' . $httpCode . ': ' . mb_substr((string) $body, 0, 300));
-        }
+            if ($body === false) {
+                throw new \Exception('MCP request failed: ' . $curlError);
+            }
+            if ($httpCode === 429) {
+                throw new \Exception('MCP request rate limited (HTTP 429).');
+            }
+            if ($httpCode >= 400) {
+                throw new \Exception('MCP request failed with HTTP ' . $httpCode . ': ' . mb_substr((string) $body, 0, 300));
+            }
 
-        $decoded = $this->decodeResponse((string) $body);
+            $decoded = $this->decodeResponse((string) $body);
 
-        if (isset($decoded['error'])) {
-            $error = $decoded['error'];
-            $message = $error['message'] ?? 'Unknown MCP error';
-            $code = $error['code'] ?? 0;
-            throw new \Exception('MCP error ' . $code . ': ' . $message);
+            if (isset($decoded['error'])) {
+                $error = $decoded['error'];
+                $message = $error['message'] ?? 'Unknown MCP error';
+                $code = $error['code'] ?? 0;
+                throw new \Exception('MCP error ' . $code . ': ' . $message);
+            }
+
+            if (!array_key_exists('result', $decoded)) {
+                throw new \Exception('MCP response missing result.');
+            }
+
+            $result = $decoded['result'];
+            return is_array($result) ? $result : ['content' => []];
+        } finally {
+            $ch = null;
         }
-
-        if (!array_key_exists('result', $decoded)) {
-            throw new \Exception('MCP response missing result.');
-        }
-
-        $result = $decoded['result'];
-        return is_array($result) ? $result : ['content' => []];
     }
 
     /**

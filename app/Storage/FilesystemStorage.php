@@ -145,7 +145,16 @@ class FilesystemStorage implements StorageInterface
         }
         $metadata['created'] = time();
 
-        return self::writeAtomically($metaPath, $metadata);
+        $written = self::writeAtomically($metaPath, $metadata);
+
+        // 复核主文件存在性（防御写入期间并发 Delete 导致的孤儿 .meta.json）
+        clearstatcache(true, $path);
+        if (!file_exists($path)) {
+            @unlink($metaPath);
+            return false;
+        }
+
+        return $written;
     }
 
     /**

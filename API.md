@@ -32,7 +32,7 @@ curl -N https://api.logshare.cn/v1/ai/sAbCdEf
 - 上传响应中的 `token` 是删除日志的唯一凭证，丢失后无法找回，请自行持久化保存。
 - `source` 字段建议填写启动器名与版本（如 `fcl/1.2.0`）。知识库收录了 Pojav、FCL、ZL2、Amethyst、PGW、MobileGlues 等启动器生态的问题案例，该字段用于让 AI 分析优先匹配对应来源的案例。
 - AI 分析使用 SSE 流式协议，解析方式见「SSE 事件协议」一节，注意 `event:` 行与 `data:` 行的配对关系。
-- 移动端建议开启 gzip 上传（`Content-Encoding: gzip`）以减小大日志的传输体积。
+- 移动端建议开启 Brotli 或 gzip 压缩上传（`Content-Encoding: br` 或 `Content-Encoding: gzip`）以减小大日志的传输体积；服务端默认优先采用 Brotli（`br`）压缩响应。
 - 客户端 HTTP 读超时应设置为 300 秒以上，Agent 的多轮工具分析可能持续数十秒。
 
 ---
@@ -47,7 +47,8 @@ POST /v1/log
 ```
 
 **Content-Type：** `application/x-www-form-urlencoded` 或 `application/json`。  
-**Content-Encoding：** 支持 `gzip`、`x-gzip`、`deflate`（可叠加，最多 5 层）。
+**Content-Encoding：** 支持 `br`（Brotli，推荐）、`gzip`、`x-gzip`、`deflate`（可叠加，最多 5 层）。
+**Accept-Encoding：** 支持 `br`、`gzip`、`deflate`，服务端默认优先采用 Brotli 压缩。
 
 **请求字段（JSON）：**
 

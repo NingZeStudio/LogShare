@@ -55,6 +55,12 @@ class ContentParser
                     case "gzip":
                         $body = @gzdecode($body, $limit);
                         break;
+                    case "br":
+                        if (!function_exists('brotli_uncompress')) {
+                            return new ApiError(501, "Brotli decompression is not supported on this server.");
+                        }
+                        $body = @brotli_uncompress($body, $limit);
+                        break;
                     default:
                         return new ApiError(415, "Unsupported Content-Encoding: " . htmlspecialchars($step));
                 }

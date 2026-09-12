@@ -3,9 +3,6 @@
 
 declare(strict_types=1);
 
-$isProduction = getenv('APP_ENV') === 'prod';
-ini_set('display_errors', $isProduction ? 'off' : 'on');
-ini_set('display_startup_errors', $isProduction ? 'off' : 'on');
 ini_set('memory_limit', '1G');
 
 error_reporting(E_ALL & ~E_DEPRECATED & ~E_USER_DEPRECATED);
@@ -14,6 +11,10 @@ error_reporting(E_ALL & ~E_DEPRECATED & ~E_USER_DEPRECATED);
 ! defined('SWOOLE_HOOK_FLAGS') && define('SWOOLE_HOOK_FLAGS', SWOOLE_HOOK_ALL);
 
 require BASE_PATH . '/vendor/autoload.php';
+
+$isProduction = getenv('APP_ENV') === 'prod';
+ini_set('display_errors', $isProduction ? 'off' : 'on');
+ini_set('display_startup_errors', $isProduction ? 'off' : 'on');
 
 use Hyperf\Context\ApplicationContext;
 use Hyperf\Di\Container;

@@ -152,15 +152,24 @@ final class AnalysisQueue
             }
         }
 
-        $payload = json_encode([
-            'jobId' => $jobId,
-            'content' => $content,
-            'cacheKey' => $cacheKey,
-            'logId' => $logId,
-            'cacheTTL' => $cacheTTL,
-        ], JSON_UNESCAPED_UNICODE);
-        RedisStreams::set(self::payloadKey($jobId), (string) gzcompress((string) $payload, 6), $ttl);
-        RedisStreams::xAdd(self::QUEUE_KEY, ['jobId' => $jobId]);
+        try {
+            $payload = json_encode([
+                'jobId' => $jobId,
+                'content' => $content,
+                'cacheKey' => $cacheKey,
+                'logId' => $logId,
+                'cacheTTL' => $cacheTTL,
+            ], JSON_UNESCAPED_UNICODE);
+            RedisStreams::set(self::payloadKey($jobId), (string) gzcompress((string) $payload, 6), $ttl);
+            RedisStreams::xAdd(self::QUEUE_KEY, ['jobId' => $jobId]);
+        } catch (\Throwable $e) {
+            try {
+                RedisStreams::del(self::activeKey($cacheKey));
+                RedisStreams::del(self::payloadKey($jobId));
+            } catch (\Throwable $ignored) {
+            }
+            throw $e;
+        }
 
         return ['jobId' => $jobId, 'position' => self::queueDepth(), 'attached' => false];
     }

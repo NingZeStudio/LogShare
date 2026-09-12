@@ -129,7 +129,7 @@ abstract class AbstractController
         return ApiResponse::error($message, $code, $details);
     }
 
-    protected function respondText(string $text, string $contentType = 'text/plain'): PsrResponseInterface
+    protected function respondText(string $text, string $contentType = 'text/plain; charset=utf-8'): PsrResponseInterface
     {
         return ApiResponse::text($text, $contentType);
     }

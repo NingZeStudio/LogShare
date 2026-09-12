@@ -41,9 +41,9 @@ class RawController extends AbstractController
             if ($content === null) {
                 throw new ApiError(404, "File not found.");
             }
-            return $this->respondText($content, 'text/plain');
+            return $this->respondText($content, 'text/plain; charset=utf-8');
         }
 
-        return $this->respondText($log->getContent(), 'text/plain');
+        return $this->respondText($log->getContent(), 'text/plain; charset=utf-8');
     }
 }

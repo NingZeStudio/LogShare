@@ -75,7 +75,7 @@ paths:
       summary: Submit a log
       description: |
         Accepts raw log content as `application/x-www-form-urlencoded` or `application/json`.
-        Supports `gzip`/`deflate` `Content-Encoding`.
+        Supports `br`/`gzip`/`deflate` `Content-Encoding`. Server default responds with Brotli compression when requested.
         
         **Form fields (urlencoded or JSON):**
         - `content` (string, required): Raw log text (max 10 MB, 50k lines)
@@ -201,7 +201,7 @@ paths:
       summary: Submit a log
       description: |
         Accepts raw log content as `application/x-www-form-urlencoded` or `application/json`.
-        Supports `gzip`/`deflate` `Content-Encoding`.
+        Supports `br`/`gzip`/`deflate` `Content-Encoding`. Server default responds with Brotli compression when requested.
         
         **Form fields (urlencoded or JSON):**
         - `content` (string, required): Raw log text (max 10 MB, 50k lines)

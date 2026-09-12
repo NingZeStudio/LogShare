@@ -1,44 +1,30 @@
-# LogShare 全仓库 Code Review 报告
+# LogShare 全仓库 Code Review 报告（第二期）
 
-## 修复记录（2026-08-30，当日闭环）
+## 修复记录
 
-除 **G10**（SSE 内部错误消息原文下发，按决策**保留现状**）外，本报告全部 63 条发现（严重 2、一般 20、建议 41）已修复，并通过验证：`pest` 全量 146 通过 / 10 跳过（含新增 S1 回归用例）、架构测试 7 通过、PHPStan level 5 零错误、LiteWAF 两套回归测试全部通过（规则解析修复后 63 条规则 / 75 样本）。要点：
-
-- **S1**：`FilesystemStorage::CleanupExpired` 改用与 `Get()` 一致的 `readCreated()` 时间源（meta 优先），续期日志不再被误删；新增「Renew 后不清理」回归测试；`Delete` 同步清理 `.meta.json`（G7）。
-- **S2**：`.dockerignore` 补 `.env`、`.github`、`docs/`、根目录文档与 openapi/postman。
-- **G1**：`RateLimitMiddleware` 注释改为与实现一致的 fail-closed，注明未挂载状态（README 同步为准确口径：默认 600/60s 且未注册）。
-- **G2**：`IPv6ShortFilter` 改用 `safePregReplaceCallback`；`Filter` 的两个 safe 包装在降级时写入 error 日志，fail-open 可观测。
-- **G3**：`ContentParser` urlencoded 分支补 `is_string` 校验，`content[]=` 返回 400。
-- **G4**：删除流程改为「主存储成功 → 删缓存（失败重试一次）→ 仍失败写墓碑标记（TTL 与缓存一致）」，`load()` 命中墓碑跳过缓存直接回源。
-- **G5**：`$analysisJsonCache` 增加单条 4MB / 总量 32MB 字节预算，淘汰改 LRU 语义。
-- **G6**：两个存储后端的 `CleanupExpired` 均分批执行（每轮 500 条/文件），限制请求路径内的清理工作量。
-- **G8**：`read_log_file` 仅在完整读取（覆盖全文件）时置已读标记，offset/行区间续读不再被防重复拦截误杀。
-- **G9**：分析缓存锁改在 `finally` 中无条件释放；`acquireCacheLock` 简化为 bool 返回，删除无用锁 token。
-- **G11**：`RagController::getSearch()` 按 `filemtime` 检测索引替换，`rag:build` 后 Web 进程自动用上新索引。
-- **G12**：`rag:build` 失败返回 `Command::FAILURE`。
-- **G13**：`SseWriter` 直接持有 `Writable` 连接检查写返回值，客户端断开抛 `ClientDisconnectedException`；`LogAgent` / `AIClient` 捕获后立即中止（不再 emitError），AIClient 对断连异常原样传播不参与换 key 重试。
-- **G14**：regex 测试解析器支持等号长括号 `[==[...]==]`（组号同步调整），uname 规则纳入回归（63 条规则 / 74→75 样本）。
-- **G15**：扫描器 UA 规则的 `httpx` 加 `(?<!python-)` 负向断言，`python-httpx` 客户端不再被误封（补反样本）。
-- **G16**：body 扫描不再依赖 `Content-Length`（chunked 请求始终扫描），仅对 CL > 2MB 的请求快速跳过。
-- **G17**：`litewaf.lua` 暴露 `_M._rules_compiled()` 测试访问器，logic 测试改断言真实编译缓存时序（init 后 nil、首个非豁免请求后非 nil）。
-- **G18**：删除 `docker/mclogs.conf`（9300 死配置）；`openapi.yaml` 本地 server 与 `ai.sh` 默认地址同步改为 9501。
-- **G19**：`release.yaml` 的 commit message / event name 改经环境变量中转，消除 Actions 脚本注入。
-- **G20/G21**：`ai.sh` 错误事件改为对 JSON 载荷判错（修复恒 false 条件）；管道 while 改进程替换，`thinking_buf` 状态可传播回父 shell。
-- **G22-G25**：`download_mappings.sh` 改 argv 传参消除 python 注入、完整性校验前移（损坏映射重新下载）；`download_server_docs.sh` 排除正则修正锚定；`download_vanilla_mappings.py` 修复异常路径二次 close；`clean_knowledge_docs.php` 删除失败输出 STDERR 且不计数。
-- **建议级 41 条**全部落地：ID 唯一性 TOCTOU（MariaDB 冲突重试 / Filesystem `fopen 'x'` 原子占位）、metadata 类型两端对齐（读取端 JSON 还原）、UploadParser（文件名 512 上限、tmp 0700、移除双重转义、zip 风险注释）、`MetadataEntry` 字符安全截断、`UuidFilter` 精准预检、SessionToken/AccessToken 无引号形态补漏、`Config` fail-fast + 密码占位符清洗、`ApiResponse` 保留键冲突防御、CORS `Max-Age`/`Vary`、`files[0]` 复用过滤结果与 `exists` 修正、`PatternWithReplacement` 构造转调、`CacheInterface::Set` 签名、Limit 过滤器 `@throws` 契约、语义缓存 O(n²) 淘汰、向量分批扫描 + prepare 外提、SSE 帧 `JSON_INVALID_UTF8_SUBSTITUTE`、topics 进程级缓存、SSRF 信任边界注释、RedisClient database 字符串兼容、SpinYarn fail-open 注释、`AIClient` goto 改内层循环、`AIAnalyseController` 脱敏差异写入 API.md、probe 扩展名规则边界、subject 顺序注释修正、incr/expire 窗口注释、nginx（worker_connections 4096、resolver 动态解析、HSTS/http2/TLS 钉版/会话缓存）、compose（mariadb 11.8 / redis 7.4 pin、统一日志上限）、Dockerfile（SpinYarn 源码清理、rag:build 降级、ADD 校验和说明）、`core.php` dotenv 限制声明、README mariadb-events 措辞。
-
-G10 保留说明：`LogAgent::analyze` 与 `AIClient::streamChat` 的 SSE error 帧仍携带原始异常消息（已通过 `JSON_INVALID_UTF8_SUBSTITUTE` 保证帧完整性），如需对外脱敏另行处理。
+- **第一期（2026-08-30）：** 共发现 64 项问题（严重 2、一般 21、建议 41）。除 G10（按架构决策保留现状）外，其余 63 项已全部闭环修复并通过自动化回归验证。
+- **第二期（2026-09-11）：** 共发现 22 项问题（严重 5、一般 10、建议 7）。**全量 22 项问题已全部于 2026-09-11 闭环修复**，补充了对应的单测与回归用例，并通过 Pest 全量测试、架构测试、PHPStan level 5 静态分析以及 OpenLiteWaf / OpenLiteStats 的 Lua 全量测试验证。详细修复状态参见各条目。
 
 ---
 
 ## 概览
 
-- **审查日期：** 2026-08-30
-- **审查范围：** 全仓库源代码。核心对象为 `app/`（62 个 PHP 文件，约 7,159 行）、`LiteWAF/`（3 个 Lua 模块约 1,119 行 + 2 个测试）、`docker/`（Dockerfile、compose、nginx/mariadb 配置）、`scripts/`（7 个运维脚本）、`.github/workflows/`（CI）、`config/`、`core.php`、`bin/hyperf.php`。排除 `vendor/`、`runtime/`、`rag/index.db` 等依赖与生成物（已核实无意外提交的生成物）。
-- **技术栈识别：** PHP 8.4 + Hyperf 3.2（Swoole 6.2 协程常驻）；Rust 构建的 SpinYarn FFI 扩展（PHP C-API）；OpenResty 1.27.1.2（Lua 5.1/LuaJIT）承载 LiteWAF；MariaDB 11 / Redis 7 / SQLite FTS5；测试为 Pest 3 + PHPStan level 5；CI 为 GitHub Actions（PHP 8.4/8.5 矩阵）。
-- **审查方式：** 按存储链路、AI/RAG 链路、WAF 与部署三个分区并行精读全部源文件，共 93 个文件；所有"严重"级与关键"一般"级发现均经人工二次核验或实机验证（包括实际运行回归测试与解析器比对）。
-- **测试基线：** `pest tests/Unit` 127 通过 / 8 跳过（跳过项为需要本地 MariaDB 的集成测试），架构测试 7 通过；`LiteWAF` 两套回归测试通过（但见 G1：其中一条规则实际未被解析进测试）。
-- **整体评价：** 项目整体质量良好——协程级状态隔离、token 哈希存储、ZIP 分层防护、原子写库、CI 分层冒烟等关键设计都有明确意识且实现到位。本次共发现 **64 条问题：严重 2、一般 21、建议 41**。两条严重问题（文件存储续期后仍被过期清理删除、构建镜像未排除 `.env` 导致密钥进入镜像层）修复成本都很低，建议立即处理。无第三方依赖供应链问题。
+- **审查日期：** 2026-09-11
+- **审查范围：** 全仓库源代码与基础设施。核心对象包括：
+  - `app/`：核心应用层（71 个 PHP 文件，含新增的 `RequestParser.php`、`AiQueueConsumer.php`、`AnalysisQueue.php`、`RedisStreams.php` 等协程微队列与流式处理组件）。
+  - `OpenLiteWaf/`：独立 Git 子模块，Nginx/OpenResty 边缘 WAF 规则与防护引擎。
+  - `OpenLiteStats/`：独立 Git 子模块，基于 OpenResty 共享内存的站点访问分析插件。
+  - `docker/`：容器编排与环境定义（Dockerfile、compose、nginx 配置、数据库与事件 SQL）。
+  - `scripts/`：自动化与运维脚本（文档同步、映射下载清洗、AI 调试等 7 个脚本）。
+  - `.github/workflows/`：CI/CD 自动化流水线。
+  - 根目录配置文件与依赖（`composer.json`、`phpstan.neon`、`core.php`、`bin/hyperf.php`、`.dockerignore` 等）。
+- **技术栈识别：** PHP 8.4/8.5 + Hyperf 3.2（Swoole 6.2 协程常驻）；jemalloc 内存分配器；OpenResty 1.27.1.2（Lua 5.1/LuaJIT）；MariaDB 11.8 / Redis 7.4 / SQLite FTS5；Pest 3 + PHPStan level 5。
+- **审查维度：** 架构设计、代码逻辑、并发与常驻进程资源管理、系统安全与输入校验、错误处理与一致性、测试覆盖、DevOps 与环境适配。
+- **问题汇总：** 本次审查共发现 **22 项问题**，按严重程度分级如下：
+  - **严重（Critical）：** 5 项
+  - **一般（Medium）：** 10 项
+  - **建议（Minor）：** 7 项
+- **整体评价：** 项目在经历第一期重构后，核心架构健壮性明显提升。近期引入的 Redis Streams 微队列、Agentic RAG Plus 以及 Gzip 请求体自适应解析机制展现了出色的工程设计水平。但新引入的功能在与边缘 WAF 协同、大并发边界控制、极端错误处理及部署脚本细节上仍存在数个高危漏洞，需立即闭环修复。
 
 ---
 
@@ -46,170 +32,189 @@ G10 保留说明：`LogAgent::analyze` 与 `AIClient::streamChat` 的 SSE error 
 
 ### 严重
 
-#### S1. FilesystemStorage：`Renew` 续期后日志仍会被 `CleanupExpired` 删除（数据丢失）
+#### S1. OpenLiteWaf：请求体检查豁免端点遗漏 `/ai/analyse` 与 `/analyse`，日志分析请求被大面积误杀并封禁用户 IP
 
-- **位置：** `app/Storage/FilesystemStorage.php:113-135`（Renew）、`:158-173`（CleanupExpired）、`:90-100`（readCreated）
-- **问题：** `Put` 把 `created` 同时写进主文档 JSON（第 28 行）与 `.meta.json`（第 56 行）；`Renew` 只更新 `.meta.json`（第 132-134 行）；而 `CleanupExpired` 判定过期时**只读主文档内嵌的 `created`**（第 163-167 行），不读 meta。`Get`/`readCreated` 却是 meta 优先。结果是：用户续期后，读取接口返回续期后的过期时间，但过期清理仍按原始 `created` 判定并删除主日志文件——续期在文件系统后端完全无效。MariaDB 后端的 `Renew` 直接 update `created` 列，行为正确，两条后端语义割裂。
-- **修复建议：** `CleanupExpired` 统一改用 `readCreated()`（meta 优先、主文档兜底、mtime 最后）；补回归测试：Put → Renew → CleanupExpired 断言文件仍存在。
+- **位置：** `OpenLiteWaf/lua/openlitewaf.lua:24-27` (`CONFIG.body_exempt_prefixes`)
+- **问题：** OpenLiteWaf 的 `body_exempt_prefixes` 当前仅配置了 `"/v1/log"` 与 `"/1/log"`。而系统新增和支持的日志分析端点 `POST /{version}/ai/analyse` 与 `POST /{version}/analyse`（由 `AIAnalyseController` 及 `AnalyseController` 承载）同样直接接收用户上传的原始日志文本。这些日志普遍包含真实的 SQL 异常堆栈、`/etc/` 路径报错、系统崩溃诊断代码或探测关键字。WAF 在处理这些端点的 POST 请求时，会对请求体执行完整的 SQLi/XSS/Traversal/RCE/Probe 正则扫描，将其判定为恶意攻击，直接返回 403 红色拦截页并将用户客户端 IP 封禁 600 秒（10 分钟）。
+- **潜在影响：** 任何尝试使用 AI 分析或规则分析含有报错痕迹日志的正常用户均会被 WAF 误封，导致核心分析功能在生产环境大面积瘫痪。
+- **修复建议：** 在 `CONFIG.body_exempt_prefixes` 中补齐所有接收用户日志正文的端点前缀：
+  ```lua
+  body_exempt_prefixes = {
+      "/v1/log",
+      "/1/log",
+      "/v1/ai/analyse",
+      "/1/ai/analyse",
+      "/v1/analyse",
+      "/1/analyse",
+  },
+  ```
 
-#### S2. 构建镜像未排除 `.env`，生产密钥会进入镜像层
+#### S2. OpenLiteWaf：敏感文件探测规则误伤合法日志附件下载路径，请求 `latest.log` 等文件触发 403 封禁
 
-- **位置：** `.dockerignore`（全文）与 `docker/hyperf.Dockerfile:46`（`COPY . .`）
-- **问题：** `.dockerignore` 排除了 `Config.inc.php` 但**没有 `.env`**。生产部署机上 `.env` 必然存在（compose 以 `../.env:/app/.env:ro` 挂载，含 `AI_API_KEYS`、`AI_RAG_PROVIDERS` 内嵌密钥、数据库密码），执行 `docker compose build` 时随 `COPY . .` 进入镜像层；运行时 ro 挂载只是遮蔽，`docker history` / 解包层均可提取。镜像一旦推送 Registry 即泄露。CI 不受影响（`.env` 在构建之后才由 `.env.example` 复制，`ci.yaml:266`）。
-- **修复建议：** `.dockerignore` 加入 `.env`（一行修复，建议顺带加入 `.github`、`docs/`、`API.md` 等非运行时文件）。
+- **位置：** `OpenLiteWaf/lua/openlitewaf.lua:125` 与 `OpenLiteWaf/lua/openlitewaf.lua:611-615`
+- **问题：** WAF 规则表第 125 行为 `{ "probe", [[\.(sql|bak|backup|old|ini|conf|cfg|log|yml|yaml|json|xml)(\?|$|(?![\w.]))]] }`。然而 LogShare 支持多文件归档日志（如 Minecraft 崩溃包），并通过 `GET /{version}/raw/{id}/{filename}` 提供单一附件的原文下载（如 `GET /v1/raw/s123456/latest.log` 或 `GET /v1/raw/s123456/config.yml`）。当请求该接口时，URL 末尾直接匹配 `\.log$` 或 `\.yml$`，命中 probe 规则。
+- **潜在影响：** 访问多文件日志中常规日志文件的用户会被判定为恶意探测扫描，直接被阻断并封禁 IP 10 分钟。
+- **修复建议：**
+  1. 在 `openlitewaf.lua` 的 `_M.access` 中，对匹配 `^/[^/]+/raw/` 的合法文件提取请求做特征放行或排除扩展名探测；
+  2. 或将 probe 规则的判定前缀精确限制为非 raw 数据端点。
+
+#### S3. RequestParser：Gzip/Deflate 请求体解压缺少最大展开长度限制，存在高压缩比炸弹 OOM 拒绝服务漏洞
+
+- **位置：** `app/Parser/RequestParser.php:57-82` (`decodeBody`)
+- **问题：** `RequestParser` 在 Hyperf 框架接收请求的最前沿自动解压压缩流。代码中直接对原始数据调用裸 `gzdecode($rawBody)`、`gzinflate($rawBody)` 及 `gzuncompress($rawBody)`，未传递最大解压长度参数。虽然下游 `ContentParser` 中存在请求体长度上限校验，但该校验发生在 `RequestParser` 已经完全解压之后。攻击者可构造一个仅百 KB 级别、但展开后达数 GB 的全零字节 Gzip 炸弹请求，瞬间占满 Swoole 工作进程的 `memory_limit`（1GB），触发 Fatal Error 导致 Worker 进程 OOM 崩溃。
+- **潜在影响：** 极低的网络开销即可造成 Swoole 常驻工作进程频繁崩溃重启，形成严重的拒绝服务攻击（DoS）。
+- **修复建议：** 引入解压上限（可对齐 `storage.maxLength * 2`，例如 20MB）。在 PHP 8 中利用 `gzdecode($rawBody, $maxBytes)` 或在解压时限制输出缓冲长度，一旦超出上限立即终止并返回失败。
+
+#### S4. 运维脚本：`scripts/ai.sh` 进程替换输入重定向语法颠倒，导致脚本语法错误或无限等待
+
+- **位置：** `scripts/ai.sh:81`
+- **问题：** `scripts/ai.sh` 第 81 行代码书写为：
+  ```bash
+  while IFS= read -r line; do < <(curl -sN "${REQ_ARGS[@]}" "$URL")
+  ```
+  重定向操作符 `< <(...)` 被错误地放置在 `do` 关键字后，而不是 while 循环体结尾的 `done` 之后（`done < <(...)`）。
+- **潜在影响：** 脚本执行时循环结构未与 curl 的管道流正确挂接，导致脚本从标准输入阻塞挂起，或者执行出现语法异常，脚本彻底失效。
+- **修复建议：** 修正语法，将进程替换移到 `done` 关键字之后：
+  ```bash
+  while IFS= read -r line; do
+      ...
+  done < <(curl -sN "${REQ_ARGS[@]}" "$URL")
+  ```
+
+#### S5. 容器构建：`.dockerignore` 遗漏本地敏感运维笔记 `LOCAL_DEV_NOTES.md` 与子模块 `OpenLiteStats`，存在凭证泄漏风险
+
+- **位置：** `.dockerignore`
+- **问题：** 项目构建生产镜像时采用 `COPY . .`。`.dockerignore` 排除了 `OpenLiteWaf`，但遗漏了另一个子模块 `OpenLiteStats`；更关键的是，遗漏了本地运维恢复笔记 `LOCAL_DEV_NOTES.md`（按 `AGENTS.md` 规范，该文件记录了线上实际服务器 SSH 端口、登录方式、容器部署名等敏感运维细节，永不应提交或发布）。在生产环境执行 `docker compose build` 时，该文件会随代码拷贝直接打入生产镜像层中。
+- **潜在影响：** 镜像一旦推送到公开或半公开 Registry，或者镜像包被下载，服务器私有运维配置将彻底泄露。
+- **修复建议：** 在 `.dockerignore` 中追加：
+  ```dockerignore
+  OpenLiteStats
+  LOCAL_DEV_NOTES.md
+  .env*
+  Plan.md
+  ```
+
+---
 
 ### 一般
 
-#### 存储与数据链路
+#### G1. AnalysisQueue：`enqueue` 注册活跃任务后若写入载荷或 Stream 失败，遗留 activeKey 导致后续同 key 分析永久超时
 
-- **G1. `RateLimitMiddleware` 未注册，且注释与实现矛盾。** `config/autoload/middlewares.php` 只注册了 CORS；类注释（`RateLimitMiddleware.php:16`）声称 "Fails open when Redis is unavailable"，实现却是 Redis 故障时 `throw ApiError(503)`（fail-closed，第 66-69 行）。README 此前声称的"36000 次/60 秒"与实际默认值 600/60 亦不符（README 已随本报告修正）。若未来有人按错误注释把它注册回生产，Redis 抖动会以 503 打挂全站。建议三选一：删除该类；或修正注释并在 README 标注"未挂载"；或真正启用并把 Redis 故障改为放行 + 警告日志。
-- **G2. `IPv6ShortFilter` 正则失败返回 null → TypeError 500。** `app/Filter/IPv6ShortFilter.php:50-58` 用裸 `preg_replace_callback`（未走 `Filter::safePregReplaceCallback`），回溯超限（长日志高概率）时返回 null，与 `filter(): string` 签名冲突直接 500。其余过滤器用了 safe 包装，但失败时静默返回原文——对隐私过滤器是"失败开放"：整篇 IP/UUID 静默不打码入库且无日志。建议：该过滤器改用 safe 包装；safe 包装降级时补 `Syslog::error` 使 fail-open 可观测；长内容考虑分段正则。
-- **G3. form 提交 `content[]=x` 触发 500（应为 400）。** `ContentParser.php:83-95` urlencoded 分支不校验 `content` 是否为字符串即返回，`LogController::create`（第 23-37 行）把数组当结构化数据处理后以 null 调 `Log::put(string)` → TypeError。JSON 分支有 `is_string` 校验，urlencoded 缺失。补 `is_string` 检查返回 400。
-- **G4. 删除成功但缓存删除失败时，已删日志在 TTL 内仍可读。** `Log.php:453-464` 缓存删除失败仅记日志；且 `LogController::delete` 每次先 `new Log()` 触发 `load()`，会把内容写入缓存，随后删除失败时残留窗口长达 `cache.ttl`。建议删除流程先删缓存（失败重试或墓碑标记）再删主存储。
-- **G5. 进程级 `$analysisJsonCache` 只限条数不限字节。** `Log.php:136-166`，32 条 × 每条可达数十 MB，Swoole 常驻内存只增不还；淘汰为 FIFO 而非 LRU。建议加单条字节上限与总预算。
-- **G6. 1% 概率在用户请求内同步执行过期清理，无分批。** `Log.php:381-391` 触发；MariaDB 路径全量 `pluck` 后三表无分批 `whereIn` 删除，Filesystem 路径全目录逐文件全文 `file_get_contents`（`FilesystemStorage.php:158-173`）。清理积压时单个用户请求可被拖住数十秒。建议移入定时进程，或分批执行。
-- **G7. `FilesystemStorage::Delete` 不删 `.meta.json`。** `app/Storage/FilesystemStorage.php:178-189` 只 `unlink` 主文件，残留的 meta 文件被 `CleanupExpired` 当独立文档遍历，且 `Renew` 后 meta 寿命长于主文件。删除成功后同步删除 meta。
+- **位置：** `app/Ai/AnalysisQueue.php:148-164`
+- **问题：** `AnalysisQueue::enqueue` 通过 `setNxEx(self::activeKey($cacheKey), $jobId, $ttl)` 抢占任务槽位。若后续执行 `RedisStreams::set(payloadKey)` 或 `RedisStreams::xAdd(QUEUE_KEY)` 时遭遇网络抖动或 Redis 异常抛错，`activeKey` 未被清理，仍持有长达数分钟的 TTL。后续针对同一条日志或相同内容的分析请求，均会命中该残留的 `activeKey` 并作为 follower 挂接，但由于队列中根本不存在该任务，中继端将持续等待直至客户端超时断开。
+- **修复建议：** 在 `enqueue` 关键步骤中增加异常捕获，若写入载荷或 Stream 失败，立即在 catch 中显式删除 `activeKey`。
 
-#### AI 与 RAG 链路
+#### G2. RedisStreams：`xAutoClaim` 游标固定为 `'0-0'`，长耗时任务卡在 pending 时导致后续超时任务回收饥饿
 
-- **G8. `read_log_file` 的续读机制与防重复拦截自相矛盾，大文件永远读不全。** `app/Agent/LogAgent.php:516-518` 的去重检查先于 offset/行区间处理，而首次**部分**读取即标记 `readFiles=true`（第 529、549 行），随后按 `tail` 提示用 `offset` 续读会被"文件已读取"提示拦截——与系统提示词（第 340 行）和工具描述（第 231 行）宣传的续读能力直接矛盾。建议仅当本次读取覆盖全文件时才置已读标记。
-- **G9. 分析缓存锁在异常/空结果路径不释放。** `LogAgent.php:53`（获取）与 `152-155`（仅在成功且非空时释放）；`streamChat` 抛异常进入 catch（158 行）后锁只能等 120 秒 TTL，期间 `waitForCache` 仅轮询 1 秒即放弃，互斥失效、并发重复分析。建议在 `finally` 中释放。
-- **G10. 内部异常消息原样流入公网 SSE。** `LogAgent.php:160` 与 `AIClient.php:338` 将 `$e->getMessage()` 直接发给客户端，链路可携带上游网关响应片段、上游 URL、Redis 主机端口、RAG 磁盘路径。`RagController.php:176-181` 已有正确的通用文案处理，SSE 路径未对齐。建议 SSE error 帧统一固定文案，细节仅进 Syslog。
-- **G11. `rag:build` 重建索引后 Web 进程永远使用旧索引。** `RagController.php:23-38` 进程级静态单例持有指向旧 inode 的 PDO 连接（`rename` 原子替换不失效旧 fd），直到重启 Swoole。建议 `getSearch()` 低频比对 `fileinode`/`filemtime` 自动重建，或在文档明确"构建后必须重启"。
-- **G12. `RagBuildCommand` 构建失败退出码为 0。** `app/Command/RagBuildCommand.php:42-45` catch 后 `return`（void ≡ 0），CI 与脚本无法感知构建失败。返回 `Command::FAILURE`。
-- **G13. 客户端断开后 Agent 循环不中止。** `SseWriter.php:73-78` 依赖的 `EventStream::write`（hyperf/engine）不检查底层写返回值，连接断开后 `LogAgent::analyze` 会继续跑满全部工具轮次与 MCP/嵌入调用，产物全部丢弃，浪费上游配额。建议 `SseWriter` 检查写结果，断开抛专用异常终止循环。
+- **位置：** `app/Client/RedisStreams.php:134` 与 `app/Process/AiQueueConsumer.php:150`
+- **问题：** `RedisStreams::xAutoClaim` 内部调用时起始游标固定传入 `'0-0'`。当消费者存在若干个正在执行的慢速分析长任务时（任务仍在运行且持有 running 锁），`reclaimLoop` 每次扫描都从头部读取这批条目，检测到锁后放弃并保持 pending。由于游标从未按 Redis 返回的 `next-start` 推进，如果未确认条目超过单次扫描条数（10 条），排在后面的真正因进程崩溃而超时的孤儿任务将永远无法被回收。
+- **修复建议：** 维护 `xAutoClaim` 的游标状态，单次迭代按 `next-start` 推进，返回 `'0-0'` 后再重置回起始点。
 
-#### LiteWAF 与边缘
+#### G3. 文档清洗脚本：`scripts/clean_knowledge_docs.php` 编写了 `deleteOrWarn` 错误处理函数，但在主逻辑中完全未使用
 
-- **G14. 规则回归测试的解析器不兼容 `[==[ ]==]` 长括号，一条规则零覆盖（实测证实）。** `LiteWAF/tests/litewaf_regex_test.php:11` 的解析正则只支持 `[[...]]`；`litewaf.lua:99` 的 `uname` 规则用 `[==[...]==]` 书写，实测测试输出"已加载规则数：62"而规则表实际 63 条，差的正是这条（php 逐条比对确认）。`LiteWAF/README.md` 自己推荐的写法会静默脱离回归。解析正则改为支持可选等号（如 `/\[(=*)\[(.*?)\]\2\]/s`）并补 uname 正样本。
-- **G15. probe UA 规则误伤 `python-httpx` 等常规客户端。** `litewaf.lua:128` 的 `\bhttpx\b` 命中 Python 生态常用 HTTP 库 `python-httpx` 的默认 UA——API 服务的正常脚本用户会被 403 并封禁 600 秒。改为 `(?<!python-)httpx` 或移出规则。
-- **G16. body 扫描依赖 `Content-Length`，chunked 请求整体绕过。** `litewaf.lua:353-354` 无 `Content-Length` 时 `cl == 0` 直接跳过扫描，非豁免路径上的 payload 可经 chunked body 免检送达。改为先 `read_body()` 后按实际读取量控制扫描上限。
-- **G17. logic 测试存在恒真断言。** `LiteWAF/tests/litewaf_logic_test.lua:189` 断言 `waf._compiled == nil`，而编译缓存是模块内局部变量从未挂到 `_M`，断言无条件通过，声称覆盖的"惰性编译"实际什么都没测。补测试访问器或删除。
-- **G18. `docker/mclogs.conf` 的 9300 端口 server 为死配置，且一旦暴露将绕过全部防护。** `docker/mclogs.conf:2` 的 server 无 TLS、无 `access_by_lua_file`、无 `limit_req`；当前因 compose 未发布 9300 而不可达，但常驻生产配置中。删除该文件或显式注释用途并补齐防护。
+- **位置：** `scripts/clean_knowledge_docs.php:58, 65, 72, 81` 与 `:104-112`
+- **问题：** 脚本第 104-112 行定义了带 STDERR 输出与成功统计的 `deleteOrWarn(string $path, int &$removed)` 函数，并在注释中明确说明用于防止 `@unlink` 静默吞错。然而在上方的主扫描循环中（第 58、65、72、81 行），代码依然全部直接调用 `@unlink($file->getPathname())` 并无条件执行 `$removed++`，使该安全函数沦为死代码。
+- **修复建议：** 将主循环中的 `@unlink(...)` 与 `$removed++` 统一替换为调用 `deleteOrWarn($file->getPathname(), $removed)`。
 
-#### 部署与 CI
+#### G4. 映射下载：`scripts/download_vanilla_mappings.py` 缺少 SHA-1 完整性校验，网络截断导致损坏映射被永久缓存
 
-- **G19. `release.yaml` 存在 GitHub Actions 脚本注入。** `.github/workflows/release.yaml:24` 将 `${{ github.event.head_commit.message }}` 直接插值进 `run:` shell。构造特定 commit message 推送到 main 即可在 runner 执行任意命令（该 job 有 `contents: write`）。改为环境变量中转：`env: HEAD_MSG: ${{ ... }}` + `run: [[ "$HEAD_MSG" == ... ]]`。
-- **G20. `scripts/ai.sh` SSE error 事件检测条件恒为 false。** `scripts/ai.sh:93` `[[ "$line" == "data: " && ... ]]` 只有载荷为空才成立，真实 error 帧（`data: {"error":...}`）永远不进该分支，错误被静默吞掉。改为对 `$JSON` 本身判错。
-- **G21. `scripts/ai.sh` 管道 while 在子 shell 执行，跨迭代状态丢失。** `scripts/ai.sh:78-144`，`thinking_buf` 的累积与第 144 行"刷新残留缓冲"永远读到空值（死代码）。改用进程替换 `done < <(curl ...)`。
+- **位置：** `scripts/download_vanilla_mappings.py:40-47`
+- **问题：** 脚本从 Mojang version manifest 中拉取了包含 `sha1` 和 `size` 的元数据，但在通过 `urlopen` 下载后未做任何数据校验，直接写入目标文件。若网络波动导致下载被截断（仅拉取到部分字节），损坏的映射会被直接落盘；而后续由于 `os.path.isfile(target) and os.path.getsize(target) > 0` 的跳过判断，损坏的映射文件会被永久跳过，导致 SpinYarn 反混淆扩展在解析该版本时发生崩溃。
+- **修复建议：** 写入完成或写入前比对数据的 SHA-1 与声明字节数，校验失败时抛出异常并清理临时分块，避免污染正式映射文件。
 
-#### 脚本
+#### G5. 编排安全：`docker/compose.yaml` 中数据库和 Redis 密码在容器命令行参数中明文暴露
 
-- **G22. `scripts/download_mappings.sh:41-49` 将 shell 变量直接拼进 `python3 -c` 代码**，版本号含单引号时可破坏语法乃至注入（本地运行、风险有限）。改为 `python3 - args <<'EOF'` 传参。
-- **G23. `scripts/download_mappings.sh` 已存在文件的完整性检查永远不会触发。** `process_version`（117-120 行）对已存在文件仅 `[[ -f ]]` 即跳过，`download_one` 的 `gzip -t` 校验（58 行）不经此路径，损坏的映射文件被永久跳过。校验前移。
-- **G24. `scripts/download_server_docs.sh:81` 排除正则锚定失效。** `find` 输出带 `./` 前缀，`^README`、`^LICENSE` 永不匹配（实际靠下游清洗脚本兜底）。修正模式。
-- **G25. `scripts/download_vanilla_mappings.py:46-47` 异常路径二次 `os.close(fd)`** 抛 EBADF，把原始网络错误替换成误导信息。仅当未 fdopen 时关闭。
+- **位置：** `docker/compose.yaml:135, 137, 164`
+- **问题：** `mariadb-events` 中的 `mariadb-admin ping -p"$$MARIADB_ROOT_PASSWORD"`、`mariadb -p"$$MARIADB_ROOT_PASSWORD"` 以及 `redis` 服务的健康检查 `redis-cli -a "$$REDIS_PASSWORD"` 均直接将敏感密码作为命令行参数传入。在宿主机上执行 `ps -ef` 或通过 `/proc/$PID/cmdline` 可直接查看到明文密码。
+- **修复建议：** MariaDB 采用 `MYSQL_PWD="$$MARIADB_ROOT_PASSWORD" mariadb ...` 环境变量方式传递；Redis 采用 `REDISCLI_AUTH="$$REDIS_PASSWORD" redis-cli ...` 避免凭据在进程列表中曝光。
+
+#### G6. 工作流安全：`.github/workflows/release.yaml` 未等待 CI 测试通过即触发 Release 发布
+
+- **位置：** `.github/workflows/release.yaml:14-38`
+- **问题：** `release.yaml` 只要检测到 Commit message 带有 `[Build]` 前缀即直接打包 Release 并打 Tag，与 `ci.yaml` 并行触发，且没有配置任何对 CI 检查状态的等待。如果提交的代码存在致命语法错误或单元测试不通过，CI 流程虽然会报错红叉，但 Release 却已经成功创建并对外发布。
+- **修复建议：** 在 Release 前置步骤中集成基础验证（运行 Pest 与 PHPStan），或通过 `workflow_run` 监听 CI 成功事件再触发发布。
+
+#### G7. 入口环境时序：`bin/hyperf.php` 在引入 Composer 自动加载之前检查 `APP_ENV`，导致 `.env` 中的生产配置失效
+
+- **位置：** `bin/hyperf.php:6` 与 `core.php:11-28`
+- **问题：** `bin/hyperf.php` 第 6 行执行 `$isProduction = getenv('APP_ENV') === 'prod';` 时，尚未引入 `vendor/autoload.php`，`core.php` 尚未执行，`.env` 文件中的环境变量根本尚未被解析加载。因此若用户在 `.env` 中声明 `APP_ENV=prod`，该检查恒为 `false`，导致 `display_errors` 与 `display_startup_errors` 在生产环境下仍然被设置为 `'on'`。
+- **修复建议：** 将 `APP_ENV` 的读取与错误显示设置下移到 `require BASE_PATH . '/vendor/autoload.php';` 之后。
+
+#### G8. 协议规范：`RawController` 响应 Content-Type 缺少 `charset=utf-8`
+
+- **位置：** `app/Controller/RawController.php:44, 47`
+- **问题：** Raw 纯文本接口直接输出 `$this->respondText($content, 'text/plain')`，缺少字符集声明。当日志包含非 ASCII 字符（如中文报错、多语言日志）时，部分客户端或直接在浏览器查看时，可能按默认编码解析导致中文乱码。
+- **修复建议：** 统一显式指定为 `text/plain; charset=utf-8`。
+
+#### G9. 隐私脱敏：`OpenLiteStats` 中 Referer Host 提取正则未正确剥离 HTTP Basic Auth 认证信息
+
+- **位置：** `OpenLiteStats/lua/openlitestats.lua:67`
+- **问题：** 代码使用 `host = host:match("^(.*@?)") or host` 试图去除来路 Referer 中的用户信息。但由于 `.*` 是贪婪匹配且 `@?` 是可选的，该正则表达式恒等匹配并返回整个字符串。若用户来路 URL 带有 `http://username:password@example.com/`，其账号与密码将被完整记录并展示在公开的 Top Referer 统计面板中。
+- **修复建议：** 将提取逻辑修正为 `host = host:gsub("^[^@]+@", "")`。
+
+#### G10. 死配置：`docker/nginx/default.conf` 中遗留未实现的临时诊断端点 `/waf-diag`
+
+- **位置：** `docker/nginx/default.conf:70-72`
+- **问题：** Nginx 配置中保留了 `location = /waf-diag { content_by_lua_file /usr/local/openresty/nginx/lua/diag.lua; }`。但在代码仓库中 `diag.lua` 并不存在。任何对该端点的公网请求均会触发 Nginx 内部错误日志并返回 500；若未来被误放文件，则可能泄露内部 WAF 状态。
+- **修复建议：** 彻底移除该 location 配置块。
+
+---
 
 ### 建议
 
-**存储与数据链路**
+#### M1. FilesystemStorage：`Renew` 与 `Delete` 并发下的孤儿 `.meta.json` 防御
+- **位置：** `app/Storage/FilesystemStorage.php:128-133`
+- **描述：** `Renew` 先检查主文件是否存在，随后写入 `.meta.json`。若在检查与写入之间主文件被 `Delete` 删除，将遗留一个孤儿 `.meta.json` 文件。建议在写入 `.meta.json` 时复核主文件存在性，或使用文件锁保持原子性。
 
-- `MariaDbStorage.php:20-22` ID 唯一性检查存在 TOCTOU（并发碰撞一个 500、一个静默覆盖，两后端失败模式不一致）；捕获主键冲突重试 / 用 `O_EXCL` 语义。
-- `MariaDbStorage.php:48-52` metadata value 经 json_encode 后类型漂移（bool→"true"），与 Filesystem 后端读回类型不一致；统一约定或带类型标记。
-- `UploadParser.php` 文件名无长度上限（DB 列 VARCHAR(512)，超长在 MariaDB 路径 500 而文件路径正常）；tmp 目录 0777 建议 0700；JSON 错误消息误用 `htmlspecialchars` 产生双重转义；zip 声明 size 篡改时 `getFromIndex` 实际行为待验证（已有解压后复检兜底）。
-- `MetadataEntry.php:104-121` `substr` 按字节截断可产生非法 UTF-8 / 非法 JSON；改 `mb_strcut`。
-- `UuidFilter.php:36-39` 快速预检 `[0-9a-fA-F]{8}` 几乎恒真，失去跳过意义。
-- `SessionTokenFilter.php:16-22`、`AccessTokenFilter.php:15-16` 规则强制要求闭引号，`accessToken: xxxxx`（无引号）形态漏报不打码。
-- `Config.php:24-30` 配置文件返回非数组时每次 `Get` 重读文件（`$loaded` 永不置位）；example 中 `'${REDIS_PASSWORD}'` 占位符在非 Docker 部署会被当字面量用于 AUTH（待验证场景）。
-- `ApiResponse.php:14-31` 数据平铺存在键冲突（`success`/`message` 可被覆盖）与数字键问题。
-- `CorsMiddleware.php:28-34` 预检缺 `Access-Control-Max-Age` 与 `Vary: Origin`。
-- `Log.php:319-340`（配合 LogController）`files[0]` 与主 content 双重过滤、双份存储（约 2 倍存储放大）；`Put` 返回 null 时仍置 `exists = true`。
-- `PatternWithReplacement` 子类重复提升父类同名属性；`CacheInterface::Set` 缺返回类型。
-- `LimitLinesFilter` / `LimitBytesFilter` 在过滤链契约内抛 `ApiError`，超出 `filter(): string` 隐含契约。
+#### M2. UploadParser：文件名校验增加不可见控制字符过滤
+- **位置：** `app/UploadParser.php:24-44`
+- **描述：** `validateFileName` 虽已防范路径穿越与超长文件名，但未过滤 `\r`、`\n` 等控制字符。建议加入正则过滤，防止多文件下载或导出响应头中出现 HTTP 响应拆分风险。
 
-**AI 与 RAG 链路**
+#### M3. Dockerfile：`LD_PRELOAD` 路径硬编码为 `x86_64`，缺乏多架构构建兼容性
+- **位置：** `docker/hyperf.Dockerfile:38`
+- **描述：** 容器环境变量直接硬编码为 `/usr/lib/x86_64-linux-gnu/libjemalloc.so.2`。若在 ARM64 架构下构建该镜像，将因找不到动态库而导致预加载报错。建议采用通配符软链或在启动脚本中动态判定。
 
-- `LogAgent.php:730-743` 锁 token 生成后未使用，释放不校验归属（锁过期后可能误删下一任持有者）。
-- `RagController.php:57` Bearer token 非恒时比较（项目在 `Token::matches` 已有 `hash_equals` 先例）。
-- `RagSearch.php:448` 语义缓存淘汰每条重新 `serialize` 整个缓存，O(n²)。
-- `RagSearch.php:508-549` 向量全表载入内存做余弦 + 循环内重复 `prepare`；当前规模可接受，扩容前分批。
-- `LogAgent.php:604-632` SSE 帧 `json_encode` 未加 `JSON_INVALID_UTF8_SUBSTITUTE`，非法 UTF-8 时帧退化为空数据。
-- `LogAgent.php:299-307` 每次分析同步预取 topics（完整 MCP 握手），可按进程级短 TTL 缓存。
-- `MCPClient.php:35-41`、`SemanticClient.php:40` SSRF 校验不覆盖域名解析结果与 DNS rebinding（URL 均来自服务端配置，实际风险低，建议注释声明信任边界）。
-- `RedisClient.php:103-106` `database` 为数字字符串时静默不 select。
-- `SpinYarnClient.php:78-94` init 失败后进程内永不重试（fail-open 可接受但未注释说明）。
-- `AIClient.php:57、279` `goto retry` 可读性差。
-- `AIAnalyseController.php:20-50` `POST /ai/analyse` 直传内容不经脱敏链即发往第三方网关（与已存储日志路径行为不一致），建议在 API.md 明示该差异（设计确认项）。
+#### M4. 运维脚本：临时目录创建增加 Termux 适配
+- **位置：** `scripts/download_modloader_docs.sh:15` 与 `download_server_docs.sh:23`
+- **描述：** 脚本直接调用 `mktemp -d`。在部分 Termux 环境下若未设置 `TMPDIR`，可能尝试写入只读的 `/tmp` 导致失败。建议优先采用 `TMP_DIR="${TMPDIR:-/tmp}/..."` 或项目本地临时目录。
 
-**LiteWAF 与边缘**
+#### M5. 运维脚本：`download_server_docs.sh` 网络请求缺少错误拦截标志
+- **位置：** `scripts/download_server_docs.sh:31`
+- **描述：** `fetch_tarball` 中使用 `curl -sL`，缺少 `-f`（`--fail`）。遇到 GitHub 404 或限流时，会将返回的 HTML 报错页面写入 `.tgz` 并继续执行解压，产生误导性的解压报错。建议补充 `-f` 选项。
 
-- `litewaf.lua:446-449` 注释声称的 subject 匹配顺序（decoded URI 第二位）与实际（raw→uri→UA→decoded→body）不符，影响计数归属。
-- `litewaf.lua:433-435、268-269` `incr(init)` 与 `expire` 之间存在无 TTL 键泄漏窗口（worker 在两步间退出时）。
-- `litewaf.lua:121` probe 扩展名规则以 `(\?|$)` 收尾会匹配 body/解码 subject 中以 `.log`/`.conf` 结尾的正常表单值。
-- `LiteWAF/nginx/nginx.conf:13` `worker_connections 1024` 对 SSE 长连接场景偏小。
-- `docker/nginx/default.conf:57` `proxy_pass` 为启动时静态解析，Hyperf 重启 IP 变化后持续 502，建议 `resolver 127.0.0.11` + 变量。
-- 443 server 可选加固：HSTS、`ssl_session_cache`、http2、显式 `ssl_protocols`。
+#### M6. 编排优化：`mariadb-events` 一次性容器应避免无限休眠
+- **位置：** `docker/compose.yaml:138`
+- **描述：** 容器在执行完事件注册 SQL 后使用 `while :; do sleep 86400; done` 保持长跑。建议执行完毕后直接正常退出，并保持 `restart: "no"`。
 
-**部署与 CI**
-
-- `compose.yaml:85、126` `mariadb:11`、`redis:7-alpine` 为浮动 tag，与全项目严格 pin 风格不一致。
-- Compose 各服务未配置 `logging` 上限，长期运行日志可占满磁盘。
-- `hyperf.Dockerfile:17` `ADD` 远程安装脚本无校验和（BuildKit 支持 `--checksum=sha256:...`）。
-- `hyperf.Dockerfile:30` SpinYarn Rust 源码与全部构建产物进入最终生产镜像。
-- `hyperf.Dockerfile:52` 启动链 `rag:build && start` 在远程 embedding 故障时会 crash-loop，建议降级或拆分 init 容器。
-- `core.php:15-22` 简易 dotenv 不支持行内注释。
-- `README.md`（已随本报告修正限流描述）中"mariadb-events.sql 生成文件不提交到 Git"与仓库实际（`docker/mariadb-events.sql` 已入库且被 compose 挂载）表述含混，应改为"仓库内为默认值，修改 TTL 后重新生成、按需提交"。
+#### M7. OpenLiteWaf：IPv6 `::1` 等压缩地址脱敏展示优化
+- **位置：** `OpenLiteWaf/lua/openlitewaf.lua:326` 与 `OpenLiteStats/lua/openlitestats.lua:48-55`
+- **描述：** 在处理以 `::` 形式简写的 IPv6 地址时，简单按冒号切分可能只截取出单个组。建议完善 IPv6 的掩码规则，确保格式统一。
 
 ---
 
-## 改进建议（按优先级）
+## 架构与设计改进建议
 
-**P0（立即，修复成本极低）**
+1. **统一微队列在极端故障下的自愈机制**
+   当前 `AnalysisQueue` 的生产者与消费者解耦设计非常优秀，但仍需加强对 Redis 偶发断连、主从切换等网络分区的自愈容错能力。建议对关键写入操作引入重试熔断与背压保护。
 
-1. `.dockerignore` 加入 `.env`（S2，一行）。
-2. `FilesystemStorage::CleanupExpired` 改用 `readCreated()`（S1，数行），并补"Put → Renew → 清理后仍存在"回归测试。
-3. `release.yaml` commit message 改环境变量中转（G19）。
+2. **边缘 WAF 与应用层契约的自动化对齐**
+   WAF 作为独立子模块运行在 Nginx 接入层，当应用层新增控制器路由（如 `/v1/ai/analyse`、`/v1/raw/{id}/{filename}`）时，WAF 的白名单与规则表容易产生漂移，导致误报。建议在 CI 中增加端到端测试，自动化模拟调用全量对外 API 路由，确保所有合法接口均不会被 WAF 误杀。
 
-**P1（短期，影响正确性与真实用户）**
-
-4. `httpx` UA 规则加 `(?<!python-)`（G15）——直接影响 API 正常用户。
-5. body 扫描不依赖 `Content-Length`（G16）。
-6. regex 测试解析器支持 `[==[` 并补 uname 样本（G14）。
-7. `LogAgent`：续读仅在覆盖全文件时置已读（G8）、锁在 `finally` 释放（G9）、SSE error 帧固定文案（G10）。
-8. `IPv6ShortFilter` 改 safe 包装；safe 降级补日志（G2）。
-9. `ContentParser` urlencoded 分支补 `is_string` 校验（G3）。
-10. 删除流程先删缓存（G4）。
-11. `ai.sh` 修复 error 检测与子 shell 状态（G20、G21）。
-
-**P2（中期，架构与运维）**
-
-12. 过期清理移出请求路径（Hyperf process / crontab），至少分批（G6）。
-13. 进程级缓存补字节预算（G5）；RAG 语义缓存淘汰改增量字节计数。
-14. `SseWriter` 检测断连并中止 Agent 循环（G13）。
-15. `rag:build` 后索引自动失效或文档明确需重启（G11）；`RagBuildCommand` 返回失败码（G12）。
-16. 澄清 `RateLimitMiddleware` 去留（G1）；清理 `mclogs.conf` 死配置（G18）。
-17. 文档一致性：mariadb-events 措辞、`AIAnalyseController` 脱敏差异写入 API.md。
-
-**P3（择机）**
-
-18. 其余"建议"级条目按模块顺手处理；重点是隐私过滤器漏报（SessionToken 无引号形态）与 zip 声明 size 信任点的行为验证。
+3. **CI/CD 流水线流水化卡点**
+   建议将 `release.yaml` 与 `ci.yaml` 深度绑定，仅允许在全量单元测试、架构测试与静态分析全部通过后才允许生成 Release 与 Docker 镜像发布。
 
 ---
 
-## 正面亮点
+## 正面亮点与最佳实践
 
-1. **Token 安全存储与比对**（`app/Data/Token.php:26-33`）：存储层只落 SHA-256 哈希，校验先比对哈希再兼容存量明文，两次均用 `hash_equals`，无时序侧信道。
-2. **协程级连接隔离成体系**（`app/Client/RedisClient.php:52-63`、`app/Sse/SseWriter.php:90-106`）：明确识别"常驻进程共享连接会被并发协程交错读写"的 Swoole 关键风险，连接与流句柄均存于协程级 `Context`，注释解释了为什么。
-3. **SSE 异常边界自觉**（`LogAgent.php:42-44`）：try 边界紧贴 `begin()`，流开始后任何异常都以流内 error 收尾而非逃逸到全局 JSON handler，实现与注释一致。
-4. **RAG 索引原子替换**（`app/Rag/RagSearch.php:124-216`）：临时库事务写入 → 失败回滚清理 → `rename` 原子上限，构建失败永不破坏线上索引。
-5. **ZIP 上传纵深防护**（`app/UploadParser.php:128-197`）：文件数配额先于解压、声明 size 预检、解压后 `strlen` 复检、文件名拒绝遍历、`finally` 清理临时目录，每层注释说明意图。
-6. **Content-Encoding 防护**（`app/ContentParser.php:43-65`）：解码步数上限防嵌套解压 DoS，inflate 带 max-length 防解压膨胀。
-7. **AIClient 对劣质上游的防御矩阵**（`app/Client/AIClient.php`）：流内 error 帧显式失败防"空流假成功"、`httpCode=0` 假成功拦截、空流检测与非流式回退、tool_calls 分片归桶、已 emit 后不换 key 重试、日志只记 key 指纹。
-8. **LiteWAF 统计页隐私设计**（`LiteWAF/lua/litewaf.lua`）：公开页 IP 脱敏、URI `token=` 打码、完整 IP 仅进 error log，且逻辑测试逐条断言这些约定（T19）。
-9. **S1 前缀绕过的双语言回归闭环**：`skip_signature` 精确匹配修复后，PHP 与 Lua 两套测试都有反样本——"修复 + 双回归"的闭环意识。
-10. **CI 分层与生产贴近**：单测矩阵 → 静态分析 → 架构测试 → Swoole 启动冒烟（真实上传 + MCP 握手）→ Docker 构建冒烟；schema 复用生产 `mariadb-init.sql`；compose 密码全部 `${VAR:?}` 强制校验。
-11. **Docker/Compose 版本纪律**：rust/php/swoole/openresty/certbot 等版本全面 pin（仅 mariadb/redis 浮动，见建议）。
-12. **mariadb-init.sql 与代码一致**：`logs.id CHAR(6)` 与 `getRaw()` 对应、`idx_created` 恰好覆盖 Event 删除路径、外键与索引齐全。
+1. **常驻内存与垃圾回收治理机制**
+   针对 Swoole 常驻进程中 PHP 内存池与连接池不归还导致的 RSS 缓慢攀升问题，引入了基于处理量与空闲时长的自回收机制（`AiQueueConsumer::maybeRecycle`），优雅地将空闲内存重置，彻底解决了常驻服务长期运行的内存膨胀顽疾。
 
----
+2. **精细的微队列事件流设计**
+   微队列将庞大的日志正文剥离为短 TTL 的 gzip 载荷，Stream 仅传递极轻量的消息 ID；同时实现了精准的 `activeKey` 去重与合并中继机制，既避免了重复分析，又大幅降低了 Redis 内存占用与带宽消耗。
 
-## 汇总
+3. **双重防御与时序安全比对**
+   Token 校验严格遵循恒时哈希比较（`hash_equals`），对历史明文与新哈希兼容处理；文件存储采用原子文件创建（`fopen 'x'`）与分布式锁，从根本上杜绝了并发冲突与 TOCTOU 竞态。
 
-| 分区 | 文件数 | 严重 | 一般 | 建议 |
-|---|---|---|---|---|
-| 存储与数据链路 | 35（精读）+ 6（核实） | 1 | 7 | 12 |
-| AI 与 RAG 链路 | 26（精读）+ 8（核实） | 0 | 6 | 11 |
-| LiteWAF / 部署 / 脚本 / CI | 32（精读）+ 8（核实） | 1 | 8 | 18 |
-| **合计** | **93** | **2** | **21** | **41** |
-
-标注"待验证"保留项 3 处：zip 声明 size 篡改时 `ZipArchive::getFromIndex` 的实际行为、redis password 占位符在非 Docker 部署的实际影响、SpinYarn C 扩展内部是否做同步 Redis IO。此前 2026-08-29 的 LiteWAF 专项报告已移至 `docs/CRCLASH.md` 归档（该轮 14 项发现当时已全部闭环；本轮对该范围的增量发现见 G14-G18 与建议节）。
+4. **规范的错误收敛与异常隔离**
+   在各个网络客户端（AIClient、MCPClient、SemanticClient）中均严格落地了 `CURLOPT_FORBID_REUSE => true` 与显式 handle 销毁（`$ch = null`），并在上层统一了异常转换，绝不向下游泄露原始敏感错误，符合高标准的安全设计规范。

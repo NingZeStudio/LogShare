@@ -12,7 +12,17 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 KNOWLEDGE_DIR="${ROOT}/rag/knowledge"
-TMP_DIR="$(mktemp -d)"
+TMP_BASE="${TMPDIR:-}"
+if [ -z "$TMP_BASE" ]; then
+    if [ -d "/data/data/com.termux/files/usr/tmp" ]; then
+        TMP_BASE="/data/data/com.termux/files/usr/tmp"
+    elif [ -d "${ROOT}/tmp" ]; then
+        TMP_BASE="${ROOT}/tmp"
+    else
+        TMP_BASE="/tmp"
+    fi
+fi
+TMP_DIR="$(mktemp -d -p "$TMP_BASE")"
 trap 'rm -rf "$TMP_DIR"' EXIT
 
 FORGE_REPO="https://github.com/MinecraftForge/Documentation"

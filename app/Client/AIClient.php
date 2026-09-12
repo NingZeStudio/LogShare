@@ -58,19 +58,20 @@ class AIClient
             // continue = 同 key 重试；break = 放弃本 key，外层 foreach 换下一 key；
             // break 2 = 成功或已向客户端 emit 过内容，彻底退出重试。
             while (true) {
-            try {
-                $payload = self::buildPayload($messages, $config['model'], $tools);
-                $buffer = '';
-                $fullContent = '';
-                $fullReasoning = '';
-                $toolCalls = [];
-                $lastToolCallIndex = null;
-                $responseBody = '';
-                $rawBody = '';
+                $ch = null;
+                try {
+                    $payload = self::buildPayload($messages, $config['model'], $tools);
+                    $buffer = '';
+                    $fullContent = '';
+                    $fullReasoning = '';
+                    $toolCalls = [];
+                    $lastToolCallIndex = null;
+                    $responseBody = '';
+                    $rawBody = '';
 
-                $ch = curl_init($config['baseUrl']);
-                curl_setopt_array($ch, self::curlOptions($payload, $apiKey, $config['timeout']));
-                curl_setopt($ch, CURLOPT_RETURNTRANSFER, false);
+                    $ch = curl_init($config['baseUrl']);
+                    curl_setopt_array($ch, self::curlOptions($payload, $apiKey, $config['timeout']));
+                    curl_setopt($ch, CURLOPT_RETURNTRANSFER, false);
                 $writeCallback = function ($ch, $data) use (
                     &$buffer,
                     &$fullContent,
@@ -286,6 +287,9 @@ class AIClient
                     continue;
                 }
                 break;
+            } finally {
+                $writeCallback = null;
+                $ch = null;
             }
             }
         }
@@ -430,6 +434,7 @@ class AIClient
             CURLOPT_TIMEOUT => $timeout,
             CURLOPT_CONNECTTIMEOUT => self::DEFAULT_CONNECT_TIMEOUT,
             CURLOPT_ACCEPT_ENCODING => 'identity',
+            CURLOPT_FORBID_REUSE => true,
         ];
     }
 

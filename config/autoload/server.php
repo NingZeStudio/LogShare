@@ -30,6 +30,9 @@ return [
         'socket_buffer_size' => 16 * 1024 * 1024,
         'buffer_output_size' => 16 * 1024 * 1024,
         'package_max_length' => 16 * 1024 * 1024,
+        'http_compression' => true,
+        'http_compression_level' => 6,
+        'compression_min_length' => 1024,
     ],
     'callbacks' => [
         Event::ON_WORKER_START => [Hyperf\Framework\Bootstrap\WorkerStartCallback::class, 'onWorkerStart'],

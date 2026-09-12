@@ -32,6 +32,11 @@ class UploadParser
             return false;
         }
 
+        // 过滤不可见控制字符（包括 \r、\n 等），防范响应头拆分与异常文件名
+        if (preg_match('/[\x00-\x1f\x7f]/', $name)) {
+            return false;
+        }
+
         $name = str_replace('\\', '/', $name);
 
         foreach (explode('/', $name) as $segment) {

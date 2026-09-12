@@ -78,7 +78,7 @@ thinking_buf=""
 # 注意：必须用进程替换（done < <(curl ...)）而非管道，管道右侧的 while 在
 # 子 shell 中执行，thinking_buf / BODY_STARTED 的修改不会传播回父 shell，
 # 循环结束后的"刷新残留思考缓冲"会永远读到空值
-while IFS= read -r line; do < <(curl -sN "${REQ_ARGS[@]}" "$URL")
+while IFS= read -r line; do
 
     # ── 事件标记行 ──
     case "$line" in
@@ -141,7 +141,7 @@ while IFS= read -r line; do < <(curl -sN "${REQ_ARGS[@]}" "$URL")
         printf '%s' "$CONTENT_DELTA"
     fi
 
-done
+done < <(curl -sN --compressed "${REQ_ARGS[@]}" "$URL")
 
 # 刷新残留的思维链缓冲
 [[ -n "$thinking_buf" && "$SHOW_THINKING" == "1" ]] && printf '%s\n' "${C_THINK}[思考] ${thinking_buf}${C_RESET}"

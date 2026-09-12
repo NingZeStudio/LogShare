@@ -173,27 +173,32 @@ final class SemanticClient
             CURLOPT_RETURNTRANSFER => true,
             CURLOPT_TIMEOUT => $this->timeout,
             CURLOPT_CONNECTTIMEOUT => self::CONNECT_TIMEOUT,
+            CURLOPT_FORBID_REUSE => true,
         ]);
 
-        $body = curl_exec($ch);
-        $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-        $curlError = curl_error($ch);
+        try {
+            $body = curl_exec($ch);
+            $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+            $curlError = curl_error($ch);
 
-        if ($body === false || $body === '') {
-            throw new \RuntimeException('request failed: ' . ($curlError !== '' ? $curlError : 'empty response'));
-        }
-        if (strlen((string) $body) > self::MAX_RESPONSE_BYTES) {
-            throw new \RuntimeException('response too large');
-        }
-        if ($httpCode >= 400) {
-            throw new \RuntimeException('HTTP ' . $httpCode . ': ' . mb_substr((string) $body, 0, 200));
-        }
+            if ($body === false || $body === '') {
+                throw new \RuntimeException('request failed: ' . ($curlError !== '' ? $curlError : 'empty response'));
+            }
+            if (strlen((string) $body) > self::MAX_RESPONSE_BYTES) {
+                throw new \RuntimeException('response too large');
+            }
+            if ($httpCode >= 400) {
+                throw new \RuntimeException('HTTP ' . $httpCode . ': ' . mb_substr((string) $body, 0, 200));
+            }
 
-        $decoded = json_decode((string) $body, true);
-        if (!is_array($decoded)) {
-            throw new \RuntimeException('non-JSON body');
-        }
+            $decoded = json_decode((string) $body, true);
+            if (!is_array($decoded)) {
+                throw new \RuntimeException('non-JSON body');
+            }
 
-        return $decoded;
+            return $decoded;
+        } finally {
+            $ch = null;
+        }
     }
 }
