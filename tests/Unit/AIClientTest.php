@@ -234,3 +234,31 @@ test('streamChat throws when all keys fail', function () {
         expect($e->getMessage())->toContain('所有 AI API 密钥均尝试失败');
     }
 });
+
+test('streamChat repeated invocations cleanly close handles without fd exhaustion', function () {
+    skipWithoutMockServer($GLOBALS['llm_base_url']);
+    $configRef = new ReflectionClass(\App\Config::class);
+    $dataProp = $configRef->getProperty('data');
+    $data = $dataProp->getValue();
+    $data['ai']['baseUrl'] = $GLOBALS['llm_base_url'] . '/v1/chat/completions';
+    $dataProp->setValue(null, $data);
+
+    for ($i = 0; $i < 20; $i++) {
+        $content = '';
+        AIClient::streamChat(
+            [['role' => 'user', 'content' => 'hi']],
+            [],
+            function ($delta) use (&$content) {
+                $content .= $delta;
+            },
+            function () {
+            },
+            function () {
+            },
+            function () {
+            }
+        );
+        expect($content)->toBe('Hello World');
+    }
+});
+

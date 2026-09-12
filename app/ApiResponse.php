@@ -69,7 +69,7 @@ class ApiResponse
             ->withBody(new SwooleStream($json));
     }
 
-    public static function text(string $content, string $contentType = 'text/plain', int $httpCode = 200): ResponseInterface
+    public static function text(string $content, string $contentType = 'text/plain; charset=utf-8', int $httpCode = 200): ResponseInterface
     {
         $response = new \Hyperf\HttpMessage\Server\Response();
 

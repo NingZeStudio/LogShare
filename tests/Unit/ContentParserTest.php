@@ -95,3 +95,21 @@ test('parseJsonData truncates source to 64 chars', function () {
 
     expect(strlen($result['source']))->toBeLessThanOrEqual(64);
 });
+
+test('ContentParser handles Content-Encoding: br appropriately', function () {
+    $request = Mockery::mock(\Hyperf\HttpServer\Contract\RequestInterface::class);
+    $stream = Mockery::mock(\Psr\Http\Message\StreamInterface::class);
+    $stream->shouldReceive('getContents')->andReturn('raw-brotli-bytes');
+    $request->shouldReceive('getBody')->andReturn($stream);
+    $request->shouldReceive('getHeaderLine')->with('Content-Encoding')->andReturn('br');
+    $request->shouldReceive('getHeaderLine')->with('Content-Type')->andReturn('application/json');
+
+    $parser = new App\ContentParser($request);
+    $result = $parser->getContent();
+
+    if (!function_exists('brotli_uncompress')) {
+        expect($result)->toBeInstanceOf(App\ApiError::class);
+        expect($result->getHttpCode())->toBe(501);
+        expect($result->getMessage())->toContain('Brotli');
+    }
+});

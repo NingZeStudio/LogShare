@@ -144,13 +144,15 @@ class AiQueueConsumer extends AbstractProcess
     {
         $cfg = AnalysisQueue::config();
         $intervalMs = max(10000, intdiv(max(1, (int) $cfg['claimIdleMs']), 2));
+        $cursor = '0-0';
         while ($this->running) {
             usleep($intervalMs * 1000);
             try {
-                foreach (RedisStreams::xAutoClaim(AnalysisQueue::QUEUE_KEY, AnalysisQueue::GROUP, 'reclaimer', (int) $cfg['claimIdleMs']) as [$id, $fields]) {
+                foreach (RedisStreams::xAutoClaim(AnalysisQueue::QUEUE_KEY, AnalysisQueue::GROUP, 'reclaimer', (int) $cfg['claimIdleMs'], 10, $cursor) as [$id, $fields]) {
                     $this->runJob($id, (string) ($fields['jobId'] ?? ''));
                 }
             } catch (\Throwable $e) {
+                $cursor = '0-0';
                 \App\Syslog::error('AiQueue', 'reclaim loop error: ' . $e->getMessage());
             }
         }

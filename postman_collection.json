@@ -10,7 +10,7 @@
                     "request": {
                         "name": "Submit a log",
                         "description": {
-                            "content": "Accepts raw log content as `application/x-www-form-urlencoded` or `application/json`.\nSupports `gzip`/`deflate` `Content-Encoding`.\n\n**Form fields (urlencoded or JSON):**\n- `content` (string, required): Raw log text (max 10 MB, 50k lines)\n- `metadata[]` (array, optional): Array of `{key, value}` objects\n- `source` (string, optional): Free-form source identifier\n\nReturns a log ID and a deletion token. **Save the token** — it cannot be recovered.\n\n(Deprecated; use /v1/log instead)\n",
+                            "content": "Accepts raw log content as `application/x-www-form-urlencoded` or `application/json`.\nSupports `br`/`gzip`/`deflate` `Content-Encoding`.\n\n**Form fields (urlencoded or JSON):**\n- `content` (string, required): Raw log text (max 10 MB, 50k lines)\n- `metadata[]` (array, optional): Array of `{key, value}` objects\n- `source` (string, optional): Free-form source identifier\n\nReturns a log ID and a deletion token. **Save the token** — it cannot be recovered.\n\n(Deprecated; use /v1/log instead)\n",
                             "type": "text/plain"
                         },
                         "url": {
@@ -759,7 +759,7 @@
                     "request": {
                         "name": "Submit a log",
                         "description": {
-                            "content": "Accepts raw log content as `application/x-www-form-urlencoded` or `application/json`.\nSupports `gzip`/`deflate` `Content-Encoding`.\n\n**Form fields (urlencoded or JSON):**\n- `content` (string, required): Raw log text (max 10 MB, 50k lines)\n- `metadata[]` (array, optional): Array of `{key, value}` objects\n- `source` (string, optional): Free-form source identifier\n\nReturns a log ID and a deletion token. **Save the token** — it cannot be recovered.\n",
+                            "content": "Accepts raw log content as `application/x-www-form-urlencoded` or `application/json`.\nSupports `br`/`gzip`/`deflate` `Content-Encoding`.\n\n**Form fields (urlencoded or JSON):**\n- `content` (string, required): Raw log text (max 10 MB, 50k lines)\n- `metadata[]` (array, optional): Array of `{key, value}` objects\n- `source` (string, optional): Free-form source identifier\n\nReturns a log ID and a deletion token. **Save the token** — it cannot be recovered.\n",
                             "type": "text/plain"
                         },
                         "url": {

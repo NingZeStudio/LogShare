@@ -20,7 +20,7 @@ COPY --from=composer:2.8.9 /usr/bin/composer /usr/bin/composer
 # 先下载脚本核对其 sha256 后改用 `ADD --checksum=sha256:...`（需 BuildKit）。
 ADD https://github.com/mlocati/docker-php-extension-installer/releases/download/2.7.0/install-php-extensions /usr/local/bin/install-php-extensions
 RUN chmod +x /usr/local/bin/install-php-extensions \
-    && install-php-extensions pdo_mysql pdo_sqlite redis zip pcntl posix sockets mbstring
+    && install-php-extensions pdo_mysql pdo_sqlite redis zip pcntl posix sockets mbstring brotli
 
 # 编译 Swoole（固定版本，保证构建可复现且满足 Hyperf 3.2 + PHP 8.5 所需的 6.2+）
 # libjemalloc2：替换 glibc malloc 作为分配器。glibc 的 free 只在堆顶可连续收缩
@@ -31,11 +31,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         autoconf build-essential libcurl4-openssl-dev libssl-dev zlib1g-dev libc-ares-dev libbrotli-dev libjemalloc2 \
     && pecl install swoole-${SWOOLE_VERSION} \
     && docker-php-ext-enable swoole \
+    && ln -sf /usr/lib/*-linux-gnu/libjemalloc.so.2 /usr/local/lib/libjemalloc.so.2 \
     && rm -rf /var/lib/apt/lists/*
 
 # jemalloc 生效：全容器进程（php/hyperf/composer/rag:build）统一走 jemalloc；
 # decay 1s 加速空闲页归还（默认 10s，对 3.6G 小机器再激进一点，收益是 RSS 紧跟真实用量）
-ENV LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libjemalloc.so.2 \
+ENV LD_PRELOAD=/usr/local/lib/libjemalloc.so.2 \
     MALLOC_CONF=dirty_decay_ms:1000,muzzy_decay_ms:1000,background_thread:true
 
 # 编译 SpinYarn PHP 扩展（C ABI 来自阶段 1），编译完成后删除源码与构建产物，

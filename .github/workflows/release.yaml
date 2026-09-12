@@ -33,8 +33,36 @@ jobs:
             echo "should_release=false" >> "$GITHUB_OUTPUT"
           fi
 
-  release:
+  verify:
     needs: check-commit
+    if: needs.check-commit.outputs.should_release == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.4'
+          extensions: mbstring, json, zlib, pdo_mysql, pcntl, posix, sockets
+          tools: composer:v2
+
+      - name: Install Dependencies
+        run: composer install --prefer-dist --no-progress --no-interaction
+
+      - name: Copy Config
+        run: cp Config.inc.example.php Config.inc.php
+
+      - name: Run Tests
+        run: |
+          composer test
+          composer test:architecture
+
+      - name: Run Static Analysis
+        run: composer stan
+
+  release:
+    needs: [check-commit, verify]
     if: needs.check-commit.outputs.should_release == 'true'
     runs-on: ubuntu-latest
     steps:

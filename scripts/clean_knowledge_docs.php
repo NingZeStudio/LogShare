@@ -55,22 +55,19 @@ foreach ($targets as $dir) {
 
         // 1. 元文件直接删除（README/_Sidebar 等对检索零价值）
         if (in_array($dir, UPSTREAM_DIRS, true) && in_array($base, META_FILES, true)) {
-            @unlink($file->getPathname());
-            $removed++;
+            deleteOrWarn($file->getPathname(), $removed);
             continue;
         }
 
         $content = file_get_contents($file->getPathname());
         if ($content === false || trim($content) === '') {
-            @unlink($file->getPathname());
-            $removed++;
+            deleteOrWarn($file->getPathname(), $removed);
             continue;
         }
 
         // 2. "Moved to ..." 重定向占位壳
         if (preg_match('/^\s*moved to\s+\S+/i', $content)) {
-            @unlink($file->getPathname());
-            $removed++;
+            deleteOrWarn($file->getPathname(), $removed);
             continue;
         }
 
@@ -78,8 +75,7 @@ foreach ($targets as $dir) {
 
         // 3. 清洗后有效内容过薄的纯导航/骨架页删除
         if (mb_strlen(trim((string) preg_replace('/\s+/', ' ', strip_tags($cleanedContent)))) < 200) {
-            @unlink($file->getPathname());
-            $removed++;
+            deleteOrWarn($file->getPathname(), $removed);
             continue;
         }
 

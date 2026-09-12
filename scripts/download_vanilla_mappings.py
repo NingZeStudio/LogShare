@@ -5,6 +5,7 @@
 共 39 个正式版）；已存在则跳过（增量）。26.x 无混淆、1.14.3 及更早无官方映射自动跳过。
 用法：python3 scripts/download_vanilla_mappings.py
 """
+import hashlib
 import json
 import os
 import sys
@@ -38,6 +39,15 @@ def main() -> int:
             size = cm["size"] // 1024 // 1024
             print(f"[down] {vid} ({size}MB)")
             data = urllib.request.urlopen(url, timeout=120).read()
+            expected_size = cm.get("size")
+            if expected_size is not None and len(data) != expected_size:
+                raise ValueError(f"size mismatch: got {len(data)}, expected {expected_size}")
+            expected_sha1 = cm.get("sha1")
+            if expected_sha1:
+                actual_sha1 = hashlib.sha1(data).hexdigest()
+                if actual_sha1.lower() != expected_sha1.lower():
+                    raise ValueError(f"sha1 mismatch: got {actual_sha1}, expected {expected_sha1}")
+
             fd, part = tempfile.mkstemp(prefix=f".{vid}.", suffix=".part", dir=OUT)
             closed = False
             try:

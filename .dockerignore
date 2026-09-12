@@ -1,6 +1,6 @@
 .git
 .gitignore
-.env
+.env*
 .github
 docs
 vendor
@@ -15,6 +15,9 @@ rag/public
 docker
 tests
 OpenLiteWaf
+OpenLiteStats
+LOCAL_DEV_NOTES.md
+Plan.md
 README.md
 CHANGELOG.md
 CRCLASH.md

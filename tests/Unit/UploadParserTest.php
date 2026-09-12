@@ -137,4 +137,7 @@ test('validateFileName rejects unsafe names', function () {
     expect(App\UploadParser::validateFileName('a/../../b'))->toBeFalse();
     expect(App\UploadParser::validateFileName(''))->toBeFalse();
     expect(App\UploadParser::validateFileName("nul\x00byte"))->toBeFalse();
+    expect(App\UploadParser::validateFileName("evil\r\nheader.txt"))->toBeFalse();
+    expect(App\UploadParser::validateFileName("test\nfile.log"))->toBeFalse();
+    expect(App\UploadParser::validateFileName("test\x1bfile.log"))->toBeFalse();
 });

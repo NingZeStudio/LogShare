@@ -20,7 +20,17 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 KNOWLEDGE_DIR="${ROOT}/rag/knowledge"
-TMP_DIR="$(mktemp -d)"
+TMP_BASE="${TMPDIR:-}"
+if [ -z "$TMP_BASE" ]; then
+    if [ -d "/data/data/com.termux/files/usr/tmp" ]; then
+        TMP_BASE="/data/data/com.termux/files/usr/tmp"
+    elif [ -d "${ROOT}/tmp" ]; then
+        TMP_BASE="${ROOT}/tmp"
+    else
+        TMP_BASE="/tmp"
+    fi
+fi
+TMP_DIR="$(mktemp -d -p "$TMP_BASE")"
 trap 'rm -rf "$TMP_DIR"' EXIT
 
 fetch_git() { # $1 repo  $2 dest
@@ -28,7 +38,7 @@ fetch_git() { # $1 repo  $2 dest
 }
 
 fetch_tarball() { # $1 repo  $2 branch  $3 dest
-    curl -sL --max-time 180 "https://codeload.github.com/$1/tar.gz/refs/heads/$2" -o "$3.tgz" \
+    curl -sfL --max-time 180 "https://codeload.github.com/$1/tar.gz/refs/heads/$2" -o "$3.tgz" \
         && mkdir -p "$3" \
         && tar xzf "$3.tgz" -C "$3" --strip-components=1 \
         && rm -f "$3.tgz"

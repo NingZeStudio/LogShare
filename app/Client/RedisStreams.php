@@ -127,12 +127,15 @@ class RedisStreams extends RedisClient
     /**
      * XAUTOCLAIM：把空闲超过 $minIdleMs 的 pending 条目改挂到 $consumer 名下。
      *
+     * @param string &$cursor 扫描游标（传入起始游标，方法执行后更新为下一轮游标）
      * @return array<int, array{0: string, 1: array}> [id, fields] 列表
      */
-    public static function xAutoClaim(string $key, string $group, string $consumer, int $minIdleMs, int $count = 10): array
+    public static function xAutoClaim(string $key, string $group, string $consumer, int $minIdleMs, int $count = 10, string &$cursor = '0-0'): array
     {
-        $reply = self::connection()->xautoclaim($key, $group, $consumer, $minIdleMs, '0-0', $count);
+        $start = $cursor !== '' ? $cursor : '0-0';
+        $reply = self::connection()->xautoclaim($key, $group, $consumer, $minIdleMs, $start, $count);
         // phpredis 返回 [next-cursor, messages, deleted-ids]；messages 为 [id => fields]
+        $cursor = isset($reply[0]) && is_string($reply[0]) && $reply[0] !== '' ? $reply[0] : '0-0';
         $messages = $reply[1] ?? [];
         $out = [];
         foreach ($messages as $id => $fields) {
