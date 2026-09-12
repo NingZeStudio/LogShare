@@ -32,7 +32,7 @@ curl -N https://api.logshare.cn/v1/ai/sAbCdEf
 - 上传响应中的 `token` 是删除日志的唯一凭证，丢失后无法找回，请自行持久化保存。
 - `source` 字段建议填写启动器名与版本（如 `fcl/1.2.0`）。知识库收录了 Pojav、FCL、ZL2、Amethyst、PGW、MobileGlues 等启动器生态的问题案例，该字段用于让 AI 分析优先匹配对应来源的案例。
 - AI 分析使用 SSE 流式协议，解析方式见「SSE 事件协议」一节，注意 `event:` 行与 `data:` 行的配对关系。
-- 移动端建议开启 Brotli 或 gzip 压缩上传（`Content-Encoding: br` 或 `Content-Encoding: gzip`）以减小大日志的传输体积；服务端默认优先采用 Brotli（`br`）压缩响应。
+- 全链路默认采用 Brotli（`br`）压缩：移动端与各客户端默认推荐开启 Brotli 压缩上传（`Content-Encoding: br`，亦向下兼容 gzip）；服务端出站响应全链路默认采用 Brotli（`br`）压缩返回。
 - 客户端 HTTP 读超时应设置为 300 秒以上，Agent 的多轮工具分析可能持续数十秒。
 
 ---
@@ -47,8 +47,8 @@ POST /v1/log
 ```
 
 **Content-Type：** `application/x-www-form-urlencoded` 或 `application/json`。  
-**Content-Encoding：** 支持 `br`（Brotli，推荐）、`gzip`、`x-gzip`、`deflate`（可叠加，最多 5 层）。
-**Accept-Encoding：** 支持 `br`、`gzip`、`deflate`，服务端默认优先采用 Brotli 压缩。
+**Content-Encoding：** 默认推荐 `br`（Brotli，极限压缩比），向下兼容 `gzip`、`x-gzip`、`deflate`（可叠加，最多 5 层，服务端设 20 MiB 解压安全上限）。
+**Accept-Encoding：** 默认采用 `br`（Brotli）全链路压缩返回（≥1024 字节），未声明时回退 `gzip`、`deflate`。
 
 **请求字段（JSON）：**
 
