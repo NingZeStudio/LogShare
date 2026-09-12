@@ -240,7 +240,7 @@ GET /1/ai/{id}   （已弃用，保留兼容）
 GET /v1/ai/{id}
 ```
 
-SSE（Server-Sent Events）流式输出。LogAgent 模式下，Agent 可读取该日志 ID 下的所有文件（`list_log_files` / `read_log_file` 工具，作用域限定在当前 ID）。`GET /v1/ai/{id}` 会绑定该 ID；`POST /v1/ai/analyse` 只有请求 JSON 提供 `id` 时才会开放文件工具。
+SSE（Server-Sent Events）流式输出。LogAgent 模式下，Agent 可读取该日志 ID 下的所有文件（`list_log_files` / `read_log_file` / `grep_log_file` 工具，作用域限定在当前 ID）。`GET /v1/ai/{id}` 会绑定该 ID；`POST /v1/ai/analyse` 只有请求 JSON 提供 `id` 时才会开放文件工具。
 
 > **缓存行为：** `GET /v1/ai/{id}` 的分析结论按日志 ID 缓存 30 分钟——同一 ID 重复请求会直接返回上次结论（不再执行工具调用）；调试时如需强制重新分析，重新上传一份新日志即可。
 
@@ -290,6 +290,7 @@ LogAgent 模式（`ai.agent.enabled`）会输出额外的 `event: status` 事件
 | `list_topics` | `ai.mcp.rag.url` 非空 | 无参数，`properties: {}` | 知识库主题地图：目录、描述、文档数量和示例文件名 |
 | `list_log_files` | 当前会话绑定日志 ID | 无参数，`properties: {}` | 主文件 `main` 及附加文件的名称、字节数、行数（crash-reports 类文件置顶并标注 `[优先]`） |
 | `read_log_file` | 当前会话绑定日志 ID | `filename: string`（必填） | 返回该文件的**完整内容**（无行区间参数）；单次字节上限由 `ai.agent.maxFileBytes` 控制（默认 512 KiB），超出时截断并附提示；同一会话内重复读取同一文件会被拒绝并返回提示 |
+| `grep_log_file` | 当前会话绑定日志 ID | `query: string`（必填，关键词或短语）；`filename: string`（可选，默认 `main`）；`case_sensitive: boolean`（可选，默认 false）；`context_lines: integer`（可选，默认 1，范围 0–5）；`max_matches: integer`（可选，默认 10，范围 1–30） | 逐行检索匹配行，返回带有行号对齐、匹配标记（`>`）与前后上下文的文本块；连续行区间自动合并；超出上限提示截断 |
 
 ### 工具定义示例
 
@@ -299,7 +300,8 @@ LogAgent 模式（`ai.agent.enabled`）会输出额外的 `event: status` 事件
   {"type":"function","function":{"name":"rag_search","description":"在内置知识库中检索已验证的实战资料。知识库覆盖：常见崩溃与故障模式（mixin 注入失败、内存不足、Java 版本错误等）、移动端启动器生态实战案例蒸馏（FCL/Zalith/Amethyst/PGW/MobileGlues，含排障决策树）、三大日志文件格式解读、Fabric/Forge/NeoForge 与 PaperMC/Purpur/Geyser 等开发文档。日志中出现异常类名、崩溃特征或启动器相关问题时优先使用；纯常识问题不必使用。返回带来源路径的文档片段，多数条目按「签名-含义-解决方案」组织。","parameters":{"type":"object","properties":{"query":{"type":"string","description":"检索词。直接使用日志中的原文信号：英文异常类名或错误串（如 MixinApplyError、SIGSEGV、OutOfMemoryError），或中文症状关键词（如 内存不足、启动闪退）。不要翻译或改写异常类名。"},"topic":{"type":"string","description":"可选。限定在某个主题目录内检索（目录名来自 list_topics 的主题地图），如 \"patterns\"、\"日志分析\"。省略则全库检索。"},"k":{"type":"number","description":"返回片段数量，默认 5"}},"required":["query"]}}},
   {"type":"function","function":{"name":"list_topics","description":"列出内置知识库的主题地图（目录、说明与内容样本）。不确定检索方向、或 rag_search 连续无结果时调用；看完地图后应带着明确目标词去 rag_search（可配合 topic 参数定向），不要看完地图就停止分析。","parameters":{"type":"object","properties":{}}}},
   {"type":"function","function":{"name":"list_log_files","description":"列出当前日志 ID 下的所有文件（含主文件与附加文件）。","parameters":{"type":"object","properties":{}}}},
-  {"type":"function","function":{"name":"read_log_file","description":"读取当前日志下指定文件的内容。默认返回完整文件；需要控制范围时可使用 line_start/line_end 指定行区间，或使用 offset/max_bytes 指定字节区间。主文件名为 main。","parameters":{"type":"object","properties":{"filename":{"type":"string","description":"文件名（主文件为 main，或使用 list_log_files 列出的名称）"},"line_start":{"type":"integer","description":"起始行号，从 1 开始；省略则从第 1 行开始"},"line_end":{"type":"integer","description":"结束行号，包含该行；省略则读取到文件末尾"},"offset":{"type":"integer","description":"字节起始位置；使用行区间时不要设置"},"max_bytes":{"type":"integer","description":"字节读取模式下的最大字节数；使用行区间时不要设置"}},"required":["filename"]}}}
+  {"type":"function","function":{"name":"read_log_file","description":"读取当前日志下指定文件的内容。默认返回完整文件；需要控制范围时可使用 line_start/line_end 指定行区间，或使用 offset/max_bytes 指定字节区间。主文件名为 main。","parameters":{"type":"object","properties":{"filename":{"type":"string","description":"文件名（主文件为 main，或使用 list_log_files 列出的名称）"},"line_start":{"type":"integer","description":"起始行号，从 1 开始；省略则从第 1 行开始"},"line_end":{"type":"integer","description":"结束行号，包含该行；省略则读取到文件末尾"},"offset":{"type":"integer","description":"字节起始位置；使用行区间时不要设置"},"max_bytes":{"type":"integer","description":"字节读取模式下的最大字节数；使用行区间时不要设置"}},"required":["filename"]}}},
+  {"type":"function","function":{"name":"grep_log_file","description":"在当前日志的指定文件中按关键词逐行检索（类似 grep），返回匹配行号、行内容与前后上下文。适合定位特定异常、报错关键字、mod ID 或崩溃特征，避免通读超大文件；获取行号后可按需配合 read_log_file 精确读取。","parameters":{"type":"object","properties":{"query":{"type":"string","description":"检索关键词或文本短语（如异常类名、模组名、错误关键字）"},"filename":{"type":"string","description":"文件名（主文件为 main，或使用 list_log_files 列出的名称；省略则默认 main）"},"case_sensitive":{"type":"boolean","description":"是否区分大小写，默认 false（忽略大小写）"},"context_lines":{"type":"integer","description":"命中行前后各显示的上下文行数（0-5，默认 1）"},"max_matches":{"type":"integer","description":"最大返回匹配项数（1-30，默认 10）"}},"required":["query"]}}}
 ]
 ```
 
@@ -310,8 +312,8 @@ LogAgent 模式（`ai.agent.enabled`）会输出额外的 `event: status` 事件
 **工具结果截断规则：**
 
 - `read_log_file` 的全文结果**不受**通用 12KB 工具截断限制，完整进入模型上下文（仅受 `ai.agent.maxFileBytes` 字节上限约束，超限时有明确截断提示）。
-- 其他工具（搜索/知识库检索）的单次结果超过 12KB 时会截断，且截断处附带可见标记 `[...工具结果过长，已截断至 N 字节...]`，模型可据此决定调整参数重新查询。
-- 用户消息中的内联日志同样按 12KB 截断，并提示模型可用文件工具读取完整内容。
+- 检索类工具（`rag_search`、`web_search_exa`、`grep_log_file`）单次结果放宽至 32KB，超限时附带可见标记 `[...工具结果过长，已截断至 N 字节...]`。
+- 初始分析日志上下文：总长度 < 12KB 时完整直传；≥ 12KB 时统一触发错误定位正则，定位到错误行时截取 12KB 聚焦窗口（预留 2.5KB 前置因果与完整后置堆栈，整行对齐）；未定位到错误时不塞入前缀日志正文，改为提供日志概况与常用 grep 关键词，引导模型遵循“适可而止”思维链开展定向排查。
 
 **工具调用兼容细节：**
 
