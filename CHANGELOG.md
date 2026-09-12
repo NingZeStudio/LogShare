@@ -1,5 +1,26 @@
 # Changelog
 
+## 1.7.8 — 2026-09-12
+
+### 新功能
+
+- **LogAgent 关键词检索工具 (`grep_log_file`)**：支持模型在会话绑定日志的指定文件（默认 `main`）中逐行检索关键词；支持前后上下文行（0–5）、最大匹配数（1–30）、大小写敏感配置；输出行号按总行数字宽对齐，匹配行添加 `>` 指示标记，相邻及重叠行区间自动合并；单次工具输出上限放宽至 32KB，状态摘要实时提取匹配统计与标记行。
+- **LogAgent 首轮日志上下文定位与提示词重构**：日志总长度 < 12KB 时不触发定位算法，完整原文直传首轮 user message；≥ 12KB 时统一运行 Tier 1（根因/堆栈）+ Tier 2（失败谓词）错误定位正则。若定位到错误行，以首个错误行为核心截取 12KB 聚焦窗口（向前保留约 2.5KB 前置因果与完整后置堆栈，整行对齐）；未定位到显式错误时，绝不盲目截取前缀干扰日志，改为注入日志概况并提供基础 grep 关键词建议（`ERROR`、`FATAL`、`Exception`、`Caused by`、`crash` 等），引导模型遵循“适可而止”思维链开展 1~2 轮定向排查。
+- **全链路 Brotli 压缩支持**：Swoole HTTP 服务端开启原生压缩并优先响应 Brotli（`Content-Encoding: br`）；Nginx 反向代理层透传客户端 `Accept-Encoding` 并预置 Brotli 配置；`RequestParser` 统一支持请求体透明解压（`br` / `gzip` / `deflate`，含 20MB 防解压炸弹上限保护），`POST /v1/ai/analyse` 支持高压缩率 payload 直传。
+- **AI 消费进程常驻内存治理与空闲自回收**：`ai-queue-consumer` 自回收机制（处理 ≥50 任务且队列深度为 0、空闲 ≥300s 后安全退出，由 Swoole manager 自动热重启，重置 arena 碎片与连接缓冲）；Docker 镜像引入 jemalloc（`libjemalloc.so.2` + 快速衰减回收），防止 resident 进程堆顶碎片化。
+
+### 修复
+
+- **排队深度空组判定修复**：以 `XINFO GROUPS` 判定消费组存在性，避免消费组未创建时误判队列深度为 0。
+- **SpinYarn 版本升级**：镜像内 pin 的 SpinYarn 扩展升级至 v1.1.1，引入 bincode 映射缓存与常驻连接。
+- **安全与脱敏治理（子模块更新）**：
+  - `OpenLiteWaf`：豁免 `/v1/ai/analyse` 等 AI 分析端点请求体扫描以防用户日志误报，放行 `/{version}/raw/{id}/{filename}` 原始文件探针校验，修复长括号规则编译。
+  - `OpenLiteStats`：Referer 记录严格剥离 HTTP Basic Auth 敏感认证凭据，IPv6 地址展开后脱敏遮盖前三段。
+
+### 协议与文档
+
+- **SSE 事件协议完善**：`API.md`、`openapi.yaml` 与站内 API 文档完整同步 `event: status`（`queued`、`thinking`、`tool`、`tool_result`、`limit`）、`event: error` 异常终止与 `event: done` 流结束定义。
+
 ## 1.7.7 — 2026-09-08
 
 ### 修复
