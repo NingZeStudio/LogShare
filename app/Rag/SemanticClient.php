@@ -164,7 +164,6 @@ final class SemanticClient
         $ch = curl_init($provider['baseUrl'] . $path);
         curl_setopt_array($ch, [
             CURLOPT_POST => true,
-            CURLOPT_MAXFILESIZE => self::MAX_RESPONSE_BYTES,
             CURLOPT_POSTFIELDS => json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE),
             CURLOPT_HTTPHEADER => [
                 'Content-Type: application/json',
