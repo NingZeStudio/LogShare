@@ -224,4 +224,84 @@ class MariaDbStorage implements StorageInterface
             return Db::table(self::TABLE_LOGS)->whereIn('id', $expiredIds)->delete();
         });
     }
+
+    public static function List(int $limit = 20, int $offset = 0, ?string $source = null, ?int $since = null, ?int $until = null, ?string $keyword = null): array
+    {
+        $query = Db::table(self::TABLE_LOGS);
+        if ($source !== null && $source !== '') {
+            $query->where('source', $source);
+        }
+        if ($since !== null) {
+            $query->where('created', '>=', $since);
+        }
+        if ($until !== null) {
+            $query->where('created', '<=', $until);
+        }
+        if ($keyword !== null && $keyword !== '') {
+            $rawKeyword = $keyword;
+            try {
+                $parsedId = new \App\Id($keyword);
+                $rawKeyword = $parsedId->getRaw();
+            } catch (\Throwable) {
+                // Not a valid full ID
+            }
+            $query->where(function ($q) use ($keyword, $rawKeyword) {
+                $q->where('id', 'like', "%{$rawKeyword}%")
+                  ->orWhere('source', 'like', "%{$keyword}%");
+            });
+        }
+
+        $rows = $query->select([
+            'id',
+            Db::raw('OCTET_LENGTH(data) as size'),
+            'source',
+            'created',
+            Db::raw('(SELECT COUNT(*) FROM ' . self::TABLE_FILES . ' WHERE log_id = logs.id) as files_count'),
+        ])->orderBy('created', 'desc')
+          ->offset($offset)
+          ->limit($limit)
+          ->get();
+
+        $results = [];
+        foreach ($rows as $row) {
+            $fullId = \App\Id::fromRaw('s', (string) $row->id)->get();
+            $results[] = [
+                'id' => $fullId,
+                'size' => (int) $row->size,
+                'source' => $row->source !== null ? (string) $row->source : null,
+                'created' => (int) $row->created,
+                'filesCount' => (int) $row->files_count,
+            ];
+        }
+        return $results;
+    }
+
+    public static function Count(?string $source = null, ?int $since = null, ?int $until = null, ?string $keyword = null): int
+    {
+        $query = Db::table(self::TABLE_LOGS);
+        if ($source !== null && $source !== '') {
+            $query->where('source', $source);
+        }
+        if ($since !== null) {
+            $query->where('created', '>=', $since);
+        }
+        if ($until !== null) {
+            $query->where('created', '<=', $until);
+        }
+        if ($keyword !== null && $keyword !== '') {
+            $rawKeyword = $keyword;
+            try {
+                $parsedId = new \App\Id($keyword);
+                $rawKeyword = $parsedId->getRaw();
+            } catch (\Throwable) {
+                // Not a valid full ID
+            }
+            $query->where(function ($q) use ($keyword, $rawKeyword) {
+                $q->where('id', 'like', "%{$rawKeyword}%")
+                  ->orWhere('source', 'like', "%{$keyword}%");
+            });
+        }
+
+        return $query->count();
+    }
 }

@@ -267,6 +267,16 @@ class Log
     }
 
     /**
+     * Get the log id
+     *
+     * @return Id|null
+     */
+    public function getId(): ?Id
+    {
+        return $this->id;
+    }
+
+    /**
      * Get the log
      *
      * @return \Aternos\Codex\Log\Log

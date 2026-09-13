@@ -565,6 +565,244 @@ GET /v1/errors/rate
 
 ---
 
+## 管理后台接口（Admin API）
+
+所有管理后台端点均位于 `/{version}/admin/*`（推荐 `/v1/admin/*`），受 `admin.enabled` 开关保护（未启用时返回 404）。  
+请求必须在 Header 中携带管理员鉴权令牌：
+- `Authorization: Bearer <ADMIN_TOKEN>`
+- 或 `X-Admin-Token: <ADMIN_TOKEN>`
+
+若令牌缺失或不匹配，返回 401 Unauthorized。
+
+### 1. 日志列表查询
+
+```
+GET /v1/admin/logs
+```
+
+**Query 参数：**
+
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `page` | int | 1 | 当前页码（从 1 开始） |
+| `limit` | int | 20 | 每页条数（1–100） |
+| `source` | string | - | 按上传来源标识精准过滤（如 `fcl/1.2.0`） |
+| `since` | int | - | 按创建时间过滤（≥ since 秒级时间戳） |
+| `until` | int | - | 按创建时间过滤（≤ until 秒级时间戳） |
+| `keyword` | string | - | 模糊检索（支持日志完整 ID、原始 ID 或 source） |
+
+**响应示例：**
+
+```json
+{
+    "success": true,
+    "message": "Logs retrieved successfully",
+    "items": [
+        {
+            "id": "sAbCdEf",
+            "size": 40960,
+            "source": "fcl/1.2.0",
+            "created": 1726200000,
+            "filesCount": 2
+        }
+    ],
+    "total": 128,
+    "page": 1,
+    "limit": 20,
+    "totalPages": 7
+}
+```
+
+### 2. 日志详情查看
+
+```
+GET /v1/admin/logs/{id}
+```
+
+免用户删除 Token 查看单条日志的完整数据与元数据。
+
+**响应示例：**
+
+```json
+{
+    "success": true,
+    "message": "Log details retrieved successfully",
+    "id": "sAbCdEf",
+    "size": 40960,
+    "lines": 1200,
+    "created": 1726200000,
+    "expires": 1726804800,
+    "source": "fcl/1.2.0",
+    "files": [
+        {"name": "crash-reports/crash.txt", "size": 1024}
+    ],
+    "metadata": [],
+    "content": "[12:34:56] [Server thread/INFO]: ..."
+}
+```
+
+### 3. 日志特权强制删除
+
+```
+DELETE /v1/admin/logs/{id}
+```
+
+管理员下架接口，**无需**普通用户的 deletion token。支持通过逗号分隔批量删除（如 `DELETE /v1/admin/logs/s123,s456`）。删除后主存储数据、附加文件及 Redis 缓存同步清除并写入墓碑标记。
+
+**响应示例：**
+
+```json
+{
+    "success": true,
+    "message": "Log deletion completed",
+    "deleted": ["sAbCdEf"],
+    "failed": [],
+    "total": 1,
+    "deletedCount": 1,
+    "failedCount": 0
+}
+```
+
+### 4. AI 分析队列监控
+
+```
+GET /v1/admin/system/queue
+```
+
+查看当前 AI 微队列运行状态与排队指标。
+
+**响应示例：**
+
+```json
+{
+    "success": true,
+    "message": "Queue status retrieved successfully",
+    "enabled": true,
+    "depth": 0,
+    "maxQueue": 50,
+    "maxConcurrent": 2,
+    "waitTimeout": 300,
+    "claimIdleMs": 120000,
+    "jobTtl": 600,
+    "failOpen": true
+}
+```
+
+### 5. 系统统计与状态
+
+```
+GET /v1/admin/system/stats
+```
+
+查看系统版本、PHP/Swoole 运行时、存储后端、总日志数及 RAG 索引时间戳。
+
+**响应示例：**
+
+```json
+{
+    "success": true,
+    "message": "System statistics retrieved successfully",
+    "version": "1.7.8",
+    "phpVersion": "8.4.4",
+    "swooleVersion": "6.2.0",
+    "storageBackend": "s",
+    "totalLogs": 2480,
+    "storageTime": 604800,
+    "aiEnabled": true,
+    "ragIndexUpdated": 1726200000
+}
+```
+
+### 6. 获取系统配置（已脱敏）
+
+```
+GET /v1/admin/config
+```
+
+获取全站当前的完整配置树。为防止敏感凭据泄露，`admin.token`、`storage.mariadb.password`、`cache.redis.password`、`ai.mcp.rag.authToken` 统一返回 `******`；`ai.apiKeys` 与 `ai.rag.providers[].apiKey` 统一返回首尾截断掩码（如 `sk-12****abcd`）。
+
+### 7. 更新系统配置（动态热生效）
+
+```
+PUT /v1/admin/config
+```
+
+更新业务配置并持久化至 `runtime/dynamic_config.json`。修改后立即更新内存单例，无需重启服务即可对新请求热生效。若传入已脱敏的密钥占位符，服务端会自动保留并还原原有的真实密钥，不覆盖。
+
+### 8. 重置系统配置
+
+```
+POST /v1/admin/config/reset
+```
+
+清空动态配置文件，重新载入基础配置与环境变量。
+
+### 9. AI 模型连通性测试
+
+```
+POST /v1/admin/config/test-ai
+```
+
+向指定或当前配置的 AI API 发送测试请求，探测模型响应与时延。
+
+**请求参数（JSON）：**
+- `baseUrl` (string, 可选): AI 端点地址，缺省使用当前配置
+- `model` (string, 可选): 模型名，缺省使用当前配置
+- `apiKey` (string, 可选): 密钥，若包含掩码或未传则使用当前有效密钥
+- `timeout` (int, 可选): 超时秒数，默认 15s
+
+### 10. RAG 向量供应商连通性测试
+
+```
+POST /v1/admin/config/test-rag-provider
+```
+
+向指定或当前配置的向量 Embedding 供应商发送测试向量化请求，探测网络与模型维度。
+
+**请求参数（JSON）：**
+- `baseUrl` (string, 必填): Embedding API 地址
+- `embeddingModel` (string, 必填): 向量模型 ID（如 `BAAI/bge-m3`）
+- `apiKey` (string, 可选): 密钥，支持掩码还原
+- `name` (string, 可选): 供应商代号
+
+### 11. 知识库指标与生态主题全景
+
+```
+GET /v1/admin/rag/stats
+```
+
+返回向量索引文件大小、最后更新时间、文档分块总数（Chunks）、已向量化数量（Embedded）、语义增强状态及生态主题分类（Forge/NeoForge/PaperMC/渲染器/崩溃库等）。
+
+### 12. 触发知识库重新构建
+
+```
+POST /v1/admin/rag/build
+```
+
+异步启动知识库构建任务。采用原子临时文件生成机制，构建过程中不阻塞线上正常检索。
+
+### 13. 获取知识库构建状态
+
+```
+GET /v1/admin/rag/build/status
+```
+
+轮询知识库构建进度与状态（`idle` / `building` / `success` / `failed`）及耗时统计。
+
+### 14. 知识库检索调试
+
+```
+POST /v1/admin/rag/search
+```
+
+在线测试知识库召回效果。
+
+**请求参数（JSON）：**
+- `query` (string, 必填): 检索关键词或报错文本
+- `limit` (int, 可选): 返回条数（1~20，默认 5）
+
+---
+
 ## 通用响应格式
 
 **成功：**

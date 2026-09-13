@@ -5336,6 +5336,333 @@
                     }
                 }
             ]
+        },
+        {
+            "name": "Admin",
+            "description": "Administration and system monitoring endpoints (requires admin Bearer token)",
+            "item": [
+                {
+                    "name": "List logs (Admin)",
+                    "request": {
+                        "name": "List logs (Admin)",
+                        "description": {
+                            "content": "Returns a paginated list of uploaded logs with optional filters (page, limit, source, since, until, keyword)",
+                            "type": "text/plain"
+                        },
+                        "url": {
+                            "path": [
+                                "v1",
+                                "admin",
+                                "logs"
+                            ],
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "query": [
+                                {
+                                    "key": "page",
+                                    "value": "1"
+                                },
+                                {
+                                    "key": "limit",
+                                    "value": "20"
+                                }
+                            ]
+                        },
+                        "header": [
+                            {
+                                "key": "Authorization",
+                                "value": "Bearer {{adminToken}}"
+                            },
+                            {
+                                "key": "Accept",
+                                "value": "application/json"
+                            }
+                        ],
+                        "method": "GET"
+                    }
+                },
+                {
+                    "name": "Get log details (Admin)",
+                    "request": {
+                        "name": "Get log details (Admin)",
+                        "description": {
+                            "content": "Returns full content and metadata for a log without token check",
+                            "type": "text/plain"
+                        },
+                        "url": {
+                            "path": [
+                                "v1",
+                                "admin",
+                                "logs",
+                                ":id"
+                            ],
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "variable": [
+                                {
+                                    "key": "id",
+                                    "value": "sAbCdEf"
+                                }
+                            ]
+                        },
+                        "header": [
+                            {
+                                "key": "Authorization",
+                                "value": "Bearer {{adminToken}}"
+                            },
+                            {
+                                "key": "Accept",
+                                "value": "application/json"
+                            }
+                        ],
+                        "method": "GET"
+                    }
+                },
+                {
+                    "name": "Force delete logs (Admin)",
+                    "request": {
+                        "name": "Force delete logs (Admin)",
+                        "description": {
+                            "content": "Forces deletion of one or multiple comma-separated logs without user token",
+                            "type": "text/plain"
+                        },
+                        "url": {
+                            "path": [
+                                "v1",
+                                "admin",
+                                "logs",
+                                ":id"
+                            ],
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "variable": [
+                                {
+                                    "key": "id",
+                                    "value": "sAbCdEf"
+                                }
+                            ]
+                        },
+                        "header": [
+                            {
+                                "key": "Authorization",
+                                "value": "Bearer {{adminToken}}"
+                            },
+                            {
+                                "key": "Accept",
+                                "value": "application/json"
+                            }
+                        ],
+                        "method": "DELETE"
+                    }
+                },
+                {
+                    "name": "Get AI queue status (Admin)",
+                    "request": {
+                        "name": "Get AI queue status (Admin)",
+                        "description": {
+                            "content": "Returns queue depth and configuration for AI stream analysis",
+                            "type": "text/plain"
+                        },
+                        "url": {
+                            "path": [
+                                "v1",
+                                "admin",
+                                "system",
+                                "queue"
+                            ],
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "query": []
+                        },
+                        "header": [
+                            {
+                                "key": "Authorization",
+                                "value": "Bearer {{adminToken}}"
+                            },
+                            {
+                                "key": "Accept",
+                                "value": "application/json"
+                            }
+                        ],
+                        "method": "GET"
+                    }
+                },
+                {
+                    "name": "Get system stats (Admin)",
+                    "request": {
+                        "name": "Get system stats (Admin)",
+                        "description": {
+                            "content": "Returns runtime metrics, storage statistics, and versions",
+                            "type": "text/plain"
+                        },
+                        "url": {
+                            "path": [
+                                "v1",
+                                "admin",
+                                "system",
+                                "stats"
+                            ],
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "query": []
+                        },
+                        "header": [
+                            {
+                                "key": "Authorization",
+                                "value": "Bearer {{adminToken}}"
+                            },
+                            {
+                                "key": "Accept",
+                                "value": "application/json"
+                            }
+                        ],
+                        "method": "GET"
+                    }
+                },
+                {
+                    "name": "Get config (Admin)",
+                    "request": {
+                        "name": "Get config (Admin)",
+                        "description": {
+                            "content": "Returns masked system configuration tree",
+                            "type": "text/plain"
+                        },
+                        "url": {
+                            "path": [
+                                "v1",
+                                "admin",
+                                "config"
+                            ],
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "query": []
+                        },
+                        "header": [
+                            {
+                                "key": "Authorization",
+                                "value": "Bearer {{adminToken}}"
+                            },
+                            {
+                                "key": "Accept",
+                                "value": "application/json"
+                            }
+                        ],
+                        "method": "GET"
+                    }
+                },
+                {
+                    "name": "Update config (Admin)",
+                    "request": {
+                        "name": "Update config (Admin)",
+                        "description": {
+                            "content": "Dynamically updates and persists system configuration",
+                            "type": "text/plain"
+                        },
+                        "url": {
+                            "path": [
+                                "v1",
+                                "admin",
+                                "config"
+                            ],
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "query": []
+                        },
+                        "header": [
+                            {
+                                "key": "Authorization",
+                                "value": "Bearer {{adminToken}}"
+                            },
+                            {
+                                "key": "Content-Type",
+                                "value": "application/json"
+                            },
+                            {
+                                "key": "Accept",
+                                "value": "application/json"
+                            }
+                        ],
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n    \"ai\": {\n        \"timeout\": 120\n    }\n}"
+                        },
+                        "method": "PUT"
+                    }
+                },
+                {
+                    "name": "Get RAG stats (Admin)",
+                    "request": {
+                        "name": "Get RAG stats (Admin)",
+                        "description": {
+                            "content": "Returns knowledge base chunks, embeddings, and topic map",
+                            "type": "text/plain"
+                        },
+                        "url": {
+                            "path": [
+                                "v1",
+                                "admin",
+                                "rag",
+                                "stats"
+                            ],
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "query": []
+                        },
+                        "header": [
+                            {
+                                "key": "Authorization",
+                                "value": "Bearer {{adminToken}}"
+                            },
+                            {
+                                "key": "Accept",
+                                "value": "application/json"
+                            }
+                        ],
+                        "method": "GET"
+                    }
+                },
+                {
+                    "name": "Trigger RAG build (Admin)",
+                    "request": {
+                        "name": "Trigger RAG build (Admin)",
+                        "description": {
+                            "content": "Triggers asynchronous knowledge base rebuild",
+                            "type": "text/plain"
+                        },
+                        "url": {
+                            "path": [
+                                "v1",
+                                "admin",
+                                "rag",
+                                "build"
+                            ],
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "query": []
+                        },
+                        "header": [
+                            {
+                                "key": "Authorization",
+                                "value": "Bearer {{adminToken}}"
+                            },
+                            {
+                                "key": "Accept",
+                                "value": "application/json"
+                            }
+                        ],
+                        "method": "POST"
+                    }
+                }
+            ]
         }
     ],
     "event": [],
@@ -5343,6 +5670,10 @@
         {
             "key": "baseUrl",
             "value": "https://api.logshare.cn"
+        },
+        {
+            "key": "adminToken",
+            "value": "change-this-to-a-secure-random-token"
         }
     ],
     "info": {

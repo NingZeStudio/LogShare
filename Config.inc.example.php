@@ -153,4 +153,13 @@ return [
         'cache_low_watermark' => 7,
     ],
 
+    /* ─── 管理后台接口（Admin API）────────────────────────── */
+    'admin' => [
+        // 是否启用 /v1/admin/* 管理端点，关闭时返回 404
+        'enabled' => false,
+        // 管理员鉴权 Token，请求时通过 Authorization: Bearer <token> 或 X-Admin-Token 传入
+        // 可由环境变量 ADMIN_TOKEN 覆盖
+        'token' => 'change-this-to-a-secure-random-token',
+    ],
+
 ];

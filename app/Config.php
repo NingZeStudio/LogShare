@@ -28,6 +28,7 @@ class Config
             throw new \InvalidArgumentException("Config file {$path} must return an array.");
         }
         self::applyEnvironmentOverrides($data);
+        self::applyDynamicOverrides($data);
         // Example 配置中的占位符（如 '${REDIS_PASSWORD}'）在非 Docker 部署下不会
         // 被替换，占位符形态一律视为未配置，避免拿字面量去 AUTH Redis
         if (isset($data['cache']['redis']['password'])
@@ -100,6 +101,13 @@ class Config
         if (empty($data['ai']['apiKeys']) || !$data['ai']['enabled']) {
             $data['ai']['enabled'] = false;
         }
+
+        if (($adminEnabled = getenv('ADMIN_ENABLED')) !== false) {
+            $data['admin']['enabled'] = in_array(strtolower($adminEnabled), ['1', 'true', 'on', 'yes'], true);
+        }
+        if ($adminToken = getenv('ADMIN_TOKEN')) {
+            $data['admin']['token'] = $adminToken;
+        }
     }
 
     private static function validate(array $data): void
@@ -137,6 +145,13 @@ class Config
                 }
             }
         }
+
+        $admin = $data['admin'] ?? [];
+        if (($admin['enabled'] ?? false) === true) {
+            if (empty($admin['token']) || !is_string($admin['token'])) {
+                throw new \InvalidArgumentException('admin.token is required when admin is enabled');
+            }
+        }
     }
 
     public static function Get(string $name): array
@@ -151,4 +166,261 @@ class Config
     {
         return isset(self::$data[$name]);
     }
+
+    public static function all(): array
+    {
+        if (!self::$loaded) {
+            self::load(CORE_PATH . '/Config.inc.php');
+        }
+        return self::$data;
+    }
+
+    public static function getDynamicConfigPath(): string
+    {
+        $runtimeDir = CORE_PATH . '/runtime';
+        if (!is_dir($runtimeDir)) {
+            @mkdir($runtimeDir, 0755, true);
+        }
+        return $runtimeDir . '/dynamic_config.json';
+    }
+
+    public static function maskSecret(?string $secret): string
+    {
+        if ($secret === null || $secret === '') {
+            return '';
+        }
+        $len = strlen($secret);
+        if ($len <= 8) {
+            return '********';
+        }
+        return substr($secret, 0, 4) . '****' . substr($secret, -4);
+    }
+
+    /**
+     * Deep merge two arrays. Sequential (list) arrays in $replacement overwrite $base completely.
+     *
+     * @param array<string, mixed> $base
+     * @param array<string, mixed> $replacement
+     * @return array<string, mixed>
+     */
+    public static function deepMerge(array $base, array $replacement): array
+    {
+        foreach ($replacement as $key => $value) {
+            if (is_array($value) && isset($base[$key]) && is_array($base[$key])) {
+                if (array_is_list($value) || array_is_list($base[$key])) {
+                    $base[$key] = $value;
+                } else {
+                    $base[$key] = self::deepMerge($base[$key], $value);
+                }
+            } else {
+                $base[$key] = $value;
+            }
+        }
+        return $base;
+    }
+
+    private static function applyDynamicOverrides(array &$data): void
+    {
+        $path = self::getDynamicConfigPath();
+        if (!is_file($path)) {
+            return;
+        }
+        $content = @file_get_contents($path);
+        if ($content === false || $content === '') {
+            return;
+        }
+        $decoded = json_decode($content, true);
+        if (is_array($decoded)) {
+            $data = self::deepMerge($data, $decoded);
+        }
+    }
+
+    /**
+     * Restore original secret values if the incoming update contains masked placeholders.
+     *
+     * @param array<string, mixed> $updates
+     * @param array<string, mixed> $original
+     */
+    private static function restoreMaskedSecrets(array &$updates, array $original): void
+    {
+        // 1. ai.apiKeys
+        if (isset($updates['ai']['apiKeys']) && is_array($updates['ai']['apiKeys'])) {
+            $origKeys = $original['ai']['apiKeys'] ?? [];
+            $restoredKeys = [];
+            foreach ($updates['ai']['apiKeys'] as $idx => $key) {
+                $key = trim((string) $key);
+                if ($key === '') {
+                    continue;
+                }
+                if (str_contains($key, '****') || $key === '********') {
+                    $matched = false;
+                    foreach ($origKeys as $orig) {
+                        if (self::maskSecret($orig) === $key) {
+                            $restoredKeys[] = $orig;
+                            $matched = true;
+                            break;
+                        }
+                    }
+                    if (!$matched && isset($origKeys[$idx])) {
+                        $restoredKeys[] = $origKeys[$idx];
+                    }
+                } else {
+                    $restoredKeys[] = $key;
+                }
+            }
+            $updates['ai']['apiKeys'] = $restoredKeys;
+        }
+
+        // 2. ai.rag.providers
+        if (isset($updates['ai']['rag']['providers']) && is_array($updates['ai']['rag']['providers'])) {
+            $origProviders = $original['ai']['rag']['providers'] ?? [];
+            foreach ($updates['ai']['rag']['providers'] as $i => &$provider) {
+                if (!is_array($provider)) {
+                    continue;
+                }
+                if (isset($provider['apiKey']) && (str_contains((string) $provider['apiKey'], '****') || $provider['apiKey'] === '********')) {
+                    $pName = $provider['name'] ?? null;
+                    $matched = false;
+                    foreach ($origProviders as $origP) {
+                        if (is_array($origP) && isset($origP['apiKey'])) {
+                            if (($pName !== null && ($origP['name'] ?? '') === $pName) || self::maskSecret($origP['apiKey']) === $provider['apiKey']) {
+                                $provider['apiKey'] = $origP['apiKey'];
+                                $matched = true;
+                                break;
+                            }
+                        }
+                    }
+                    if (!$matched && isset($origProviders[$i]['apiKey'])) {
+                        $provider['apiKey'] = $origProviders[$i]['apiKey'];
+                    }
+                }
+            }
+            unset($provider);
+        }
+
+        // 3. Scalar secret fields
+        $secretFields = [
+            ['admin', 'token'],
+            ['cache', 'redis', 'password'],
+            ['storage', 'mariadb', 'password'],
+            ['ai', 'mcp', 'rag', 'authToken'],
+        ];
+        foreach ($secretFields as $path) {
+            $curr = &$updates;
+            $origCurr = $original;
+            $found = true;
+            foreach ($path as $p) {
+                if (!isset($curr[$p])) {
+                    $found = false;
+                    break;
+                }
+                $curr = &$curr[$p];
+                $origCurr = $origCurr[$p] ?? null;
+            }
+            if ($found && is_string($curr)) {
+                if (str_contains($curr, '****') || $curr === '******' || $curr === '********') {
+                    $curr = is_string($origCurr) ? $origCurr : '';
+                }
+            }
+            unset($curr);
+        }
+    }
+
+    /**
+     * Return configuration tree with sensitive credentials masked.
+     *
+     * @return array<string, mixed>
+     */
+    public static function getMasked(): array
+    {
+        if (!self::$loaded) {
+            self::load(CORE_PATH . '/Config.inc.php');
+        }
+        $masked = self::$data;
+
+        if (isset($masked['admin']['token']) && (string) $masked['admin']['token'] !== '') {
+            $masked['admin']['token'] = '******';
+        }
+        if (isset($masked['cache']['redis']['password']) && (string) $masked['cache']['redis']['password'] !== '') {
+            $masked['cache']['redis']['password'] = '******';
+        }
+        if (isset($masked['storage']['mariadb']['password']) && (string) $masked['storage']['mariadb']['password'] !== '') {
+            $masked['storage']['mariadb']['password'] = '******';
+        }
+        if (isset($masked['ai']['mcp']['rag']['authToken']) && (string) $masked['ai']['mcp']['rag']['authToken'] !== '') {
+            $masked['ai']['mcp']['rag']['authToken'] = '******';
+        }
+        if (isset($masked['ai']['apiKeys']) && is_array($masked['ai']['apiKeys'])) {
+            $masked['ai']['apiKeys'] = array_map(fn($k) => self::maskSecret((string) $k), $masked['ai']['apiKeys']);
+        }
+        if (isset($masked['ai']['rag']['providers']) && is_array($masked['ai']['rag']['providers'])) {
+            foreach ($masked['ai']['rag']['providers'] as &$p) {
+                if (is_array($p) && isset($p['apiKey'])) {
+                    $p['apiKey'] = self::maskSecret((string) $p['apiKey']);
+                }
+            }
+            unset($p);
+        }
+
+        return $masked;
+    }
+
+    /**
+     * Persist dynamic configuration updates and hot-reload in-memory config.
+     *
+     * @param array<string, mixed> $updates
+     */
+    public static function saveDynamic(array $updates): void
+    {
+        if (!self::$loaded) {
+            self::load(CORE_PATH . '/Config.inc.php');
+        }
+
+        self::restoreMaskedSecrets($updates, self::$data);
+
+        $candidate = self::deepMerge(self::$data, $updates);
+        self::validate($candidate);
+
+        $path = self::getDynamicConfigPath();
+        $existing = [];
+        if (is_file($path)) {
+            $raw = @file_get_contents($path);
+            if ($raw !== false && $raw !== '') {
+                $existing = json_decode($raw, true) ?: [];
+            }
+        }
+        $newDynamic = self::deepMerge($existing, $updates);
+
+        $dir = dirname($path);
+        if (!is_dir($dir)) {
+            @mkdir($dir, 0755, true);
+        }
+
+        $tmpPath = $path . '.tmp.' . bin2hex(random_bytes(4));
+        $encoded = json_encode($newDynamic, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        if ($encoded === false || file_put_contents($tmpPath, $encoded) === false) {
+            @unlink($tmpPath);
+            throw new \RuntimeException('Failed to write dynamic config file');
+        }
+
+        if (!rename($tmpPath, $path)) {
+            @unlink($tmpPath);
+            throw new \RuntimeException('Failed to atomic-rename dynamic config file');
+        }
+
+        self::$data = $candidate;
+    }
+
+    /**
+     * Reset dynamic overrides and reload base configuration.
+     */
+    public static function resetDynamic(): void
+    {
+        $path = self::getDynamicConfigPath();
+        if (is_file($path)) {
+            @unlink($path);
+        }
+        self::load(CORE_PATH . '/Config.inc.php');
+    }
 }
+
