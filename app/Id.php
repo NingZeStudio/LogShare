@@ -40,6 +40,22 @@ class Id
     }
 
     /**
+     * Create an Id instance from known storage id and raw id.
+     *
+     * @param string $storageId
+     * @param string $rawId
+     * @return self
+     */
+    public static function fromRaw(string $storageId, string $rawId): self
+    {
+        $id = new self();
+        $id->storageId = $storageId;
+        $id->rawId = $rawId;
+        $id->fullId = null;
+        return $id;
+    }
+
+    /**
      * Regenerates the rawId to generate a new id
      *
      * @return string

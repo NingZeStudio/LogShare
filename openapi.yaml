@@ -41,6 +41,8 @@ tags:
     description: AI-powered log analysis (requires NVIDIA API keys in config)
   - name: Meta
     description: Limits, filters, rate limit status
+  - name: Admin
+    description: Administration and system monitoring endpoints (requires admin token)
 paths:
   /:
     get:
@@ -1158,7 +1160,270 @@ paths:
                     reset: 1700000000
         '429':
           $ref: '#/components/responses/RateLimited'
+  /v1/admin/logs:
+    get:
+      tags: [Admin]
+      summary: List logs (Admin)
+      description: Returns a paginated list of uploaded logs with optional filters
+      operationId: adminListLogs
+      security:
+        - AdminBearerAuth: []
+        - AdminHeaderAuth: []
+      parameters:
+        - name: page
+          in: query
+          schema:
+            type: integer
+            default: 1
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 20
+        - name: source
+          in: query
+          schema:
+            type: string
+        - name: since
+          in: query
+          schema:
+            type: integer
+        - name: until
+          in: query
+          schema:
+            type: integer
+        - name: keyword
+          in: query
+          schema:
+            type: string
+      responses:
+        '200':
+          description: OK
+        '401':
+          description: Unauthorized
+        '404':
+          description: Admin interface disabled
+  /v1/admin/logs/{id}:
+    get:
+      tags: [Admin]
+      summary: Get log details (Admin)
+      description: Returns full content and metadata for a log without token check
+      operationId: adminGetLog
+      security:
+        - AdminBearerAuth: []
+        - AdminHeaderAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: OK
+        '401':
+          description: Unauthorized
+        '404':
+          description: Log not found
+    delete:
+      tags: [Admin]
+      summary: Force delete logs (Admin)
+      description: Forces deletion of one or multiple logs without user token
+      operationId: adminDeleteLogs
+      security:
+        - AdminBearerAuth: []
+        - AdminHeaderAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: OK
+        '401':
+          description: Unauthorized
+  /v1/admin/system/queue:
+    get:
+      tags: [Admin]
+      summary: Get AI queue status (Admin)
+      description: Returns queue depth and configuration for AI stream analysis
+      operationId: adminGetQueueStatus
+      security:
+        - AdminBearerAuth: []
+        - AdminHeaderAuth: []
+      responses:
+        '200':
+          description: OK
+        '401':
+          description: Unauthorized
+  /v1/admin/system/stats:
+    get:
+      tags: [Admin]
+      summary: Get system stats (Admin)
+      description: Returns runtime metrics, storage statistics, and versions
+      operationId: adminGetSystemStats
+      security:
+        - AdminBearerAuth: []
+        - AdminHeaderAuth: []
+      responses:
+        '200':
+          description: OK
+        '401':
+          description: Unauthorized
+  /v1/admin/config:
+    get:
+      tags: [Admin]
+      summary: Get system configuration (Admin)
+      description: Returns masked system configuration tree
+      operationId: adminGetConfig
+      security:
+        - AdminBearerAuth: []
+        - AdminHeaderAuth: []
+      responses:
+        '200':
+          description: OK
+        '401':
+          description: Unauthorized
+    put:
+      tags: [Admin]
+      summary: Update system configuration (Admin)
+      description: Dynamically updates and persists system configuration
+      operationId: adminUpdateConfig
+      security:
+        - AdminBearerAuth: []
+        - AdminHeaderAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        '200':
+          description: OK
+        '401':
+          description: Unauthorized
+        '422':
+          description: Validation Failed
+  /v1/admin/config/reset:
+    post:
+      tags: [Admin]
+      summary: Reset configuration to defaults (Admin)
+      description: Deletes dynamic configuration overrides
+      operationId: adminResetConfig
+      security:
+        - AdminBearerAuth: []
+        - AdminHeaderAuth: []
+      responses:
+        '200':
+          description: OK
+  /v1/admin/config/test-ai:
+    post:
+      tags: [Admin]
+      summary: Test AI provider connectivity (Admin)
+      operationId: adminTestAi
+      security:
+        - AdminBearerAuth: []
+        - AdminHeaderAuth: []
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                baseUrl: { type: string }
+                model: { type: string }
+                apiKey: { type: string }
+                timeout: { type: integer }
+      responses:
+        '200':
+          description: OK
+  /v1/admin/config/test-rag-provider:
+    post:
+      tags: [Admin]
+      summary: Test RAG embedding provider connectivity (Admin)
+      operationId: adminTestRagProvider
+      security:
+        - AdminBearerAuth: []
+        - AdminHeaderAuth: []
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                baseUrl: { type: string }
+                embeddingModel: { type: string }
+                apiKey: { type: string }
+                name: { type: string }
+      responses:
+        '200':
+          description: OK
+  /v1/admin/rag/stats:
+    get:
+      tags: [Admin]
+      summary: Get RAG knowledge base statistics (Admin)
+      operationId: adminGetRagStats
+      security:
+        - AdminBearerAuth: []
+        - AdminHeaderAuth: []
+      responses:
+        '200':
+          description: OK
+  /v1/admin/rag/build:
+    post:
+      tags: [Admin]
+      summary: Trigger RAG knowledge base index build (Admin)
+      operationId: adminTriggerRagBuild
+      security:
+        - AdminBearerAuth: []
+        - AdminHeaderAuth: []
+      responses:
+        '200':
+          description: OK
+  /v1/admin/rag/build/status:
+    get:
+      tags: [Admin]
+      summary: Get RAG index build status (Admin)
+      operationId: adminGetRagBuildStatus
+      security:
+        - AdminBearerAuth: []
+        - AdminHeaderAuth: []
+      responses:
+        '200':
+          description: OK
+  /v1/admin/rag/search:
+    post:
+      tags: [Admin]
+      summary: Test RAG search recall (Admin)
+      operationId: adminSearchRag
+      security:
+        - AdminBearerAuth: []
+        - AdminHeaderAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [query]
+              properties:
+                query: { type: string }
+                limit: { type: integer, default: 5 }
+      responses:
+        '200':
+          description: OK
 components:
+  securitySchemes:
+    AdminBearerAuth:
+      type: http
+      scheme: bearer
+    AdminHeaderAuth:
+      type: apiKey
+      in: header
+      name: X-Admin-Token
   schemas:
     IndexResponse:
       type: object

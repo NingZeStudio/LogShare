@@ -238,4 +238,118 @@ class FilesystemStorage implements StorageInterface
         }
         return $result;
     }
+
+    public static function List(int $limit = 20, int $offset = 0, ?string $source = null, ?int $since = null, ?int $until = null, ?string $keyword = null): array
+    {
+        $config = \App\Config::Get("filesystem");
+        $basePath = CORE_PATH . ($config['path'] ?? '/storage/');
+        if (!is_dir($basePath)) {
+            return [];
+        }
+
+        $files = scandir($basePath);
+        if ($files === false) {
+            return [];
+        }
+
+        $rawKeyword = $keyword;
+        if ($keyword !== null && $keyword !== '') {
+            try {
+                $parsedId = new \App\Id($keyword);
+                $rawKeyword = $parsedId->getRaw();
+            } catch (\Throwable) {
+                // Not a valid full ID
+            }
+        }
+
+        $entries = [];
+        foreach ($files as $file) {
+            if ($file === '.' || $file === '..' || str_ends_with($file, '.meta.json')) {
+                continue;
+            }
+
+            if ($keyword !== null && $keyword !== '') {
+                if (!str_contains($file, $rawKeyword ?? $keyword)) {
+                    continue;
+                }
+            }
+
+            $metaPath = $basePath . $file . '.meta.json';
+            $metaData = file_exists($metaPath) ? json_decode((string) file_get_contents($metaPath), true) : null;
+            $created = is_array($metaData) && isset($metaData['created']) ? (int) $metaData['created'] : (int) filemtime($basePath . $file);
+
+            if ($since !== null && $created < $since) {
+                continue;
+            }
+            if ($until !== null && $created > $until) {
+                continue;
+            }
+
+            $fullId = \App\Id::fromRaw('f', $file)->get();
+            $fileSize = filesize($basePath . $file);
+
+            $entries[] = [
+                'id' => $fullId,
+                'size' => $fileSize !== false ? $fileSize : 0,
+                'source' => null,
+                'created' => $created,
+                'filesCount' => 0,
+            ];
+        }
+
+        usort($entries, fn($a, $b) => $b['created'] <=> $a['created']);
+        return array_slice($entries, $offset, $limit);
+    }
+
+    public static function Count(?string $source = null, ?int $since = null, ?int $until = null, ?string $keyword = null): int
+    {
+        $config = \App\Config::Get("filesystem");
+        $basePath = CORE_PATH . ($config['path'] ?? '/storage/');
+        if (!is_dir($basePath)) {
+            return 0;
+        }
+
+        $files = scandir($basePath);
+        if ($files === false) {
+            return 0;
+        }
+
+        $rawKeyword = $keyword;
+        if ($keyword !== null && $keyword !== '') {
+            try {
+                $parsedId = new \App\Id($keyword);
+                $rawKeyword = $parsedId->getRaw();
+            } catch (\Throwable) {
+                // Not a valid full ID
+            }
+        }
+
+        $count = 0;
+        foreach ($files as $file) {
+            if ($file === '.' || $file === '..' || str_ends_with($file, '.meta.json')) {
+                continue;
+            }
+
+            if ($keyword !== null && $keyword !== '') {
+                if (!str_contains($file, $rawKeyword ?? $keyword)) {
+                    continue;
+                }
+            }
+
+            $metaPath = $basePath . $file . '.meta.json';
+            $metaData = file_exists($metaPath) ? json_decode((string) file_get_contents($metaPath), true) : null;
+            $created = is_array($metaData) && isset($metaData['created']) ? (int) $metaData['created'] : (int) filemtime($basePath . $file);
+
+            if ($since !== null && $created < $since) {
+                continue;
+            }
+            if ($until !== null && $created > $until) {
+                continue;
+            }
+
+            $count++;
+        }
+
+        return $count;
+    }
 }
