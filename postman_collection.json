@@ -5661,6 +5661,202 @@
                         ],
                         "method": "POST"
                     }
+                },
+                {
+                    "name": "List RAG topics (Admin)",
+                    "request": {
+                        "name": "List RAG topics (Admin)",
+                        "description": {
+                            "content": "List registered knowledge base topics and statistics",
+                            "type": "text/plain"
+                        },
+                        "url": {
+                            "path": [
+                                "v1",
+                                "admin",
+                                "rag",
+                                "topics"
+                            ],
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "query": []
+                        },
+                        "header": [
+                            {
+                                "key": "Authorization",
+                                "value": "Bearer {{adminToken}}"
+                            },
+                            {
+                                "key": "Accept",
+                                "value": "application/json"
+                            }
+                        ],
+                        "method": "GET"
+                    }
+                },
+                {
+                    "name": "List RAG documents (Admin)",
+                    "request": {
+                        "name": "List RAG documents (Admin)",
+                        "description": {
+                            "content": "List knowledge base documents",
+                            "type": "text/plain"
+                        },
+                        "url": {
+                            "path": [
+                                "v1",
+                                "admin",
+                                "rag",
+                                "docs"
+                            ],
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "query": [
+                                {
+                                    "key": "topic",
+                                    "value": "forge",
+                                    "disabled": true
+                                },
+                                {
+                                    "key": "keyword",
+                                    "value": "event",
+                                    "disabled": true
+                                }
+                            ]
+                        },
+                        "header": [
+                            {
+                                "key": "Authorization",
+                                "value": "Bearer {{adminToken}}"
+                            },
+                            {
+                                "key": "Accept",
+                                "value": "application/json"
+                            }
+                        ],
+                        "method": "GET"
+                    }
+                },
+                {
+                    "name": "Get RAG doc content (Admin)",
+                    "request": {
+                        "name": "Get RAG doc content (Admin)",
+                        "description": {
+                            "content": "Read full Markdown content of a knowledge base document",
+                            "type": "text/plain"
+                        },
+                        "url": {
+                            "path": [
+                                "v1",
+                                "admin",
+                                "rag",
+                                "docs",
+                                "content"
+                            ],
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "query": [
+                                {
+                                    "key": "path",
+                                    "value": "tools/example.md"
+                                }
+                            ]
+                        },
+                        "header": [
+                            {
+                                "key": "Authorization",
+                                "value": "Bearer {{adminToken}}"
+                            },
+                            {
+                                "key": "Accept",
+                                "value": "application/json"
+                            }
+                        ],
+                        "method": "GET"
+                    }
+                },
+                {
+                    "name": "Save RAG doc (Admin)",
+                    "request": {
+                        "name": "Save RAG doc (Admin)",
+                        "description": {
+                            "content": "Create or update a knowledge base document",
+                            "type": "text/plain"
+                        },
+                        "url": {
+                            "path": [
+                                "v1",
+                                "admin",
+                                "rag",
+                                "docs",
+                                "save"
+                            ],
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "query": []
+                        },
+                        "header": [
+                            {
+                                "key": "Authorization",
+                                "value": "Bearer {{adminToken}}"
+                            },
+                            {
+                                "key": "Content-Type",
+                                "value": "application/json"
+                            },
+                            {
+                                "key": "Accept",
+                                "value": "application/json"
+                            }
+                        ],
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n  \"topic\": \"tools\",\n  \"filename\": \"guide.md\",\n  \"content\": \"# 新建排障指南\\n\\n详细步骤...\",\n  \"isNew\": false\n}"
+                        },
+                        "method": "POST"
+                    }
+                },
+                {
+                    "name": "Delete RAG doc (Admin)",
+                    "request": {
+                        "name": "Delete RAG doc (Admin)",
+                        "description": {
+                            "content": "Safely delete a knowledge base document",
+                            "type": "text/plain"
+                        },
+                        "url": {
+                            "path": [
+                                "v1",
+                                "admin",
+                                "rag",
+                                "docs"
+                            ],
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "query": [
+                                {
+                                    "key": "path",
+                                    "value": "tools/guide.md"
+                                }
+                            ]
+                        },
+                        "header": [
+                            {
+                                "key": "Authorization",
+                                "value": "Bearer {{adminToken}}"
+                            },
+                            {
+                                "key": "Accept",
+                                "value": "application/json"
+                            }
+                        ],
+                        "method": "DELETE"
+                    }
                 }
             ]
         }

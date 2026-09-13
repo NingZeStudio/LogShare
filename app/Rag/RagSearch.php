@@ -77,6 +77,14 @@ class RagSearch
         'zl_announcement' => 'Zalith 站点公告（如 Discord 停运公告；运营内容，诊断价值低，通常不必检索）',
     ];
 
+    /**
+     * @return array<string, string>
+     */
+    public static function getTopicDescriptions(): array
+    {
+        return self::TOPIC_DESCRIPTIONS;
+    }
+
     private \PDO $pdo;
 
     public function __construct(private string $dbPath)

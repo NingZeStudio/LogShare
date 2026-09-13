@@ -492,5 +492,161 @@ class AdminController extends AbstractController
             'items' => $results,
         ], 'RAG search executed successfully');
     }
+
+    #[GetMapping(path: 'rag/topics')]
+    public function getRagTopics(): ResponseInterface
+    {
+        $stats = RagManager::listDocs();
+        return $this->respondSuccess([
+            'topics' => $stats['topics'],
+            'totalTopics' => count($stats['topics']),
+        ], 'RAG topics retrieved successfully');
+    }
+
+    #[GetMapping(path: 'rag/docs')]
+    public function getRagDocs(): ResponseInterface
+    {
+        $params = $this->request->getQueryParams();
+        $topic = isset($params['topic']) && is_string($params['topic']) ? trim($params['topic']) : null;
+        $keyword = isset($params['keyword']) && is_string($params['keyword']) ? trim($params['keyword']) : null;
+
+        $data = RagManager::listDocs($topic, $keyword);
+        return $this->respondSuccess($data, 'RAG documents retrieved successfully');
+    }
+
+    #[GetMapping(path: 'rag/docs/content')]
+    public function getRagDocContent(): ResponseInterface
+    {
+        $params = $this->request->getQueryParams();
+        $path = trim((string) ($params['path'] ?? ''));
+        if ($path === '') {
+            throw new ApiError(400, 'Path query parameter is required');
+        }
+
+        try {
+            $doc = RagManager::readDoc($path);
+        } catch (\InvalidArgumentException $e) {
+            throw new ApiError(400, $e->getMessage());
+        } catch (\Throwable $e) {
+            throw new ApiError(500, 'Failed to read document: ' . $e->getMessage());
+        }
+
+        return $this->respondSuccess($doc, 'RAG document content retrieved successfully');
+    }
+
+    #[PostMapping(path: 'rag/docs/save')]
+    public function saveRagDoc(): ResponseInterface
+    {
+        $body = $this->request->getParsedBody();
+        if (!is_array($body)) {
+            throw new ApiError(400, 'Invalid request body');
+        }
+
+        $content = (string) ($body['content'] ?? '');
+        $topic = trim((string) ($body['topic'] ?? ''));
+        $filename = trim((string) ($body['filename'] ?? ''));
+        $path = trim((string) ($body['path'] ?? ''));
+        $isNew = (bool) ($body['isNew'] ?? false);
+
+        if ($path !== '') {
+            $parts = explode('/', str_replace('\\', '/', $path));
+            if (count($parts) >= 2) {
+                $topic = $parts[0];
+                $filename = end($parts);
+            }
+        }
+
+        if ($topic === '' || $filename === '') {
+            throw new ApiError(400, 'Both topic and filename are required to save a document');
+        }
+
+        try {
+            $saved = RagManager::saveDoc($topic, $filename, $content, $isNew);
+        } catch (\InvalidArgumentException $e) {
+            throw new ApiError(400, $e->getMessage());
+        } catch (\Throwable $e) {
+            throw new ApiError(500, 'Failed to save document: ' . $e->getMessage());
+        }
+
+        return $this->respondSuccess($saved, 'RAG document saved successfully. Click "Rebuild Index" to refresh the vector search.');
+    }
+
+    #[DeleteMapping(path: 'rag/docs')]
+    #[PostMapping(path: 'rag/docs/delete')]
+    public function deleteRagDoc(): ResponseInterface
+    {
+        $params = $this->request->getQueryParams();
+        $body = $this->request->getParsedBody();
+        $path = trim((string) ($params['path'] ?? ($body['path'] ?? '')));
+
+        if ($path === '') {
+            throw new ApiError(400, 'Path parameter is required to delete a document');
+        }
+
+        try {
+            $result = RagManager::deleteDoc($path);
+        } catch (\InvalidArgumentException $e) {
+            throw new ApiError(400, $e->getMessage());
+        } catch (\Throwable $e) {
+            throw new ApiError(500, 'Failed to delete document: ' . $e->getMessage());
+        }
+
+        return $this->respondSuccess($result, 'RAG document deleted successfully');
+    }
+
+    #[PostMapping(path: 'rag/docs/upload')]
+    public function uploadRagDoc(): ResponseInterface
+    {
+        $topic = trim((string) ($this->request->input('topic') ?? ''));
+        $body = $this->request->getParsedBody();
+        if (is_array($body) && $topic === '') {
+            $topic = trim((string) ($body['topic'] ?? ''));
+        }
+
+        if ($topic === '') {
+            throw new ApiError(400, 'Topic directory is required for upload');
+        }
+
+        // 1. Multipart form file upload
+        if ($this->request->hasFile('file')) {
+            $file = $this->request->file('file');
+            if ($file === null || (method_exists($file, 'isValid') && !$file->isValid())) {
+                throw new ApiError(400, 'Uploaded file is invalid or corrupted');
+            }
+
+            $origName = $file->getClientFilename() ?: 'uploaded_doc.md';
+            $customName = trim((string) ($this->request->input('filename') ?? ''));
+            $filename = $customName !== '' ? $customName : $origName;
+            $stream = (string) $file->getStream();
+
+            try {
+                $saved = RagManager::saveDoc($topic, $filename, $stream, false);
+            } catch (\InvalidArgumentException $e) {
+                throw new ApiError(400, $e->getMessage());
+            } catch (\Throwable $e) {
+                throw new ApiError(500, 'Failed to process uploaded file: ' . $e->getMessage());
+            }
+
+            return $this->respondSuccess($saved, 'Document uploaded successfully. Click "Rebuild Index" to refresh the vector search.');
+        }
+
+        // 2. Direct JSON payload upload (topic + filename + content)
+        if (is_array($body) && isset($body['content'])) {
+            $filename = trim((string) ($body['filename'] ?? 'uploaded_doc.md'));
+            $content = (string) $body['content'];
+
+            try {
+                $saved = RagManager::saveDoc($topic, $filename, $content, false);
+            } catch (\InvalidArgumentException $e) {
+                throw new ApiError(400, $e->getMessage());
+            } catch (\Throwable $e) {
+                throw new ApiError(500, 'Failed to process document content: ' . $e->getMessage());
+            }
+
+            return $this->respondSuccess($saved, 'Document uploaded successfully. Click "Rebuild Index" to refresh the vector search.');
+        }
+
+        throw new ApiError(400, 'No file or content provided for upload');
+    }
 }
 
