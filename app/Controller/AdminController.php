@@ -11,6 +11,8 @@ use App\Log;
 use App\Middleware\AdminAuthMiddleware;
 use App\Rag\RagManager;
 use App\Storage\StorageInterface;
+use App\System\SystemLogManager;
+use App\Telemetry\TelemetryService;
 use App\Version;
 use Hyperf\HttpServer\Annotation\Controller;
 use Hyperf\HttpServer\Annotation\DeleteMapping;
@@ -648,5 +650,42 @@ class AdminController extends AbstractController
 
         throw new ApiError(400, 'No file or content provided for upload');
     }
+
+    #[GetMapping(path: 'telemetry/stats')]
+    public function getTelemetryStats(): ResponseInterface
+    {
+        $params = $this->request->getQueryParams();
+        $day = isset($params['day']) && is_string($params['day']) && $params['day'] !== '' ? $params['day'] : null;
+        $stats = TelemetryService::getStats($day);
+        return $this->respondSuccess($stats);
+    }
+
+    #[DeleteMapping(path: 'telemetry/stats')]
+    public function clearTelemetryStats(): ResponseInterface
+    {
+        $cleared = TelemetryService::clearStats();
+        return $this->respondSuccess(['cleared' => $cleared], 'Telemetry stats cleared');
+    }
+
+    #[GetMapping(path: 'system/logs')]
+    public function getSystemLogs(): ResponseInterface
+    {
+        $params = $this->request->getQueryParams();
+        $limit = isset($params['limit']) && is_numeric($params['limit']) ? (int) $params['limit'] : 100;
+        $level = isset($params['level']) && is_string($params['level']) && $params['level'] !== '' ? $params['level'] : null;
+        $keyword = isset($params['keyword']) && is_string($params['keyword']) && $params['keyword'] !== '' ? $params['keyword'] : null;
+        $since = isset($params['since']) && is_numeric($params['since']) ? (int) $params['since'] : null;
+
+        $logs = SystemLogManager::getLogs($limit, $level, $keyword, $since);
+        return $this->respondSuccess($logs);
+    }
+
+    #[DeleteMapping(path: 'system/logs')]
+    public function clearSystemLogs(): ResponseInterface
+    {
+        $cleared = SystemLogManager::clearLogs();
+        return $this->respondSuccess(['cleared' => $cleared], 'System logs cleared');
+    }
 }
+
 

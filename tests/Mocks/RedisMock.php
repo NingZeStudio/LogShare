@@ -7,6 +7,11 @@ class RedisMock
     private static array $data = [];
     private static array $ttl = [];
 
+    /** Lists 模拟：key => [string, ...] */
+    private static array $lists = [];
+    /** Hashes 模拟：key => [field => string, ...] */
+    private static array $hashes = [];
+
     /** Streams 模拟：key => [['id' => string, 'fields' => array]]（插入序） */
     private static array $streams = [];
     private static int $streamSeq = 0;
@@ -88,8 +93,24 @@ class RedisMock
         self::guard();
         $count = 0;
         foreach ($keys as $key) {
+            $deleted = false;
             if (isset(self::$data[$key])) {
                 unset(self::$data[$key], self::$ttl[$key]);
+                $deleted = true;
+            }
+            if (isset(self::$lists[$key])) {
+                unset(self::$lists[$key]);
+                $deleted = true;
+            }
+            if (isset(self::$hashes[$key])) {
+                unset(self::$hashes[$key]);
+                $deleted = true;
+            }
+            if (isset(self::$streams[$key])) {
+                unset(self::$streams[$key]);
+                $deleted = true;
+            }
+            if ($deleted) {
                 $count++;
             }
         }
@@ -125,8 +146,121 @@ class RedisMock
 
     public function keys(string $pattern): array
     {
+        $allKeys = array_unique(array_merge(
+            array_keys(self::$data),
+            array_keys(self::$lists),
+            array_keys(self::$hashes),
+            array_keys(self::$streams)
+        ));
         $regex = '/^' . str_replace('*', '.*', preg_quote($pattern, '/')) . '$/';
-        return array_filter(array_keys(self::$data), fn($k) => preg_match($regex, $k));
+        return array_values(array_filter($allKeys, fn($k) => preg_match($regex, $k)));
+    }
+
+    /* ─── Lists（遥测/日志队列用） ─── */
+
+    public function lpush(string $key, string ...$values): int
+    {
+        self::guard();
+        if (!isset(self::$lists[$key])) {
+            self::$lists[$key] = [];
+        }
+        foreach ($values as $val) {
+            array_unshift(self::$lists[$key], $val);
+        }
+        return count(self::$lists[$key]);
+    }
+
+    public function lrange(string $key, int $start, int $stop): array
+    {
+        self::guard();
+        if (!isset(self::$lists[$key])) {
+            return [];
+        }
+        $list = self::$lists[$key];
+        $len = count($list);
+        if ($start < 0) {
+            $start = max(0, $len + $start);
+        }
+        if ($stop < 0) {
+            $stop = $len + $stop;
+        }
+        if ($start > $stop || $start >= $len) {
+            return [];
+        }
+        $length = $stop - $start + 1;
+        return array_slice($list, $start, $length);
+    }
+
+    public function ltrim(string $key, int $start, int $stop): bool
+    {
+        self::guard();
+        if (!isset(self::$lists[$key])) {
+            return true;
+        }
+        $list = self::$lists[$key];
+        $len = count($list);
+        if ($start < 0) {
+            $start = max(0, $len + $start);
+        }
+        if ($stop < 0) {
+            $stop = $len + $stop;
+        }
+        if ($start > $stop || $start >= $len) {
+            self::$lists[$key] = [];
+            return true;
+        }
+        $length = $stop - $start + 1;
+        self::$lists[$key] = array_slice($list, $start, $length);
+        return true;
+    }
+
+    /* ─── Hashes（遥测聚合指标用） ─── */
+
+    public function hset(string $key, string $field, string $value): int|bool
+    {
+        self::guard();
+        $isNew = !isset(self::$hashes[$key][$field]);
+        self::$hashes[$key][$field] = $value;
+        return $isNew ? 1 : 0;
+    }
+
+    public function hmset(string $key, array $members): bool
+    {
+        self::guard();
+        foreach ($members as $field => $val) {
+            self::$hashes[$key][(string) $field] = (string) $val;
+        }
+        return true;
+    }
+
+    public function hget(string $key, string $field): string|false
+    {
+        self::guard();
+        return self::$hashes[$key][$field] ?? false;
+    }
+
+    public function hgetall(string $key): array
+    {
+        self::guard();
+        return self::$hashes[$key] ?? [];
+    }
+
+    public function hincrby(string $key, string $field, int $value): int
+    {
+        self::guard();
+        $current = (int) (self::$hashes[$key][$field] ?? 0);
+        $new = $current + $value;
+        self::$hashes[$key][$field] = (string) $new;
+        return $new;
+    }
+
+    public function hincrbyfloat(string $key, string $field, float $value): float
+    {
+        self::guard();
+        $current = (float) (self::$hashes[$key][$field] ?? 0.0);
+        $new = $current + $value;
+        self::$hashes[$key][$field] = (string) $new;
+        return $new;
     }
 
     /* ─── Streams（AI 微队列测试用，语义按最小实现） ─── */
@@ -321,6 +455,8 @@ class RedisMock
     {
         self::$data = [];
         self::$ttl = [];
+        self::$lists = [];
+        self::$hashes = [];
         self::$streams = [];
         self::$groups = [];
         self::$failAll = false;
