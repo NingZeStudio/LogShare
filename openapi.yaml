@@ -1411,7 +1411,120 @@ paths:
               required: [query]
               properties:
                 query: { type: string }
-                limit: { type: integer, default: 5 }
+        '200':
+          description: OK
+  /v1/admin/rag/topics:
+    get:
+      tags: [Admin]
+      summary: List registered RAG topics (Admin)
+      operationId: adminGetRagTopics
+      security:
+        - AdminBearerAuth: []
+        - AdminHeaderAuth: []
+      responses:
+        '200':
+          description: OK
+  /v1/admin/rag/docs:
+    get:
+      tags: [Admin]
+      summary: List RAG documents (Admin)
+      operationId: adminListRagDocs
+      security:
+        - AdminBearerAuth: []
+        - AdminHeaderAuth: []
+      parameters:
+        - name: topic
+          in: query
+          required: false
+          schema: { type: string }
+        - name: keyword
+          in: query
+          required: false
+          schema: { type: string }
+      responses:
+        '200':
+          description: OK
+    delete:
+      tags: [Admin]
+      summary: Delete RAG document (Admin)
+      operationId: adminDeleteRagDoc
+      security:
+        - AdminBearerAuth: []
+        - AdminHeaderAuth: []
+      parameters:
+        - name: path
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: OK
+  /v1/admin/rag/docs/content:
+    get:
+      tags: [Admin]
+      summary: Read RAG document content (Admin)
+      operationId: adminGetRagDocContent
+      security:
+        - AdminBearerAuth: []
+        - AdminHeaderAuth: []
+      parameters:
+        - name: path
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: OK
+  /v1/admin/rag/docs/save:
+    post:
+      tags: [Admin]
+      summary: Create or update RAG document (Admin)
+      operationId: adminSaveRagDoc
+      security:
+        - AdminBearerAuth: []
+        - AdminHeaderAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [topic, filename, content]
+              properties:
+                topic: { type: string }
+                filename: { type: string }
+                content: { type: string }
+                isNew: { type: boolean }
+      responses:
+        '200':
+          description: OK
+  /v1/admin/rag/docs/upload:
+    post:
+      tags: [Admin]
+      summary: Upload RAG document file (Admin)
+      operationId: adminUploadRagDoc
+      security:
+        - AdminBearerAuth: []
+        - AdminHeaderAuth: []
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [topic, file]
+              properties:
+                topic: { type: string }
+                file: { type: string, format: binary }
+                filename: { type: string }
+          application/json:
+            schema:
+              type: object
+              required: [topic, filename, content]
+              properties:
+                topic: { type: string }
+                filename: { type: string }
+                content: { type: string }
       responses:
         '200':
           description: OK

@@ -801,6 +801,65 @@ POST /v1/admin/rag/search
 - `query` (string, 必填): 检索关键词或报错文本
 - `limit` (int, 可选): 返回条数（1~20，默认 5）
 
+### 15. 知识库分类主题列表
+
+```
+GET /v1/admin/rag/topics
+```
+
+获取知识库所有合法注册分类目录、人工定性描述及文档总数统计。
+
+### 16. 知识库文档列表
+
+```
+GET /v1/admin/rag/docs
+```
+
+查询知识库物理文档列表。
+
+**查询参数（Query）：**
+- `topic` (string, 可选): 按分类过滤（如 `forge`, `zl_help` 等）
+- `keyword` (string, 可选): 按文件名或相对路径模糊搜索
+
+### 17. 获取知识库文档详情
+
+```
+GET /v1/admin/rag/docs/content?path={relativePath}
+```
+
+读取单个 Markdown/TXT/Log 文件的元信息与正文。
+
+### 18. 新建或保存知识库文档
+
+```
+POST /v1/admin/rag/docs/save
+```
+
+保存或修改文档，采用原子写入。
+
+**请求参数（JSON）：**
+- `topic` (string, 必填): 所属分类目录
+- `filename` (string, 必填): 文件名（如 `example.md`）
+- `content` (string, 必填): Markdown 正文文本
+- `isNew` (bool, 可选): 是否新建（若为 true 且目标文件已存在则报错）
+
+### 19. 上传知识库文档
+
+```
+POST /v1/admin/rag/docs/upload
+```
+
+上传 `.md`、`.txt`、`.log` 文件到指定分类，单个限制 ≤ 5MB。支持 `multipart/form-data`（字段：`file`、`topic`）与直接 JSON 载荷（字段：`topic`、`filename`、`content`）。
+
+### 20. 删除知识库文档
+
+```
+DELETE /v1/admin/rag/docs?path={relativePath}
+POST /v1/admin/rag/docs/delete
+```
+
+安全删除指定知识库文档，受路径遍历白名单保护。
+
 ---
 
 ## 通用响应格式
