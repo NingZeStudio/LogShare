@@ -74,6 +74,7 @@ services:
       # 文件不存在时自动回退 Config.inc.example.php；该文件已被 .gitignore 排除
       - ../Config.inc.php:/app/Config.inc.php:ro
       - ../.env:/app/.env:ro
+      - ../runtime:/app/runtime
     environment:
       APP_ENV: prod
       SCAN_CACHEABLE: "true"
