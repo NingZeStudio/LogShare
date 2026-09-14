@@ -208,7 +208,10 @@ paths:
         **Form fields (urlencoded or JSON):**
         - `content` (string, required): Raw log text (max 10 MB, 50k lines)
         - `metadata[]` (array, optional): Array of `{key, value}` objects
-        - `source` (string, optional): Free-form source identifier
+        - `source` (string, optional): Free-form source identifier (e.g. `fcl/1.2.0`, `pojav-glow-worm/3.4.0`)
+        
+        **Integration Best Practice:**
+        Clients and launchers should upload all three parts whenever available: game log (`latest.log`) + crash report (`crash-reports/*.txt`) + launcher log (`launcher.log`), and always provide the `source` identifier so that AI diagnostics can accurately correlate launcher-specific environments and fixes.
         
         Returns a log ID and a deletion token. **Save the token** — it cannot be recovered.
       operationId: createLogV1
