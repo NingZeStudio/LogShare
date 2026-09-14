@@ -113,7 +113,7 @@ GET    /1/limits | /v1/limits                    获取速率限制信息
 GET    /1/filters | /v1/filters                  获取当前启用的过滤器列表
 ```
 
-上传接口接受 `application/x-www-form-urlencoded` 与 `application/json`，支持 gzip / deflate 压缩请求体；`files` 数组可附加多个文件，`.zip` 压缩包自动展开并保留内部相对路径，展开后每个文件独立经过脱敏过滤链。上传响应中的 `token` 是删除该日志的唯一凭证。AI 分析使用 SSE 流式输出，LogAgent 模式下模型可自主调用网络搜索（Exa MCP）、RAG 检索与当前日志的文件读取工具；AI 关闭时相关端点统一返回 404。
+上传接口接受 `application/x-www-form-urlencoded` 与 `application/json`，支持 gzip / deflate 压缩请求体；`files` 数组可附加多个文件，`.zip` 压缩包自动展开并保留内部相对路径，展开后每个文件独立经过脱敏过滤链。客户端接入时遵循最佳实践规范：**尽可能同时上传「游戏主日志 + 崩溃报告 + 启动器日志」并注明 `source` 来源标识**，便于 AI 诊断引擎与社区准确定位启动器及渲染器环境引发的深层异常。上传响应中的 `token` 是删除该日志的唯一凭证。AI 分析使用 SSE 流式输出，LogAgent 模式下模型可自主调用网络搜索（Exa MCP）、RAG 检索与当前日志的文件读取工具；AI 关闭时相关端点统一返回 404。
 
 ## 架构
 
