@@ -1,6 +1,6 @@
 # LogShare
 
-感谢vsllm的赞助：https://vsllm.com
+我正在构建一个垂直领域的 AI Agent 应用，且目前项目已经上线，目前仅线上日 Tokens 消耗接近 1 亿，更别提开发时人机协作+超 4 亿 Tokens 日消耗的开发成本，我实在难以承担 AI 费用，了解到 StepFun 长期支持个人开发者、初创企业或仅仅只是有想法的普通人。项目目前日活跃 IP 约 1.2~1.5k 左右，日活用户约 1.4w 上下，我目前同时申请了 StepFun 的 Builder Program、Startup Program 和 繁星计划，希望其中至少一个通过了吧...
 
 LogShare 是一个 Minecraft / Hytale 日志分析与分享平台。使用者通过 HTTP 接口上传服务端或客户端日志，获得一个可分享的短链接；系统在上传时自动识别日志类型与服务端版本，执行敏感信息脱敏，并借助 Aternos Codex 解析引擎与 SpinYarn 混淆映射反解，输出结构化的诊断结果。在此之上，平台提供可选的 AI 分析能力：LogAgent 智能体由大模型驱动工具循环，可自主调用网络搜索、内置知识库检索（RAG）与日志文件读取工具，并以 SSE 流式输出思维链与结论。
 
