@@ -108,6 +108,74 @@ test('Config resetDynamic removes dynamic overrides', function () {
     expect(is_file(Config::getDynamicConfigPath()))->toBeFalse();
 });
 
+test('Config automatically reloads on file mtime changes simulating cross-worker sync', function () {
+    Config::saveDynamic([
+        'storage' => ['storageTime' => 111111],
+    ]);
+    expect(Config::Get('storage')['storageTime'])->toBe(111111);
+
+    // Simulate another worker writing a new dynamic config file directly
+    $path = Config::getDynamicConfigPath();
+    $raw = json_decode((string) file_get_contents($path), true);
+    $raw['storage']['storageTime'] = 222222;
+    file_put_contents($path, json_encode($raw));
+    // Ensure mtime changes even within the same second
+    touch($path, time() + 5);
+
+    // Next Config::Get in current worker should immediately detect mtime change and reload
+    expect(Config::Get('storage')['storageTime'])->toBe(222222);
+});
+
+test('Config supports ai.headers and masks sensitive header tokens', function () {
+    $updates = [
+        'ai' => [
+            'headers' => [
+                'HTTP-Referer' => 'https://logshare.cn',
+                'X-Title' => 'LogShare',
+                'Authorization' => 'Bearer secret-auth-token-123456',
+            ],
+        ],
+    ];
+
+    Config::saveDynamic($updates);
+
+    $all = Config::all();
+    expect($all['ai']['headers']['HTTP-Referer'])->toBe('https://logshare.cn');
+    expect($all['ai']['headers']['X-Title'])->toBe('LogShare');
+    expect($all['ai']['headers']['Authorization'])->toBe('Bearer secret-auth-token-123456');
+
+    // getMasked should mask Authorization header
+    $masked = Config::getMasked();
+    expect($masked['ai']['headers']['HTTP-Referer'])->toBe('https://logshare.cn');
+    expect($masked['ai']['headers']['Authorization'])->toContain('****');
+    expect($masked['ai']['headers']['Authorization'])->not->toBe('Bearer secret-auth-token-123456');
+
+    // Saving again with masked headers should restore original secret token
+    Config::saveDynamic([
+        'ai' => [
+            'headers' => $masked['ai']['headers'],
+        ],
+    ]);
+    expect(Config::all()['ai']['headers']['Authorization'])->toBe('Bearer secret-auth-token-123456');
+});
+
+test('AIClient curlOptions incorporates custom headers correctly', function () {
+    $ref = new ReflectionClass(\App\Client\AIClient::class);
+    $method = $ref->getMethod('curlOptions');
+
+    $payload = ['messages' => [['role' => 'user', 'content' => 'hello']]];
+    $options = $method->invoke(null, $payload, 'sk-test-key', 30, [
+        'HTTP-Referer' => 'https://logshare.cn',
+        'X-Custom' => 'custom-value',
+    ]);
+
+    expect($options)->toHaveKey(CURLOPT_HTTPHEADER);
+    $headers = $options[CURLOPT_HTTPHEADER];
+    expect($headers)->toContain('HTTP-Referer: https://logshare.cn');
+    expect($headers)->toContain('X-Custom: custom-value');
+    expect($headers)->toContain('Authorization: Bearer sk-test-key');
+});
+
 test('RagManager getStats and getBuildStatus work properly', function () {
     $stats = RagManager::getStats();
 

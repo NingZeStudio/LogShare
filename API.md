@@ -769,6 +769,7 @@ POST /v1/admin/config/test-ai
 - `model` (string, 可选): 模型名，缺省使用当前配置
 - `apiKey` (string, 可选): 密钥，若包含掩码或未传则使用当前有效密钥
 - `timeout` (int, 可选): 超时秒数，默认 15s
+- `headers` (object, 可选): 自定义 HTTP 请求头键值对（如 `{"HTTP-Referer": "https://logshare.cn", "X-Title": "LogShare"}`）
 
 ### 10. RAG 向量供应商连通性测试
 

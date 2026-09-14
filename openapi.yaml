@@ -1340,6 +1340,9 @@ paths:
                 model: { type: string }
                 apiKey: { type: string }
                 timeout: { type: integer }
+                headers:
+                  type: object
+                  additionalProperties: { type: string }
       responses:
         '200':
           description: OK
