@@ -21,6 +21,15 @@ class TelemetryController extends AbstractController
     public function report(): ResponseInterface
     {
         $body = $this->request->getParsedBody();
+        if (!is_array($body) || $body === []) {
+            $raw = (string) $this->request->getBody();
+            if ($raw !== '') {
+                $decoded = json_decode($raw, true);
+                if (is_array($decoded)) {
+                    $body = $decoded;
+                }
+            }
+        }
 
         /** @var array<int, mixed> $items */
         $items = [];
