@@ -70,7 +70,7 @@ class AIClient
                     $rawBody = '';
 
                     $ch = curl_init($config['baseUrl']);
-                    curl_setopt_array($ch, self::curlOptions($payload, $apiKey, $config['timeout']));
+                    curl_setopt_array($ch, self::curlOptions($payload, $apiKey, $config['timeout'], $config['headers'] ?? []));
                     curl_setopt($ch, CURLOPT_RETURNTRANSFER, false);
                 $writeCallback = function ($ch, $data) use (
                     &$buffer,
@@ -402,6 +402,7 @@ class AIClient
             'baseUrl' => !empty($config['baseUrl']) ? $config['baseUrl'] : self::DEFAULT_BASE_URL,
             'model' => !empty($config['model']) ? $config['model'] : self::DEFAULT_MODEL,
             'timeout' => $config['timeout'] ?? self::DEFAULT_TIMEOUT,
+            'headers' => is_array($config['headers'] ?? null) ? $config['headers'] : [],
         ];
     }
 
@@ -420,17 +421,39 @@ class AIClient
         return $payload;
     }
 
-    private static function curlOptions(array $payload, string $apiKey, int $timeout): array
+    private static function curlOptions(array $payload, string $apiKey, int $timeout, array $customHeaders = []): array
     {
+        $headers = [
+            'Content-Type: application/json',
+            'Authorization: Bearer ' . $apiKey,
+            'Accept: text/event-stream',
+            'Accept-Encoding: identity',
+        ];
+
+        foreach ($customHeaders as $key => $value) {
+            if (is_string($key) && $key !== '') {
+                $headerLine = $key . ': ' . (string) $value;
+                $keyLower = strtolower($key);
+                $overridden = false;
+                foreach ($headers as $idx => $existing) {
+                    if (str_starts_with(strtolower($existing), $keyLower . ':')) {
+                        $headers[$idx] = $headerLine;
+                        $overridden = true;
+                        break;
+                    }
+                }
+                if (!$overridden) {
+                    $headers[] = $headerLine;
+                }
+            } elseif (is_string($value) && trim($value) !== '') {
+                $headers[] = trim($value);
+            }
+        }
+
         return [
             CURLOPT_POST => true,
             CURLOPT_POSTFIELDS => json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE),
-            CURLOPT_HTTPHEADER => [
-                'Content-Type: application/json',
-                'Authorization: Bearer ' . $apiKey,
-                'Accept: text/event-stream',
-                'Accept-Encoding: identity',
-            ],
+            CURLOPT_HTTPHEADER => $headers,
             CURLOPT_TIMEOUT => $timeout,
             CURLOPT_CONNECTTIMEOUT => self::DEFAULT_CONNECT_TIMEOUT,
             CURLOPT_ACCEPT_ENCODING => 'identity',

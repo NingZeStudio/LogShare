@@ -91,6 +91,11 @@ return [
         'baseUrl' => '',
         'model' => '',
         'timeout' => 180,
+        // 自定义 HTTP 请求头（键值对，例如 ['HTTP-Referer' => 'https://logshare.cn', 'X-Title' => 'LogShare']）
+        'headers' => [
+            // 'HTTP-Referer' => 'https://logshare.cn',
+            // 'X-Title' => 'LogShare',
+        ],
         'agent' => [
             'enabled' => false,
             'maxToolRounds' => 3,

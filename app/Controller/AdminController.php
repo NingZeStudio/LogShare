@@ -293,6 +293,33 @@ class AdminController extends AbstractController
             'max_tokens' => 5,
         ];
 
+        $headersInput = $body['headers'] ?? ($aiConfig['headers'] ?? []);
+        $httpHeaders = [
+            'Content-Type: application/json',
+            'Authorization: Bearer ' . $apiKey,
+        ];
+        if (is_array($headersInput)) {
+            foreach ($headersInput as $k => $v) {
+                if (is_string($k) && $k !== '') {
+                    $headerLine = $k . ': ' . (string) $v;
+                    $keyLower = strtolower($k);
+                    $overridden = false;
+                    foreach ($httpHeaders as $idx => $existing) {
+                        if (str_starts_with(strtolower($existing), $keyLower . ':')) {
+                            $httpHeaders[$idx] = $headerLine;
+                            $overridden = true;
+                            break;
+                        }
+                    }
+                    if (!$overridden) {
+                        $httpHeaders[] = $headerLine;
+                    }
+                } elseif (is_string($v) && trim($v) !== '') {
+                    $httpHeaders[] = trim($v);
+                }
+            }
+        }
+
         $start = microtime(true);
         $ch = curl_init();
         try {
@@ -302,10 +329,7 @@ class AdminController extends AbstractController
                 CURLOPT_TIMEOUT => $timeout,
                 CURLOPT_POST => true,
                 CURLOPT_POSTFIELDS => json_encode($payload),
-                CURLOPT_HTTPHEADER => [
-                    'Content-Type: application/json',
-                    'Authorization: Bearer ' . $apiKey,
-                ],
+                CURLOPT_HTTPHEADER => $httpHeaders,
                 CURLOPT_FORBID_REUSE => true,
             ]);
 

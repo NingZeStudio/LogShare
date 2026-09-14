@@ -6,9 +6,13 @@ class Config
 {
     private static array $data = [];
     private static bool $loaded = false;
+    private static int $dynamicMtime = 0;
+    private static string $baseConfigPath = '';
 
     public static function load(string $path): void
     {
+        self::$baseConfigPath = $path;
+
         if (!is_file($path)) {
             // 配置缺失（如 Docker 镜像内无 Config.inc.php）时回退到示例配置，
             // 避免 `require` 直接 fatal 导致进程无法启动。
@@ -37,6 +41,11 @@ class Config
             $data['cache']['redis']['password'] = '';
         }
         self::validate($data);
+
+        $dynamicPath = self::getDynamicConfigPath();
+        clearstatcache(true, $dynamicPath);
+        self::$dynamicMtime = is_file($dynamicPath) ? (filemtime($dynamicPath) ?: 0) : 0;
+
         self::$data = $data;
         self::$loaded = true;
     }
@@ -98,6 +107,12 @@ class Config
         if (($enabled = getenv('AI_ENABLED')) !== false) {
             $data['ai']['enabled'] = in_array(strtolower($enabled), ['1', 'true', 'on', 'yes'], true);
         }
+        if (($customHeaders = getenv('AI_HEADERS')) !== false && $customHeaders !== '') {
+            $decoded = json_decode($customHeaders, true);
+            if (is_array($decoded)) {
+                $data['ai']['headers'] = $decoded;
+            }
+        }
         if (empty($data['ai']['apiKeys']) || !$data['ai']['enabled']) {
             $data['ai']['enabled'] = false;
         }
@@ -154,24 +169,42 @@ class Config
         }
     }
 
+    /**
+     * Ensure in-memory configuration is fresh across Swoole resident worker processes
+     * by detecting dynamic config file mtime changes.
+     */
+    public static function ensureFresh(): void
+    {
+        $basePath = self::$baseConfigPath !== '' ? self::$baseConfigPath : (CORE_PATH . '/Config.inc.php');
+        if (!self::$loaded) {
+            self::load($basePath);
+            return;
+        }
+
+        $dynamicPath = self::getDynamicConfigPath();
+        clearstatcache(true, $dynamicPath);
+        $currentMtime = is_file($dynamicPath) ? (filemtime($dynamicPath) ?: 0) : 0;
+
+        if ($currentMtime !== self::$dynamicMtime) {
+            self::load($basePath);
+        }
+    }
+
     public static function Get(string $name): array
     {
-        if (!self::$loaded) {
-            self::load(CORE_PATH . '/Config.inc.php');
-        }
+        self::ensureFresh();
         return self::$data[$name] ?? [];
     }
 
     public static function has(string $name): bool
     {
+        self::ensureFresh();
         return isset(self::$data[$name]);
     }
 
     public static function all(): array
     {
-        if (!self::$loaded) {
-            self::load(CORE_PATH . '/Config.inc.php');
-        }
+        self::ensureFresh();
         return self::$data;
     }
 
@@ -324,6 +357,17 @@ class Config
             }
             unset($curr);
         }
+        // 4. ai.headers
+        if (isset($updates['ai']['headers']) && is_array($updates['ai']['headers'])) {
+            $origHeaders = $original['ai']['headers'] ?? [];
+            foreach ($updates['ai']['headers'] as $hKey => $hVal) {
+                if (is_string($hVal) && (str_contains($hVal, '****') || $hVal === '******' || $hVal === '********')) {
+                    if (isset($origHeaders[$hKey]) && is_string($origHeaders[$hKey])) {
+                        $updates['ai']['headers'][$hKey] = $origHeaders[$hKey];
+                    }
+                }
+            }
+        }
     }
 
     /**
@@ -333,9 +377,7 @@ class Config
      */
     public static function getMasked(): array
     {
-        if (!self::$loaded) {
-            self::load(CORE_PATH . '/Config.inc.php');
-        }
+        self::ensureFresh();
         $masked = self::$data;
 
         if (isset($masked['admin']['token']) && (string) $masked['admin']['token'] !== '') {
@@ -352,6 +394,17 @@ class Config
         }
         if (isset($masked['ai']['apiKeys']) && is_array($masked['ai']['apiKeys'])) {
             $masked['ai']['apiKeys'] = array_map(fn($k) => self::maskSecret((string) $k), $masked['ai']['apiKeys']);
+        }
+        if (isset($masked['ai']['headers']) && is_array($masked['ai']['headers'])) {
+            foreach ($masked['ai']['headers'] as $hKey => &$hVal) {
+                if (is_string($hVal) && is_string($hKey)) {
+                    $lower = strtolower($hKey);
+                    if (str_contains($lower, 'token') || str_contains($lower, 'auth') || str_contains($lower, 'key') || str_contains($lower, 'secret')) {
+                        $hVal = self::maskSecret($hVal);
+                    }
+                }
+            }
+            unset($hVal);
         }
         if (isset($masked['ai']['rag']['providers']) && is_array($masked['ai']['rag']['providers'])) {
             foreach ($masked['ai']['rag']['providers'] as &$p) {
@@ -372,10 +425,7 @@ class Config
      */
     public static function saveDynamic(array $updates): void
     {
-        if (!self::$loaded) {
-            self::load(CORE_PATH . '/Config.inc.php');
-        }
-
+        self::ensureFresh();
         self::restoreMaskedSecrets($updates, self::$data);
 
         $candidate = self::deepMerge(self::$data, $updates);
@@ -408,6 +458,8 @@ class Config
             throw new \RuntimeException('Failed to atomic-rename dynamic config file');
         }
 
+        clearstatcache(true, $path);
+        self::$dynamicMtime = filemtime($path) ?: time();
         self::$data = $candidate;
     }
 
@@ -419,8 +471,10 @@ class Config
         $path = self::getDynamicConfigPath();
         if (is_file($path)) {
             @unlink($path);
+            clearstatcache(true, $path);
         }
-        self::load(CORE_PATH . '/Config.inc.php');
+        self::$dynamicMtime = 0;
+        self::load(self::$baseConfigPath !== '' ? self::$baseConfigPath : (CORE_PATH . '/Config.inc.php'));
     }
 }
 
