@@ -150,4 +150,33 @@ class ApiTest extends HttpTestCase
         Db::table('log_metadata')->where('log_id', substr($id, 1))->delete();
         Db::table('log_files')->where('log_id', substr($id, 1))->delete();
     }
+
+    public function testTelemetryReportEndpointAcceptsMetrics(): void
+    {
+        $payload = [
+            'items' => [
+                [
+                    'type' => 'api',
+                    'endpoint' => '/v1/limits',
+                    'method' => 'GET',
+                    'duration' => 12.5,
+                    'status' => 200,
+                    'timestamp' => time(),
+                ],
+                [
+                    'type' => 'web_vitals',
+                    'name' => 'FCP',
+                    'value' => 600,
+                    'rating' => 'good',
+                    'timestamp' => time(),
+                ],
+            ],
+        ];
+
+        $response = $this->post('/v1/telemetry/report', $payload);
+        $response->assertSuccessful();
+        $response->assertJsonFragment(['success' => true]);
+        $this->assertSame(2, $response->json('processed'));
+    }
 }
+
