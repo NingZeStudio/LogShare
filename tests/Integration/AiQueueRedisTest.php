@@ -140,6 +140,7 @@ class AiQueueRedisTest extends HttpTestCase
         // min-idle 0：模拟原消费者已死，回收协程应能重新拿到该条目与 jobId
         $claimed = RedisStreams::xAutoClaim(AnalysisQueue::QUEUE_KEY, AnalysisQueue::GROUP, 'reclaimer', 0);
         $this->assertCount(1, $claimed);
+        $this->assertSame($entries[0][0], $claimed[0][0]);
         $this->assertSame($job['jobId'], $claimed[0][1]['jobId']);
 
         // 运行锁仍持有（consumeJob 尚未执行）时重投应跳过而不双跑
