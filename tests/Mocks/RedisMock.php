@@ -283,18 +283,48 @@ class RedisMock
         return count(self::$streams[$key] ?? []);
     }
 
-    public function xgroup(string $operation, string $key, string $group, $id = null, $mkstream = false): bool
+    public function xdel(string $key, array $ids): int
     {
         self::guard();
-        if (strtoupper($operation) !== 'CREATE') {
-            throw new \RuntimeException('RedisMock: only CREATE is supported');
+        $n = 0;
+        if (!isset(self::$streams[$key])) {
+            return 0;
         }
+        foreach (self::$streams[$key] as $idx => $entry) {
+            if (in_array($entry['id'], $ids, true)) {
+                unset(self::$streams[$key][$idx]);
+                $n++;
+            }
+        }
+        self::$streams[$key] = array_values(self::$streams[$key]);
+        return $n;
+    }
+
+    public function xgroup(string $operation, string $key, string $group, $id = null, $mkstream = false): int|bool
+    {
+        self::guard();
+        $op = strtoupper($operation);
         $gk = $key . '|' . $group;
-        if (isset(self::$groups[$gk])) {
-            throw new \RuntimeException('BUSYGROUP Consumer Group name already exists');
+        if ($op === 'CREATE') {
+            if (isset(self::$groups[$gk])) {
+                throw new \RuntimeException('BUSYGROUP Consumer Group name already exists');
+            }
+            self::$groups[$gk] = ['delivered' => 0, 'pending' => []];
+            return true;
         }
-        self::$groups[$gk] = ['delivered' => 0, 'pending' => []];
-        return true;
+        if ($op === 'DELCONSUMER') {
+            $consumer = (string) $id;
+            $n = 0;
+            if (isset(self::$groups[$gk])) {
+                foreach (self::$groups[$gk]['pending'] as $entry => $info) {
+                    if ($info['consumer'] === $consumer) {
+                        $n++;
+                    }
+                }
+            }
+            return $n;
+        }
+        throw new \RuntimeException('RedisMock: unsupported operation: ' . $op);
     }
 
     public function xreadgroup(string $group, string $consumer, array $keys, int $count = 1, int $block = 0): array
@@ -419,30 +449,53 @@ class RedisMock
     public function xinfo(string $operation, string $key, ?string $arg = null): array
     {
         self::guard();
-        if (strtoupper($operation) !== 'GROUPS') {
-            throw new \RuntimeException('RedisMock: only GROUPS is supported');
-        }
-        if (!isset(self::$streams[$key])) {
-            throw new \RuntimeException('ERR no such key: ' . $key);
-        }
-        $total = count(self::$streams[$key]);
-        $out = [];
-        foreach (self::$groups as $gk => $g) {
-            [$gkey, $gname] = explode('|', $gk, 2);
-            if ($gkey !== $key) {
-                continue;
+        $op = strtoupper($operation);
+        if ($op === 'GROUPS') {
+            if (!isset(self::$streams[$key])) {
+                throw new \RuntimeException('ERR no such key: ' . $key);
             }
-            $out[] = [
-                'name' => $gname,
-                'consumers' => count(array_unique(array_column($g['pending'], 'consumer'))),
-                'pending' => count($g['pending']),
-                'last-delivered-id' => $g['delivered'] > 0 && isset(self::$streams[$key][$g['delivered'] - 1])
-                    ? self::$streams[$key][$g['delivered'] - 1]['id']
-                    : '0-0',
-                'lag' => max(0, $total - $g['delivered']),
-            ];
+            $total = count(self::$streams[$key]);
+            $out = [];
+            foreach (self::$groups as $gk => $g) {
+                [$gkey, $gname] = explode('|', $gk, 2);
+                if ($gkey !== $key) {
+                    continue;
+                }
+                $out[] = [
+                    'name' => $gname,
+                    'consumers' => count(array_unique(array_column($g['pending'], 'consumer'))),
+                    'pending' => count($g['pending']),
+                    'last-delivered-id' => $g['delivered'] > 0 && isset(self::$streams[$key][$g['delivered'] - 1])
+                        ? self::$streams[$key][$g['delivered'] - 1]['id']
+                        : '0-0',
+                    'lag' => max(0, $total - $g['delivered']),
+                ];
+            }
+            return $out;
         }
-        return $out;
+        if ($op === 'CONSUMERS') {
+            $group = $arg ?? '';
+            $gk = $key . '|' . $group;
+            if (!isset(self::$groups[$gk])) {
+                return [];
+            }
+            $g = self::$groups[$gk];
+            $perConsumer = [];
+            foreach ($g['pending'] as $info) {
+                $c = $info['consumer'];
+                $perConsumer[$c] = ($perConsumer[$c] ?? 0) + 1;
+            }
+            $out = [];
+            foreach ($perConsumer as $c => $pending) {
+                $out[] = [
+                    'name' => $c,
+                    'pending' => $pending,
+                    'idle' => 1000,
+                ];
+            }
+            return $out;
+        }
+        throw new \RuntimeException('RedisMock: unsupported xinfo operation ' . $op);
     }
 
     /** 测试辅助：直接读取事件流全部条目 [id, fields] */

@@ -161,7 +161,9 @@ final class AnalysisQueue
                 'cacheTTL' => $cacheTTL,
             ], JSON_UNESCAPED_UNICODE);
             RedisStreams::set(self::payloadKey($jobId), (string) gzcompress((string) $payload, 6), $ttl);
-            RedisStreams::xAdd(self::QUEUE_KEY, ['jobId' => $jobId]);
+            $cfg = self::config();
+            $maxLen = max(1000, $cfg['maxQueue'] * 4);
+            RedisStreams::xAdd(self::QUEUE_KEY, ['jobId' => $jobId], $maxLen);
         } catch (\Throwable $e) {
             try {
                 RedisStreams::del(self::activeKey($cacheKey));
@@ -249,21 +251,47 @@ final class AnalysisQueue
         $cfg = self::config();
         if ($jobId === '') {
             RedisStreams::xAck(self::QUEUE_KEY, self::GROUP, $entryId);
+            RedisStreams::xDel(self::QUEUE_KEY, $entryId);
             return;
         }
 
         $payloadRaw = RedisStreams::get(self::payloadKey($jobId));
         if ($payloadRaw === null) {
-            // payload 已过期：补发终态帧收尾，否则 waitTimeout=0 的中继端会无限等待
+            // payload 已过期或已消费清理：检查是否需要补发终态帧收尾。
+            // 避免 waitTimeout=0 的中继端无限等待；若事件流已包含终态帧（error/done），
+            // 则绝不再重复写入，杜绝极端重投时向 events stream 灌入数千条重复帧。
             try {
-                (new StreamEmitter($jobId, (int) $cfg['jobTtl']))->finish('error', json_encode(
-                    ['error' => '分析任务已超过排队存活时限，请重新提交。'],
-                    self::FRAME_JSON_FLAGS
-                ));
+                $eventsKey = StreamEmitter::eventsKey($jobId);
+                $hasTerminal = false;
+                try {
+                    $recentEvents = RedisStreams::xRead($eventsKey, '0-0', 10);
+                    foreach ($recentEvents as [, $fields]) {
+                        $ev = (string) ($fields['event'] ?? '');
+                        if ($ev === 'error' || $ev === 'done') {
+                            $hasTerminal = true;
+                            break;
+                        }
+                    }
+                } catch (\Throwable) {
+                }
+
+                if (!$hasTerminal) {
+                    (new StreamEmitter($jobId, (int) $cfg['jobTtl']))->finish('error', json_encode(
+                        ['error' => '分析任务已超过排队存活时限，请重新提交。'],
+                        self::FRAME_JSON_FLAGS
+                    ));
+                }
             } catch (\Throwable $e) {
                 \App\Syslog::error('AiQueue', 'job ' . $jobId . ' expiry notice failed: ' . $e->getMessage());
             }
-            RedisStreams::xAck(self::QUEUE_KEY, self::GROUP, $entryId);
+
+            try {
+                RedisStreams::del(self::runningKey($jobId));
+                RedisStreams::xAck(self::QUEUE_KEY, self::GROUP, $entryId);
+                RedisStreams::xDel(self::QUEUE_KEY, $entryId);
+            } catch (\Throwable $e) {
+                \App\Syslog::error('AiQueue', 'job ' . $jobId . ' ghost cleanup failed: ' . $e->getMessage());
+            }
             return;
         }
 
@@ -319,6 +347,7 @@ final class AnalysisQueue
                     RedisStreams::del(self::activeKey($cleanupCacheKey));
                 }
                 RedisStreams::xAck(self::QUEUE_KEY, self::GROUP, $entryId);
+                RedisStreams::xDel(self::QUEUE_KEY, $entryId);
             } catch (\Throwable $e) {
                 \App\Syslog::error('AiQueue', 'job ' . $jobId . ' cleanup failed: ' . $e->getMessage());
             }

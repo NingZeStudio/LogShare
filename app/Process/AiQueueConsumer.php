@@ -31,9 +31,13 @@ class AiQueueConsumer extends AbstractProcess
     public string $name = 'ai-queue-consumer';
 
     /** 空闲多久后自回收（秒） */
-    private const RESTART_IDLE_SECONDS = 300;
+    private const RESTART_IDLE_SECONDS = 180;
     /** 本生命周期至少处理过多少任务才允许自回收（低流量时 RSS 本就低，不必重启） */
     private const RESTART_MIN_PROCESSED = 50;
+    /** 本生命周期处理任务上限：达到后一旦当前无在途任务立即退出，由 Swoole manager 自动重启释放 RSS */
+    private const RESTART_MAX_PROCESSED = 500;
+    /** 进程占用 PHP 堆内存达到此阈值（字节）且当前无在途任务时立即自回收（256MB） */
+    private const RESTART_MAX_MEMORY_BYTES = 268435456;
 
     /** 在途任务数（单进程多协程共享；Swoole 单线程模型下普通 static 即可） */
     private static int $busyJobs = 0;
@@ -66,14 +70,21 @@ class AiQueueConsumer extends AbstractProcess
         }
 
         $max = max(1, (int) $cfg['maxConcurrent']);
+        $activeConsumers = ['reclaimer'];
         for ($i = 0; $i < $max; $i++) {
-            $consumer = 'worker-' . posix_getpid() . '-' . $i;
+            // 固定 worker-0, worker-1 命名：避免每次进程自回收/重启产生带 PID 的僵尸 consumer 堆积
+            $consumer = 'worker-' . $i;
+            $activeConsumers[] = $consumer;
             Coroutine::create(function () use ($consumer): void {
                 $this->consumeLoop($consumer);
             });
         }
-        Coroutine::create(function (): void {
-            $this->reclaimLoop();
+
+        // 启动时清理历史遗留的僵尸 consumers
+        $this->cleanStaleConsumers($activeConsumers);
+
+        Coroutine::create(function () use ($activeConsumers): void {
+            $this->reclaimLoop($activeConsumers);
         });
 
         while ($this->running) {
@@ -83,8 +94,39 @@ class AiQueueConsumer extends AbstractProcess
     }
 
     /**
-     * 空闲自回收判定：无在途任务 + 队列无 pending + 处理量达标 + 空闲超时。
-     * Redis 故障时 queueDepth 抛出，跳过本轮（fail-open 语义一致）。
+     * 清理消费者组内遗留的历史僵尸消费者。
+     *
+     * 避免因历史包含 PID 的命名方式（如 worker-112-0）或历史崩溃在组内残留上百个
+     * 僵尸 consumer，导致 XINFO / XPENDING 遍历开销倍增。
+     *
+     * @param array<int, string> $activeConsumers
+     */
+    private function cleanStaleConsumers(array $activeConsumers): void
+    {
+        try {
+            $consumers = RedisStreams::xInfoConsumers(AnalysisQueue::QUEUE_KEY, AnalysisQueue::GROUP);
+            foreach ($consumers as $info) {
+                $name = (string) ($info['name'] ?? '');
+                $pending = (int) ($info['pending'] ?? 0);
+                if ($name === '' || in_array($name, $activeConsumers, true)) {
+                    continue;
+                }
+                // 仅当该 consumer 名下无 pending 消息时安全注销；
+                // 若仍有 pending，留待 XAUTOCLAIM 转移并 ACK 后在后续周期清理
+                if ($pending === 0) {
+                    RedisStreams::xGroupDelConsumer(AnalysisQueue::QUEUE_KEY, AnalysisQueue::GROUP, $name);
+                }
+            }
+        } catch (\Throwable $e) {
+            \App\Syslog::error('AiQueue', 'clean stale consumers failed: ' . $e->getMessage());
+        }
+    }
+
+    /**
+     * 自回收判定：
+     * 1. 任务量硬上限：累计处理达 RESTART_MAX_PROCESSED（500）且无在途任务，立即退出重启；
+     * 2. 内存阈值保护：当前 PHP 真实分配内存 ≥ RESTART_MAX_MEMORY_BYTES（256MB）且无在途任务，立即退出重启；
+     * 3. 周期空闲回落：无在途任务 + 队列无 pending + 处理量达标（50）+ 连续空闲 ≥ RESTART_IDLE_SECONDS（180s），退出重启。
      */
     private function maybeRecycle(): void
     {
@@ -92,6 +134,35 @@ class AiQueueConsumer extends AbstractProcess
             $this->lastBusyAt = time();
             return;
         }
+
+        // 1. 处理量硬上限自回收
+        if (self::$processedJobs >= self::RESTART_MAX_PROCESSED) {
+            \App\Syslog::error(
+                'AiQueue',
+                sprintf(
+                    'consumer max requests recycle: processed=%d >= %d, exiting for manager restart (RSS reset)',
+                    self::$processedJobs,
+                    self::RESTART_MAX_PROCESSED
+                )
+            );
+            exit(0);
+        }
+
+        // 2. 内存阈值自回收
+        if (self::$processedJobs >= self::RESTART_MIN_PROCESSED && memory_get_usage(true) >= self::RESTART_MAX_MEMORY_BYTES) {
+            \App\Syslog::error(
+                'AiQueue',
+                sprintf(
+                    'consumer memory limit recycle: mem=%dMB >= %dMB, processed=%d, exiting for manager restart (RSS reset)',
+                    intdiv(memory_get_usage(true), 1048576),
+                    intdiv(self::RESTART_MAX_MEMORY_BYTES, 1048576),
+                    self::$processedJobs
+                )
+            );
+            exit(0);
+        }
+
+        // 3. 低频空闲自回收
         if (self::$processedJobs < self::RESTART_MIN_PROCESSED) {
             return;
         }
@@ -140,7 +211,10 @@ class AiQueueConsumer extends AbstractProcess
         }
     }
 
-    public function reclaimLoop(): void
+    /**
+     * @param array<int, string> $activeConsumers
+     */
+    public function reclaimLoop(array $activeConsumers = ['reclaimer']): void
     {
         $cfg = AnalysisQueue::config();
         $intervalMs = max(10000, intdiv(max(1, (int) $cfg['claimIdleMs']), 2));
@@ -148,7 +222,19 @@ class AiQueueConsumer extends AbstractProcess
         while ($this->running) {
             usleep($intervalMs * 1000);
             try {
+                $this->cleanStaleConsumers($activeConsumers);
                 foreach (RedisStreams::xAutoClaim(AnalysisQueue::QUEUE_KEY, AnalysisQueue::GROUP, 'reclaimer', (int) $cfg['claimIdleMs'], 10, $cursor) as [$id, $fields]) {
+                    // 死信计数：同一条目最多重试 3 次，防止毒药/无载荷条目极端无限重投
+                    $reclaimCountKey = 'ai:job:reclaim:' . $id;
+                    $times = RedisStreams::incr($reclaimCountKey);
+                    RedisStreams::expire($reclaimCountKey, 3600);
+                    if ($times > 3) {
+                        \App\Syslog::error('AiQueue', "job entry {$id} reached max delivery limit ({$times}), dropping poisoned entry");
+                        RedisStreams::xAck(AnalysisQueue::QUEUE_KEY, AnalysisQueue::GROUP, $id);
+                        RedisStreams::xDel(AnalysisQueue::QUEUE_KEY, $id);
+                        RedisStreams::del($reclaimCountKey);
+                        continue;
+                    }
                     $this->runJob($id, (string) ($fields['jobId'] ?? ''));
                 }
             } catch (\Throwable $e) {
@@ -168,6 +254,12 @@ class AiQueueConsumer extends AbstractProcess
             self::$busyJobs--;
             self::$processedJobs++;
             $this->lastBusyAt = time();
+
+            // 任务结束主动回收垃圾并释放未使用的 Zend arena 内存缓存，减缓堆碎片化
+            gc_collect_cycles();
+            if (function_exists('gc_mem_caches')) {
+                gc_mem_caches();
+            }
         }
     }
 }

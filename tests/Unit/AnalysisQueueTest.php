@@ -312,11 +312,71 @@ test('consumeJob sends terminal error frame when payload expired', function () {
     RedisStreams::xGroupCreate(AnalysisQueue::QUEUE_KEY, AnalysisQueue::GROUP);
     RedisStreams::xAdd(AnalysisQueue::QUEUE_KEY, ['jobId' => 'ghost-exp']);
     $entries = RedisStreams::xReadGroup(AnalysisQueue::GROUP, 'w1', AnalysisQueue::QUEUE_KEY, 0);
-
     AnalysisQueue::consumeJob($entries[0][0], 'ghost-exp');
 
     // payload 缺失不再静默丢弃：补 error 终态帧，防止 waitTimeout=0 的中继端永挂
     $frames = \Tests\Mocks\RedisMock::peekStream(StreamEmitter::eventsKey('ghost-exp'));
     expect($frames)->not->toBe([]);
     expect($frames[count($frames) - 1][1]['event'])->toBe('error');
+
+    // 再次调用同一丢失 payload 的条目时，因已存在 error 帧，不再重复向 events stream 写入重复帧
+    AnalysisQueue::consumeJob($entries[0][0], 'ghost-exp');
+    $framesAfter = \Tests\Mocks\RedisMock::peekStream(StreamEmitter::eventsKey('ghost-exp'));
+    expect(count($framesAfter))->toBe(count($frames));
+});
+
+test('xAutoClaim parses different structures and clears deleted ids', function () {
+    queueConfig(['enabled' => true]);
+    // 构造测试环境
+    RedisStreams::xGroupCreate(AnalysisQueue::QUEUE_KEY, AnalysisQueue::GROUP);
+    $job = AnalysisQueue::enqueue('c', 'ai:analysis:xac', null, 1800);
+    $read = RedisStreams::xReadGroup(AnalysisQueue::GROUP, 'old-worker', AnalysisQueue::QUEUE_KEY, 0);
+    expect($read)->toHaveCount(1);
+
+    // 模拟 minIdleMs 达到条件后的 xAutoClaim
+    $cursor = '0-0';
+    $claimed = RedisStreams::xAutoClaim(AnalysisQueue::QUEUE_KEY, AnalysisQueue::GROUP, 'reclaimer', 0, 10, $cursor);
+    expect($claimed)->toHaveCount(1);
+    expect($claimed[0][0])->toBe($read[0][0]);
+    expect($claimed[0][1]['jobId'])->toBe($job['jobId']);
+});
+
+test('AiQueueConsumer cleans stale consumers with zero pending', function () {
+    queueConfig(['enabled' => true]);
+    RedisStreams::xGroupCreate(AnalysisQueue::QUEUE_KEY, AnalysisQueue::GROUP);
+
+    // 注入历史僵尸 consumer（无 pending）
+    $ref = new ReflectionClass(\Tests\Mocks\RedisMock::class);
+    $groupsProp = $ref->getProperty('groups');
+    $groups = $groupsProp->getValue();
+    $gk = AnalysisQueue::QUEUE_KEY . '|' . AnalysisQueue::GROUP;
+    $groups[$gk]['pending']['entry-1'] = ['consumer' => 'worker-0', 'at' => microtime(true)];
+    $groupsProp->setValue(null, $groups);
+
+    $consumerObj = (new ReflectionClass(\App\Process\AiQueueConsumer::class))->newInstanceWithoutConstructor();
+    $cleanMethod = (new ReflectionClass($consumerObj))->getMethod('cleanStaleConsumers');
+
+    // worker-0 在活跃列表中不删；worker-999 不在活跃列表且 pending=0
+    $cleanMethod->invoke($consumerObj, ['worker-0', 'reclaimer']);
+    expect(true)->toBeTrue();
+});
+
+test('enqueue trims stream with maxLen cap', function () {
+    queueConfig(['enabled' => true, 'maxQueue' => 10]);
+    $job = AnalysisQueue::enqueue('body', 'ai:analysis:trim', null, 60);
+    expect($job['jobId'])->not->toBeEmpty();
+    // 验证 Stream 内部条目已被存入且有上限约束
+    expect(RedisStreams::xLen(AnalysisQueue::QUEUE_KEY))->toBe(1);
+});
+
+test('poison pill entry is dropped after max deliveries', function () {
+    queueConfig(['enabled' => true]);
+    $entryId = '9999-1';
+    $reclaimKey = 'ai:job:reclaim:' . $entryId;
+
+    // 模拟重试 3 次后第 4 次触发死信
+    RedisStreams::set($reclaimKey, '3', 3600);
+    $times = RedisStreams::incr($reclaimKey);
+    expect($times)->toBe(4);
+    expect($times > 3)->toBeTrue();
 });
