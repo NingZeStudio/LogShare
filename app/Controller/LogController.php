@@ -15,6 +15,12 @@ class LogController extends AbstractController
     #[PostMapping(path: 'log')]
     public function create(): ResponseInterface
     {
+        // 1. IP 黑名单校验
+        $clientIp = $this->request->getServerParams()['remote_addr'] ?? null;
+        if ($clientIp && \App\System\SecurityService::isIpBanned((string) $clientIp)) {
+            throw new ApiError(403, 'Your IP has been blocked from submitting logs.');
+        }
+
         $content = $this->validateContentExists($this->parseContent());
 
         $metadata = [];
@@ -28,6 +34,14 @@ class LogController extends AbstractController
 
             if (empty($content) && $files !== null) {
                 $content = $files[0]['data'] ?? '';
+            }
+        }
+
+        // 2. 动态违规内容前置过滤
+        \App\System\SecurityService::validateContent((string) $content);
+        if (!empty($files)) {
+            foreach ($files as $file) {
+                \App\System\SecurityService::validateContent((string) ($file['data'] ?? ''));
             }
         }
 
