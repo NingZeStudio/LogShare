@@ -229,31 +229,57 @@ final class SecurityService
      */
     public static function getWafOverview(): array
     {
-        $snapshotPath = CORE_PATH . '/OpenLiteWaf/data/snapshot.json';
-        if (is_file($snapshotPath)) {
-            $content = @file_get_contents($snapshotPath);
-            if ($content) {
-                $data = json_decode($content, true);
-                if (is_array($data)) {
-                    $counters = $data['counters'] ?? [];
-                    return [
-                        'available' => true,
-                        'total_requests' => (int) ($counters['total'] ?? 0),
-                        'blocked_total' => (int) ($counters['blocked'] ?? 0),
-                        'banned_active' => (int) ($data['banned_active'] ?? 0),
-                        'categories' => [
-                            'cc' => (int) ($counters['cc'] ?? 0),
-                            'sqli' => (int) ($counters['sqli'] ?? 0),
-                            'xss' => (int) ($counters['xss'] ?? 0),
-                            'traversal' => (int) ($counters['traversal'] ?? 0),
-                            'rce' => (int) ($counters['rce'] ?? 0),
-                            'probe' => (int) ($counters['probe'] ?? 0),
-                        ],
-                        'top_ips' => $data['top_ips'] ?? [],
-                        'trend' => $data['trend'] ?? [],
-                    ];
+        $data = self::loadWafData();
+        if (is_array($data)) {
+            $counters = (array) ($data['counters'] ?? []);
+            $blockedCat = (array) ($data['blocked'] ?? []);
+
+            $totalRequests = (int) ($counters['total'] ?? $data['requests_total'] ?? 0);
+            $blockedTotal = (int) ($counters['blocked'] ?? $data['blocked_total'] ?? 0);
+            $bannedActive = (int) ($data['banned_active'] ?? $counters['banned'] ?? (is_array($data['bans'] ?? null) ? count($data['bans']) : 0));
+
+            $categories = [
+                'cc' => (int) ($counters['cc'] ?? $blockedCat['cc'] ?? 0),
+                'sqli' => (int) ($counters['sqli'] ?? $blockedCat['sqli'] ?? 0),
+                'xss' => (int) ($counters['xss'] ?? $blockedCat['xss'] ?? 0),
+                'traversal' => (int) ($counters['traversal'] ?? $blockedCat['traversal'] ?? 0),
+                'rce' => (int) ($counters['rce'] ?? $blockedCat['rce'] ?? 0),
+                'probe' => (int) ($counters['probe'] ?? $blockedCat['probe'] ?? 0),
+            ];
+
+            // 提取高频攻击 IP
+            $topIps = [];
+            if (isset($data['top_ips']) && is_array($data['top_ips'])) {
+                $topIps = $data['top_ips'];
+            } elseif (isset($data['logs']) && is_array($data['logs'])) {
+                $ipCounts = [];
+                foreach ($data['logs'] as $logItem) {
+                    $rawStr = is_string($logItem) ? $logItem : (string) ($logItem['s'] ?? '');
+                    if ($rawStr !== '') {
+                        $itemData = json_decode($rawStr, true);
+                        if (is_array($itemData) && !empty($itemData['ip'])) {
+                            $ip = (string) $itemData['ip'];
+                            $ipCounts[$ip] = ($ipCounts[$ip] ?? 0) + 1;
+                        }
+                    }
+                }
+                arsort($ipCounts);
+                foreach (array_slice($ipCounts, 0, 10, true) as $ip => $cnt) {
+                    $topIps[] = ['ip' => $ip, 'n' => $cnt];
                 }
             }
+
+            $trends = $data['trends'] ?? $data['trend'] ?? [];
+
+            return [
+                'available' => true,
+                'total_requests' => $totalRequests,
+                'blocked_total' => $blockedTotal,
+                'banned_active' => $bannedActive,
+                'categories' => $categories,
+                'top_ips' => is_array($topIps) ? $topIps : [],
+                'trend' => is_array($trends) ? $trends : [],
+            ];
         }
 
         return [
@@ -390,26 +416,29 @@ final class SecurityService
 
     private static function readWafSnapshotBans(): array
     {
-        $snapshotPath = CORE_PATH . '/OpenLiteWaf/data/snapshot.json';
-        if (!is_file($snapshotPath)) {
+        $data = self::loadWafData();
+        if (!is_array($data) || !isset($data['bans'])) {
             return [];
         }
 
-        $content = @file_get_contents($snapshotPath);
-        if (!$content) {
-            return [];
-        }
-
-        $data = json_decode($content, true);
-        if (!is_array($data) || !isset($data['bans']) || !is_array($data['bans'])) {
+        $bansData = $data['bans'];
+        if (!is_array($bansData)) {
             return [];
         }
 
         $now = time();
         $items = [];
-        foreach ($data['bans'] as $b) {
-            $ip = (string) ($b['ip'] ?? '');
-            $exp = (int) ($b['exp'] ?? 0);
+        foreach ($bansData as $key => $b) {
+            $ip = '';
+            $exp = 0;
+            if (is_array($b)) {
+                $ip = (string) ($b['ip'] ?? (is_string($key) ? $key : ''));
+                $exp = (int) ($b['exp'] ?? 0);
+            } elseif (is_numeric($b) && is_string($key)) {
+                $ip = $key;
+                $exp = (int) $b;
+            }
+
             if ($ip !== '' && $exp > $now) {
                 $items[] = [
                     'ip' => $ip,
@@ -423,5 +452,59 @@ final class SecurityService
         }
 
         return $items;
+    }
+
+    /**
+     * 加载 WAF 拦截统计数据，优先尝试多路径本地快照，失败时回退内部网络请求。
+     *
+     * @return array<string, mixed>|null
+     */
+    private static function loadWafData(): ?array
+    {
+        $candidatePaths = [
+            (string) (getenv('WAF_SNAPSHOT_PATH') ?: ''),
+            CORE_PATH . '/OpenLiteWaf/data/snapshot.json',
+            '/data/openlitewaf/snapshot.json',
+            dirname(CORE_PATH) . '/OpenLiteWaf/data/snapshot.json',
+        ];
+
+        foreach ($candidatePaths as $path) {
+            if ($path !== '' && is_file($path)) {
+                $content = @file_get_contents($path);
+                if ($content) {
+                    $json = json_decode($content, true);
+                    if (is_array($json)) {
+                        return $json;
+                    }
+                }
+            }
+        }
+
+        // 内部网络请求回退（容器内直连 Nginx 容器暴露的 OpenLiteWaf 统计）
+        $ch = null;
+        try {
+            $ch = curl_init('https://nginx/security/stats');
+            if ($ch !== false) {
+                curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+                curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
+                curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, 0);
+                curl_setopt($ch, CURLOPT_HTTPHEADER, ['Host: api.logshare.cn']);
+                curl_setopt($ch, CURLOPT_TIMEOUT, 2);
+                curl_setopt($ch, CURLOPT_FORBID_REUSE, true);
+                $res = curl_exec($ch);
+                if (is_string($res) && $res !== '') {
+                    $json = json_decode($res, true);
+                    if (is_array($json)) {
+                        return $json;
+                    }
+                }
+            }
+        } catch (\Throwable) {
+            // 静默失败，继续降级
+        } finally {
+            $ch = null;
+        }
+
+        return null;
     }
 }

@@ -125,7 +125,7 @@ final class AnalyticsService
     private static function getVersionStatsFromMariaDb(int $days, int $since): array
     {
         try {
-            // 1. 版本分布
+            // 1. 版本分布（优先查元数据显式标注）
             $versionRows = Db::table('log_metadata as m')
                 ->join('logs as l', 'm.log_id', '=', 'l.id')
                 ->select(['m.value as ver', Db::raw('COUNT(*) as cnt')])
@@ -145,14 +145,8 @@ final class AnalyticsService
                 $versionTotal += $c;
                 $versions[] = ['name' => (string) $r->ver, 'count' => $c, 'percentage' => 0.0];
             }
-            if ($versionTotal > 0) {
-                foreach ($versions as &$v) {
-                    $v['percentage'] = round(($v['count'] / $versionTotal) * 100, 1);
-                }
-                unset($v);
-            }
 
-            // 2. 加载器分布（type / loader / modloader）
+            // 2. 加载器分布（优先查元数据显式标注）
             $loaderRows = Db::table('log_metadata as m')
                 ->join('logs as l', 'm.log_id', '=', 'l.id')
                 ->select(['m.value as ldr', Db::raw('COUNT(*) as cnt')])
@@ -172,9 +166,97 @@ final class AnalyticsService
                 $loaderTotal += $c;
                 $loaders[] = ['name' => (string) $r->ldr, 'count' => $c, 'percentage' => 0.0];
             }
-            if ($loaderTotal > 0) {
+
+            // 若元数据中缺失版本或加载器，启动启发式采样识别（扫描近 100 条日志头部与模组列表）
+            if (empty($versions) || empty($loaders)) {
+                $sampleLogs = Db::table('logs')
+                    ->select([Db::raw('SUBSTRING(data, 1, 2048) as header')])
+                    ->where('created', '>=', $since)
+                    ->orderByDesc('id')
+                    ->limit(100)
+                    ->get();
+
+                if (empty($versions)) {
+                    $vCounts = [];
+                    foreach ($sampleLogs as $s) {
+                        $h = (string) ($s->header ?? '');
+                        if (preg_match('/Minecraft(?: Version)?[:\s]+v?([12]\.\d+(?:\.\d+)?)/i', $h, $m)) {
+                            $v = $m[1];
+                            $vCounts[$v] = ($vCounts[$v] ?? 0) + 1;
+                        }
+                    }
+
+                    if (count($vCounts) < 3) {
+                        $mods = Db::table('log_metadata')
+                            ->where('key', 'matched_mods')
+                            ->whereNotNull('value')
+                            ->where('value', '!=', '')
+                            ->orderByDesc('id')
+                            ->limit(50)
+                            ->pluck('value');
+                        foreach ($mods as $modStr) {
+                            if (is_string($modStr) && preg_match_all('/(?:mc)?(1\.\d+(?:\.\d+)?)/i', $modStr, $matches)) {
+                                foreach ($matches[1] as $mv) {
+                                    if (version_compare($mv, '1.7.0', '>=')) {
+                                        $vCounts[$mv] = ($vCounts[$mv] ?? 0) + 1;
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    arsort($vCounts);
+                    $vTotal = array_sum($vCounts);
+                    foreach (array_slice($vCounts, 0, 20, true) as $vName => $cnt) {
+                        $versions[] = [
+                            'name' => (string) $vName,
+                            'count' => (int) $cnt,
+                            'percentage' => $vTotal > 0 ? round(($cnt / $vTotal) * 100, 1) : 0.0,
+                        ];
+                    }
+                }
+
+                if (empty($loaders)) {
+                    $lCounts = [];
+                    foreach ($sampleLogs as $s) {
+                        $h = (string) ($s->header ?? '');
+                        if (stripos($h, 'NeoForge') !== false) {
+                            $lCounts['NeoForge'] = ($lCounts['NeoForge'] ?? 0) + 1;
+                        } elseif (stripos($h, 'Fabric') !== false) {
+                            $lCounts['Fabric'] = ($lCounts['Fabric'] ?? 0) + 1;
+                        } elseif (stripos($h, 'Forge') !== false) {
+                            $lCounts['Forge'] = ($lCounts['Forge'] ?? 0) + 1;
+                        } elseif (stripos($h, 'Quilt') !== false) {
+                            $lCounts['Quilt'] = ($lCounts['Quilt'] ?? 0) + 1;
+                        }
+                    }
+
+                    arsort($lCounts);
+                    $lTotal = array_sum($lCounts);
+                    foreach ($lCounts as $lName => $cnt) {
+                        $loaders[] = [
+                            'name' => (string) $lName,
+                            'count' => (int) $cnt,
+                            'percentage' => $lTotal > 0 ? round(($cnt / $lTotal) * 100, 1) : 0.0,
+                        ];
+                    }
+                }
+            }
+
+            if ($versionTotal > 0 && !empty($versions)) {
+                foreach ($versions as &$v) {
+                    if ($v['percentage'] == 0.0) {
+                        $v['percentage'] = round(($v['count'] / $versionTotal) * 100, 1);
+                    }
+                }
+                unset($v);
+            }
+
+            if ($loaderTotal > 0 && !empty($loaders)) {
                 foreach ($loaders as &$l) {
-                    $l['percentage'] = round(($l['count'] / $loaderTotal) * 100, 1);
+                    if ($l['percentage'] == 0.0) {
+                        $l['percentage'] = round(($l['count'] / $loaderTotal) * 100, 1);
+                    }
                 }
                 unset($l);
             }
@@ -197,16 +279,20 @@ final class AnalyticsService
                 ->select([
                     Db::raw("DATE(FROM_UNIXTIME(created)) as dt"),
                     Db::raw('COUNT(*) as cnt'),
-                    Db::raw('SUM(LENGTH(data)) as total_bytes'),
                 ])
                 ->where('created', '>=', $since)
                 ->groupBy('dt')
                 ->orderBy('dt', 'asc')
                 ->get();
 
+            // 预估单篇日志平均体积，彻底杜绝全表扫描大字段 SUM(LENGTH(data)) 导致的慢查询卡死
+            $avgSize = (int) (Db::table('log_metadata')->where('key', 'size')->avg(Db::raw('CAST(value AS UNSIGNED)')) ?: 300_000);
+            if ($avgSize <= 0) {
+                $avgSize = 300_000;
+            }
+
             $totalLogs = 0;
             $totalBytes = 0;
-            $trends = [];
 
             // 预填充完整日期
             $dateMap = [];
@@ -218,7 +304,7 @@ final class AnalyticsService
             foreach ($rows as $r) {
                 $d = (string) $r->dt;
                 $c = (int) $r->cnt;
-                $b = (int) ($r->total_bytes ?? 0);
+                $b = (int) ($c * $avgSize);
                 $totalLogs += $c;
                 $totalBytes += $b;
                 if (isset($dateMap[$d])) {
@@ -242,6 +328,7 @@ final class AnalyticsService
             return ['days' => $days, 'total_logs' => 0, 'total_bytes' => 0, 'trends' => []];
         }
     }
+
 
     // ── Filesystem 实现 ──
 
