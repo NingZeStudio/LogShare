@@ -601,4 +601,25 @@ final class AiMetricsService
         $dec = json_decode($c, true);
         return is_array($dec) ? $dec : ['history' => []];
     }
+
+    /**
+     * 清理所有历史运营指标数据（测试或重置用）。
+     */
+    public static function clearMetrics(): void
+    {
+        $redis = RedisClient::getRedis();
+        if ($redis !== null) {
+            try {
+                $keys = $redis->keys(self::METRICS_PREFIX . '*');
+                if (!empty($keys)) {
+                    $redis->del(...$keys);
+                }
+            } catch (\Throwable) {
+            }
+        }
+        $filePath = CORE_PATH . self::METRICS_FILE;
+        if (file_exists($filePath)) {
+            @unlink($filePath);
+        }
+    }
 }
