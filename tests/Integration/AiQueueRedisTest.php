@@ -210,6 +210,13 @@ class AiQueueRedisTest extends HttpTestCase
         $this->assertFalse($m->invoke($this->controller(), 'ai:analysis:int1'));
         $this->assertSame(0, AnalysisQueue::queueDepth());
     }
+
+    public function testGetRssMemoryBytesReturnsPositiveInteger(): void
+    {
+        $bytes = \App\Process\AiQueueConsumer::getRssMemoryBytes();
+        $this->assertIsInt($bytes);
+        $this->assertGreaterThan(1024 * 1024, $bytes); // At least 1MB
+    }
 }
 
 /** 具体子类供反射实例化（newInstanceWithoutConstructor 跳过 DI 代理构造器） */

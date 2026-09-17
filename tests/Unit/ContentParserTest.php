@@ -12,7 +12,9 @@ afterEach(function () {
 
 function parseJsonViaContentParser(array $data): string|App\ApiError|array
 {
-    $parser = new App\ContentParser(Mockery::mock(\Hyperf\HttpServer\Contract\RequestInterface::class));
+    $request = Mockery::mock(\Hyperf\HttpServer\Contract\RequestInterface::class);
+    $request->shouldReceive('getHeaderLine')->with('User-Agent')->byDefault()->andReturn('');
+    $parser = new App\ContentParser($request);
     $ref = new ReflectionClass(App\ContentParser::class);
     $method = $ref->getMethod('parseJsonData');
     return $method->invoke($parser, $data);
@@ -112,4 +114,54 @@ test('ContentParser handles Content-Encoding: br appropriately', function () {
         expect($result->getHttpCode())->toBe(501);
         expect($result->getMessage())->toContain('Brotli');
     }
+});
+
+test('parseLauncherSource accepts launcher/version formats', function () {
+    expect(App\ContentParser::parseLauncherSource('FCL/1.3.3.2'))->toBe('FCL/1.3.3.2');
+    expect(App\ContentParser::parseLauncherSource('ZL2/Android_2.5.3'))->toBe('ZL2/Android_2.5.3');
+    expect(App\ContentParser::parseLauncherSource('pojav/3.4.0'))->toBe('pojav/3.4.0');
+    expect(App\ContentParser::parseLauncherSource('HMCL/3.5.3.245'))->toBe('HMCL/3.5.3.245');
+    expect(App\ContentParser::parseLauncherSource('PCL2/2.8.0'))->toBe('PCL2/2.8.0');
+    expect(App\ContentParser::parseLauncherSource('  FoldCraft/1.2.0  '))->toBe('FoldCraft/1.2.0');
+});
+
+test('parseLauncherSource rejects browsers, tools, and invalid formats', function () {
+    expect(App\ContentParser::parseLauncherSource(null))->toBeNull();
+    expect(App\ContentParser::parseLauncherSource(''))->toBeNull();
+    expect(App\ContentParser::parseLauncherSource('Mozilla/5.0 (Windows NT 10.0; Win64; x64)'))->toBeNull();
+    expect(App\ContentParser::parseLauncherSource('Mozilla/5.0'))->toBeNull();
+    expect(App\ContentParser::parseLauncherSource('curl/7.88.1'))->toBeNull();
+    expect(App\ContentParser::parseLauncherSource('Wget/1.21'))->toBeNull();
+    expect(App\ContentParser::parseLauncherSource('PostmanRuntime/7.32.3'))->toBeNull();
+    expect(App\ContentParser::parseLauncherSource('okhttp/4.9.0'))->toBeNull();
+    expect(App\ContentParser::parseLauncherSource('python-requests/2.31.0'))->toBeNull();
+    expect(App\ContentParser::parseLauncherSource('plain-string-without-version'))->toBeNull();
+    expect(App\ContentParser::parseLauncherSource('too/many/slash/parts/1.0'))->toBeNull();
+    expect(App\ContentParser::parseLauncherSource(str_repeat('a', 65) . '/1.0'))->toBeNull();
+});
+
+test('parseJsonData falls back to User-Agent launcher source when omitted', function () {
+    $request = Mockery::mock(\Hyperf\HttpServer\Contract\RequestInterface::class);
+    $request->shouldReceive('getHeaderLine')->with('User-Agent')->andReturn('FCL/1.3.3.2');
+
+    $parser = new App\ContentParser($request);
+    $ref = new ReflectionClass(App\ContentParser::class);
+    $method = $ref->getMethod('parseJsonData');
+    $result = $method->invoke($parser, ['content' => 'test log']);
+
+    expect($result)->toBeArray();
+    expect($result['source'])->toBe('FCL/1.3.3.2');
+});
+
+test('parseJsonData does not overwrite explicit source with User-Agent', function () {
+    $request = Mockery::mock(\Hyperf\HttpServer\Contract\RequestInterface::class);
+    $request->shouldReceive('getHeaderLine')->with('User-Agent')->andReturn('FCL/1.3.3.2');
+
+    $parser = new App\ContentParser($request);
+    $ref = new ReflectionClass(App\ContentParser::class);
+    $method = $ref->getMethod('parseJsonData');
+    $result = $method->invoke($parser, ['content' => 'test log', 'source' => 'custom-source']);
+
+    expect($result)->toBeArray();
+    expect($result['source'])->toBe('custom-source');
 });

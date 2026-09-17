@@ -45,6 +45,7 @@ class AiQueueConsumer extends AbstractProcess
     private static int $processedJobs = 0;
 
     private bool $running = true;
+    private bool $draining = false;
     private int $lastBusyAt = 0;
 
     /**
@@ -87,9 +88,22 @@ class AiQueueConsumer extends AbstractProcess
             $this->reclaimLoop($activeConsumers);
         });
 
+        $drainDeadline = null;
         while ($this->running) {
             sleep(5);
             $this->maybeRecycle();
+            if ($this->draining) {
+                if ($drainDeadline === null) {
+                    $drainDeadline = time() + 30; // 30 秒排空宽限期
+                } elseif (time() > $drainDeadline) {
+                    \App\Syslog::error(
+                        'AiQueue',
+                        sprintf('consumer drain timeout after 30s with %d in-flight jobs, forcing exit for restart', self::$busyJobs)
+                    );
+                    $this->running = false;
+                    exit(0);
+                }
+            }
         }
     }
 
@@ -123,78 +137,106 @@ class AiQueueConsumer extends AbstractProcess
     }
 
     /**
-     * 自回收判定：
-     * 1. 任务量硬上限：累计处理达 RESTART_MAX_PROCESSED（500）且无在途任务，立即退出重启；
-     * 2. 内存阈值保护：当前 PHP 真实分配内存 ≥ RESTART_MAX_MEMORY_BYTES（256MB）且无在途任务，立即退出重启；
-     * 3. 周期空闲回落：无在途任务 + 队列无 pending + 处理量达标（50）+ 连续空闲 ≥ RESTART_IDLE_SECONDS（180s），退出重启。
+     * 获取当前进程操作系统物理常驻内存（VmRSS 字节数）。
+     *
+     * 堆碎片化主要体现在操作系统分配的 arena/chunk 虚拟页面上；
+     * 在调用 gc_mem_caches() 后，Zend 引擎内存统计（memory_get_usage）
+     * 会归还到进程分配器内部 free list 并显示为仅几 MB，无法反映真实 RSS；
+     * 故优先读取 /proc/self/status 的 VmRSS，非 Linux 或读取失败时回退 real_usage。
+     */
+    public static function getRssMemoryBytes(): int
+    {
+        $status = @file_get_contents('/proc/self/status');
+        if ($status !== false && preg_match('/VmRSS:\s+(\d+)\s+kB/i', $status, $m)) {
+            return ((int) $m[1]) * 1024;
+        }
+        return memory_get_usage(true);
+    }
+
+    /**
+     * 自回收判定与排空机制：
+     *
+     * 阶段一（Trigger）：检查是否满足三项自回收条件之一：
+     * 1. 任务量硬上限：累计处理达 RESTART_MAX_PROCESSED（500）；
+     * 2. 物理内存超标：处理达最低阈值（50）且物理 RSS ≥ RESTART_MAX_MEMORY_BYTES（256MB）；
+     * 3. 周期空闲回落：处理达最低阈值（50）且队列排队深度为 0 且连续空闲 ≥ RESTART_IDLE_SECONDS（180s）。
+     * 满足任意条件即置 $draining = true，所有消费协程立即停止从 Redis 取新任务。
+     *
+     * 阶段二（Drain & Exit）：
+     * 若已处于排空状态，等待在途任务完成（self::$busyJobs === 0）。
+     * 在途任务清空后记录 Syslog 并调用 exit(0) 退出进程，由 Swoole Manager 重新拉起干净进程（RSS 重置）；
+     * 若在途任务排空超时（由 handle 维护），超时强行退出。
      */
     private function maybeRecycle(): void
     {
-        if (self::$busyJobs > 0) {
-            $this->lastBusyAt = time();
-            return;
-        }
+        if (!$this->draining) {
+            $reason = null;
+            $rssBytes = self::getRssMemoryBytes();
 
-        // 1. 处理量硬上限自回收
-        if (self::$processedJobs >= self::RESTART_MAX_PROCESSED) {
-            \App\Syslog::error(
-                'AiQueue',
-                sprintf(
-                    'consumer max requests recycle: processed=%d >= %d, exiting for manager restart (RSS reset)',
+            // 1. 处理量硬上限自回收
+            if (self::$processedJobs >= self::RESTART_MAX_PROCESSED) {
+                $reason = sprintf(
+                    'processed=%d >= %d (max requests limit)',
                     self::$processedJobs,
                     self::RESTART_MAX_PROCESSED
-                )
-            );
-            exit(0);
+                );
+            } elseif (self::$processedJobs >= self::RESTART_MIN_PROCESSED && $rssBytes >= self::RESTART_MAX_MEMORY_BYTES) {
+                // 2. 真实物理常驻内存阈值自回收
+                $reason = sprintf(
+                    'rss=%dMB >= %dMB, processed=%d (memory limit)',
+                    intdiv($rssBytes, 1048576),
+                    intdiv(self::RESTART_MAX_MEMORY_BYTES, 1048576),
+                    self::$processedJobs
+                );
+            } elseif (self::$processedJobs >= self::RESTART_MIN_PROCESSED && (time() - $this->lastBusyAt >= self::RESTART_IDLE_SECONDS)) {
+                // 3. 周期空闲自回收
+                try {
+                    if (AnalysisQueue::queueDepth() === 0) {
+                        $reason = sprintf(
+                            'idle>=%ds, processed=%d (idle timeout)',
+                            self::RESTART_IDLE_SECONDS,
+                            self::$processedJobs
+                        );
+                    } else {
+                        $this->lastBusyAt = time();
+                    }
+                } catch (\Throwable) {
+                }
+            }
+
+            if ($reason !== null) {
+                $this->draining = true;
+                \App\Syslog::error(
+                    'AiQueue',
+                    sprintf('consumer initiating graceful drain for recycle: %s, activeBusyJobs=%d', $reason, self::$busyJobs)
+                );
+            }
         }
 
-        // 2. 内存阈值自回收
-        if (self::$processedJobs >= self::RESTART_MIN_PROCESSED && memory_get_usage(true) >= self::RESTART_MAX_MEMORY_BYTES) {
+        // 处于排空状态时：若在途任务已归零，执行优雅退出
+        if ($this->draining && self::$busyJobs === 0) {
             \App\Syslog::error(
                 'AiQueue',
                 sprintf(
-                    'consumer memory limit recycle: mem=%dMB >= %dMB, processed=%d, exiting for manager restart (RSS reset)',
-                    intdiv(memory_get_usage(true), 1048576),
-                    intdiv(self::RESTART_MAX_MEMORY_BYTES, 1048576),
-                    self::$processedJobs
+                    'consumer drain complete: processed=%d, rss=%dMB, exiting for manager restart (RSS reset)',
+                    self::$processedJobs,
+                    intdiv(self::getRssMemoryBytes(), 1048576)
                 )
             );
+            $this->running = false;
             exit(0);
         }
-
-        // 3. 低频空闲自回收
-        if (self::$processedJobs < self::RESTART_MIN_PROCESSED) {
-            return;
-        }
-        if (time() - $this->lastBusyAt < self::RESTART_IDLE_SECONDS) {
-            return;
-        }
-        try {
-            if (AnalysisQueue::queueDepth() > 0) {
-                $this->lastBusyAt = time();
-                return;
-            }
-        } catch (\Throwable $e) {
-            return;
-        }
-
-        \App\Syslog::error(
-            'AiQueue',
-            sprintf(
-                'consumer idle recycle: processed=%d, idle>=%ds, exiting for manager restart (RSS reset)',
-                self::$processedJobs,
-                self::RESTART_IDLE_SECONDS
-            )
-        );
-        exit(0);
     }
 
     public function consumeLoop(string $consumer): void
     {
-        while ($this->running) {
+        while ($this->running && !$this->draining) {
             try {
                 foreach (RedisStreams::xReadGroup(AnalysisQueue::GROUP, $consumer, AnalysisQueue::QUEUE_KEY, 5000) as [$id, $fields]) {
                     $this->runJob($id, (string) ($fields['jobId'] ?? ''));
+                    if ($this->draining) {
+                        break;
+                    }
                 }
             } catch (\Throwable $e) {
                 // NOGROUP（Redis 重启/flush）时重建消费组后继续
@@ -219,7 +261,7 @@ class AiQueueConsumer extends AbstractProcess
         $cfg = AnalysisQueue::config();
         $intervalMs = max(10000, intdiv(max(1, (int) $cfg['claimIdleMs']), 2));
         $cursor = '0-0';
-        while ($this->running) {
+        while ($this->running && !$this->draining) {
             usleep($intervalMs * 1000);
             try {
                 $this->cleanStaleConsumers($activeConsumers);
@@ -236,6 +278,9 @@ class AiQueueConsumer extends AbstractProcess
                         continue;
                     }
                     $this->runJob($id, (string) ($fields['jobId'] ?? ''));
+                    if ($this->draining) {
+                        break;
+                    }
                 }
             } catch (\Throwable $e) {
                 $cursor = '0-0';
@@ -259,6 +304,15 @@ class AiQueueConsumer extends AbstractProcess
             gc_collect_cycles();
             if (function_exists('gc_mem_caches')) {
                 gc_mem_caches();
+            }
+
+            // 单个任务完成后主动触发检查：
+            // 1. 若已处于排空阶段且此为最后一个在途任务，立即退出，无需等待 5s 轮询；
+            // 2. 若任务数已达上限或真实 RSS 超过阈值，立即开启排空阶段。
+            if ($this->draining && self::$busyJobs === 0) {
+                $this->maybeRecycle();
+            } elseif (!$this->draining && (self::$processedJobs >= self::RESTART_MAX_PROCESSED || self::getRssMemoryBytes() >= self::RESTART_MAX_MEMORY_BYTES)) {
+                $this->maybeRecycle();
             }
         }
     }
