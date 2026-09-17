@@ -144,9 +144,16 @@ class ContentParser
             $result['metadata'] = MetadataEntry::allFromArray($data['metadata']);
         }
 
-        // Parse source if provided
-        if (isset($data['source']) && is_string($data['source'])) {
-            $result['source'] = substr($data['source'], 0, 64);
+        // Parse source if provided, or fallback to User-Agent launcher format
+        if (isset($data['source']) && is_string($data['source']) && trim($data['source']) !== '') {
+            $result['source'] = substr(trim($data['source']), 0, 64);
+        } else {
+            try {
+                $ua = $this->request->getHeaderLine('User-Agent');
+                $result['source'] = static::parseLauncherSource($ua);
+            } catch (\Throwable) {
+                $result['source'] = null;
+            }
         }
 
         // Parse optional log id (used by AI analyse to bind session file access)
@@ -164,5 +171,70 @@ class ContentParser
         }
 
         return $result;
+    }
+
+    /**
+     * 从 User-Agent 字符串中解析启动器来源标识（必须符合“启动器/版本”结构）。
+     *
+     * 过滤掉通用浏览器（Mozilla/Chrome/Safari等）、通用HTTP工具（curl/Postman/okhttp等）
+     * 以及非“名称/版本”结构的普通UA。
+     *
+     * @param string|null $userAgent
+     * @return string|null 合法的启动器来源标识（≤64字符），若不符合则返回 null
+     */
+    public static function parseLauncherSource(?string $userAgent): ?string
+    {
+        if ($userAgent === null) {
+            return null;
+        }
+
+        $ua = trim($userAgent);
+        if ($ua === '' || strlen($ua) > 64) {
+            return null;
+        }
+
+        // 必须严格符合 "启动器名称/版本号" 单段格式（中间仅一个斜杠，无空格或多层段）
+        // 名称与版本允许字母、数字、点、下划线、短横线
+        if (!preg_match('/^[a-zA-Z0-9_-]+\/[a-zA-Z0-9_.-]+$/', $ua)) {
+            return null;
+        }
+
+        [$name] = explode('/', $ua, 2);
+        $lowerName = strtolower($name);
+
+        // 排除常见通用浏览器、爬虫及通用 HTTP 客户端黑名单
+        $blacklist = [
+            'mozilla',
+            'chrome',
+            'safari',
+            'firefox',
+            'opera',
+            'edge',
+            'webkit',
+            'gecko',
+            'curl',
+            'wget',
+            'postman',
+            'postmanruntime',
+            'okhttp',
+            'python',
+            'python-requests',
+            'go-http-client',
+            'apache-httpclient',
+            'java',
+            'axios',
+            'node-fetch',
+            'undici',
+            'insomnia',
+            'httpie',
+            'rest-client',
+            'dalvik',
+        ];
+
+        if (in_array($lowerName, $blacklist, true)) {
+            return null;
+        }
+
+        return $ua;
     }
 }

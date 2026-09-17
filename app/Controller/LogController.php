@@ -31,6 +31,10 @@ class LogController extends AbstractController
             }
         }
 
+        if (empty($source)) {
+            $source = \App\ContentParser::parseLauncherSource($this->request->getHeaderLine('User-Agent'));
+        }
+
         $log = new \App\Log();
         $token = new Token();
 
