@@ -1534,6 +1534,117 @@ paths:
       responses:
         '200':
           description: OK
+  /v1/admin/analytics/sources:
+    get:
+      tags: [Admin]
+      summary: Get client source distribution (Admin)
+      operationId: adminGetAnalyticsSources
+      security:
+        - AdminBearerAuth: []
+        - AdminHeaderAuth: []
+      parameters:
+        - name: days
+          in: query
+          required: false
+          schema: { type: integer, default: 7 }
+      responses:
+        '200':
+          description: OK
+  /v1/admin/analytics/versions:
+    get:
+      tags: [Admin]
+      summary: Get Minecraft versions and mod loader matrix (Admin)
+      operationId: adminGetAnalyticsVersions
+      security:
+        - AdminBearerAuth: []
+        - AdminHeaderAuth: []
+      parameters:
+        - name: days
+          in: query
+          required: false
+          schema: { type: integer, default: 30 }
+      responses:
+        '200':
+          description: OK
+  /v1/admin/analytics/trends:
+    get:
+      tags: [Admin]
+      summary: Get log upload and size trends (Admin)
+      operationId: adminGetAnalyticsTrends
+      security:
+        - AdminBearerAuth: []
+        - AdminHeaderAuth: []
+      parameters:
+        - name: days
+          in: query
+          required: false
+          schema: { type: integer, default: 7 }
+      responses:
+        '200':
+          description: OK
+  /v1/admin/system/storage-health:
+    get:
+      tags: [Admin]
+      summary: Get storage health and resource diagnostics (Admin)
+      operationId: adminGetStorageHealth
+      security:
+        - AdminBearerAuth: []
+        - AdminHeaderAuth: []
+      responses:
+        '200':
+          description: OK
+  /v1/admin/system/cleanup-expired:
+    post:
+      tags: [Admin]
+      summary: Trigger expired logs cleanup (Admin)
+      operationId: adminCleanupExpired
+      security:
+        - AdminBearerAuth: []
+        - AdminHeaderAuth: []
+      responses:
+        '200':
+          description: OK
+  /v1/admin/system/cache/flush:
+    post:
+      tags: [Admin]
+      summary: Flush Redis cache by prefix (Admin)
+      operationId: adminFlushCache
+      security:
+        - AdminBearerAuth: []
+        - AdminHeaderAuth: []
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                prefix: { type: string, default: "log:*" }
+      responses:
+        '200':
+          description: OK
+  /v1/admin/logs/batch-delete:
+    post:
+      tags: [Admin]
+      summary: Batch delete logs by criteria (Admin)
+      operationId: adminBatchDeleteLogs
+      security:
+        - AdminBearerAuth: []
+        - AdminHeaderAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                source: { type: string }
+                since: { type: integer }
+                until: { type: integer }
+                keyword: { type: string }
+                limit: { type: integer, default: 500 }
+      responses:
+        '200':
+          description: OK
 components:
   securitySchemes:
     AdminBearerAuth:
