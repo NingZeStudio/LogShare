@@ -11,6 +11,8 @@ use App\Log;
 use App\Middleware\AdminAuthMiddleware;
 use App\Rag\RagManager;
 use App\Storage\StorageInterface;
+use App\System\AnalyticsService;
+use App\System\StorageHealthService;
 use App\System\SystemLogManager;
 use App\Telemetry\TelemetryService;
 use App\Version;
@@ -709,6 +711,108 @@ class AdminController extends AbstractController
     {
         $cleared = SystemLogManager::clearLogs();
         return $this->respondSuccess(['cleared' => $cleared], 'System logs cleared');
+    }
+
+    #[GetMapping(path: 'analytics/sources')]
+    public function getAnalyticsSources(): ResponseInterface
+    {
+        $params = $this->request->getQueryParams();
+        $days = isset($params['days']) && is_numeric($params['days']) ? (int) $params['days'] : 7;
+        $stats = AnalyticsService::getSourceStats($days);
+        return $this->respondSuccess($stats, 'Source distribution retrieved successfully');
+    }
+
+    #[GetMapping(path: 'analytics/versions')]
+    public function getAnalyticsVersions(): ResponseInterface
+    {
+        $params = $this->request->getQueryParams();
+        $days = isset($params['days']) && is_numeric($params['days']) ? (int) $params['days'] : 30;
+        $stats = AnalyticsService::getVersionStats($days);
+        return $this->respondSuccess($stats, 'Version statistics retrieved successfully');
+    }
+
+    #[GetMapping(path: 'analytics/trends')]
+    public function getAnalyticsTrends(): ResponseInterface
+    {
+        $params = $this->request->getQueryParams();
+        $days = isset($params['days']) && is_numeric($params['days']) ? (int) $params['days'] : 7;
+        $trends = AnalyticsService::getTrends($days);
+        return $this->respondSuccess($trends, 'Log trends retrieved successfully');
+    }
+
+    #[GetMapping(path: 'system/storage-health')]
+    public function getStorageHealth(): ResponseInterface
+    {
+        $health = StorageHealthService::getHealth();
+        return $this->respondSuccess($health, 'Storage health diagnostics retrieved successfully');
+    }
+
+    #[PostMapping(path: 'system/cleanup-expired')]
+    public function cleanupExpiredLogs(): ResponseInterface
+    {
+        try {
+            $result = StorageHealthService::cleanupExpired();
+            return $this->respondSuccess($result, "Cleanup completed: {$result['deletedCount']} logs removed");
+        } catch (\Throwable $e) {
+            throw new ApiError(500, 'Failed to execute expired log cleanup: ' . $e->getMessage());
+        }
+    }
+
+    #[PostMapping(path: 'system/cache/flush')]
+    public function flushCache(): ResponseInterface
+    {
+        $body = $this->request->getParsedBody();
+        $prefix = isset($body['prefix']) && is_string($body['prefix']) ? trim($body['prefix']) : 'log:*';
+        $result = StorageHealthService::flushCache($prefix);
+        return $this->respondSuccess($result, "Cache flush executed for prefix: {$prefix}");
+    }
+
+    #[PostMapping(path: 'logs/batch-delete')]
+    public function batchDeleteLogs(): ResponseInterface
+    {
+        $body = $this->request->getParsedBody();
+        if (!is_array($body)) {
+            throw new ApiError(400, 'Invalid request body');
+        }
+
+        $source = isset($body['source']) && is_string($body['source']) && trim($body['source']) !== '' ? trim($body['source']) : null;
+        $since = isset($body['since']) && is_numeric($body['since']) ? (int) $body['since'] : null;
+        $until = isset($body['until']) && is_numeric($body['until']) ? (int) $body['until'] : null;
+        $keyword = isset($body['keyword']) && is_string($body['keyword']) && trim($body['keyword']) !== '' ? trim($body['keyword']) : null;
+        $limit = isset($body['limit']) && is_numeric($body['limit']) ? min(1000, max(1, (int) $body['limit'])) : 500;
+
+        if ($source === null && $since === null && $until === null && $keyword === null) {
+            throw new ApiError(400, 'At least one filter condition (source, since, until, or keyword) is required for batch deletion');
+        }
+
+        $storage = $this->getStorageClass();
+        $items = $storage::List($limit, 0, $source, $since, $until, $keyword);
+        $totalMatched = $storage::Count($source, $since, $until, $keyword);
+
+        $deleted = [];
+        $failed = [];
+
+        foreach ($items as $item) {
+            $logId = (string) $item['id'];
+            try {
+                $parsedId = new Id($logId);
+                $log = new Log($parsedId);
+                if ($log->exists() && $log->delete()) {
+                    $deleted[] = $logId;
+                } else {
+                    $failed[] = $logId;
+                }
+            } catch (\Throwable) {
+                $failed[] = $logId;
+            }
+        }
+
+        return $this->respondSuccess([
+            'deletedCount' => count($deleted),
+            'failedCount' => count($failed),
+            'totalMatched' => $totalMatched,
+            'remaining' => max(0, $totalMatched - count($deleted)),
+        ], 'Batch deletion completed');
     }
 }
 

@@ -880,6 +880,83 @@ POST /v1/admin/rag/docs/delete
 
 安全删除指定知识库文档，受路径遍历白名单保护。
 
+### 21. 客户端与生态来源分布统计
+
+```
+GET /v1/admin/analytics/sources?days=7
+```
+
+参数：
+- `days`: 查询天数（1-90，默认 7）
+
+响应：
+- `days`: 查询天数
+- `total`: 该时间段日志总数
+- `sources`: 来源生态列表（`source`, `count`, `percentage`）
+
+### 22. Minecraft 版本与加载器矩阵
+
+```
+GET /v1/admin/analytics/versions?days=30
+```
+
+参数：
+- `days`: 采样天数（1-90，默认 30）
+
+响应：
+- `versions`: MC 核心版本排行与占比
+- `loaders`: Mod/服务端加载器分布排行与占比
+
+### 23. 日志时序走势大盘
+
+```
+GET /v1/admin/analytics/trends?days=7
+```
+
+参数：
+- `days`: 统计天数（1-30，默认 7）
+
+响应：
+- `trends`: 按日走势列表（`date`, `count`, `bytes`）
+
+### 24. 存储健康度与底层资源诊断
+
+```
+GET /v1/admin/system/storage-health
+```
+
+返回 MariaDB 表数据与索引大小、文件系统磁盘剩余容量、Redis 内存占用与 Key 数量。
+
+### 25. 手动触发过期日志清理
+
+```
+POST /v1/admin/system/cleanup-expired
+```
+
+立即执行底层的 `CleanupExpired()`，返回回收条数与耗时。
+
+### 26. Redis 缓存按需清空
+
+```
+POST /v1/admin/system/cache/flush
+```
+
+请求体：
+- `prefix`: 缓存前缀（默认 `log:*`，支持 `ai:*` 或 `all`）
+
+### 27. 按条件批量下架日志
+
+```
+POST /v1/admin/logs/batch-delete
+```
+
+请求体：
+- `source`: 可选来源过滤
+- `since`: 可选起始时间戳
+- `until`: 可选结束时间戳
+- `keyword`: 可选关键词
+- `limit`: 单次上限（1-1000，默认 500）
+
 ---
 
 ## 通用响应格式
