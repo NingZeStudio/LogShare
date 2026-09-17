@@ -71,6 +71,7 @@ class AiQueueRedisTest extends HttpTestCase
                 RedisStreams::del('ai:job:active:' . hash('sha256', $cacheKey));
                 RedisStreams::del('analysis-v2:' . $cacheKey);
             }
+            \App\System\AiMetricsService::clearMetrics();
         } catch (\Throwable $e) {
             // Redis 不可用时忽略
         }

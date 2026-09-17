@@ -7,9 +7,8 @@ namespace Tests\Unit;
 use App\System\AiMetricsService;
 
 beforeEach(function () {
-    // 清理测试用的运行时状态文件
+    AiMetricsService::clearMetrics();
     $files = [
-        CORE_PATH . '/runtime/ai_metrics.json',
         CORE_PATH . '/runtime/ai_queue_paused',
         CORE_PATH . '/runtime/ai_dead_jobs.json',
     ];
@@ -19,11 +18,12 @@ beforeEach(function () {
         }
     }
     AiMetricsService::setPaused(false);
+    AiMetricsService::clearDeadJobs();
 });
 
 afterEach(function () {
+    AiMetricsService::clearMetrics();
     $files = [
-        CORE_PATH . '/runtime/ai_metrics.json',
         CORE_PATH . '/runtime/ai_queue_paused',
         CORE_PATH . '/runtime/ai_dead_jobs.json',
     ];
@@ -33,6 +33,7 @@ afterEach(function () {
         }
     }
     AiMetricsService::setPaused(false);
+    AiMetricsService::clearDeadJobs();
 });
 
 test('AiMetricsService records analysis and computes summary statistics', function () {
