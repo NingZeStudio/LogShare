@@ -286,7 +286,11 @@ final class AnalyticsService
                 ->get();
 
             // 预估单篇日志平均体积，彻底杜绝全表扫描大字段 SUM(LENGTH(data)) 导致的慢查询卡死
-            $avgSize = (int) (Db::table('log_metadata')->where('key', 'size')->avg(Db::raw('CAST(value AS UNSIGNED)')) ?: 300_000);
+            $avgSizeRow = Db::table('log_metadata')
+                ->where('key', 'size')
+                ->selectRaw('AVG(CAST(value AS UNSIGNED)) as avg_sz')
+                ->first();
+            $avgSize = (int) (($avgSizeRow->avg_sz ?? 0) ?: 300_000);
             if ($avgSize <= 0) {
                 $avgSize = 300_000;
             }
