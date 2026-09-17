@@ -1820,6 +1820,79 @@ paths:
       responses:
         '200':
           description: OK
+  /v1/admin/spinyarn/status:
+    get:
+      tags: [Admin]
+      summary: Get SpinYarn extension status and local mappings library (Admin)
+      operationId: adminGetSpinYarnStatus
+      security:
+        - AdminBearerAuth: []
+        - AdminHeaderAuth: []
+      responses:
+        '200':
+          description: OK
+  /v1/admin/spinyarn/test:
+    post:
+      tags: [Admin]
+      summary: Test online SpinYarn deobfuscation probe (Admin)
+      operationId: adminTestSpinYarn
+      security:
+        - AdminBearerAuth: []
+        - AdminHeaderAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [content, version]
+              properties:
+                content: { type: string }
+                version: { type: string }
+                mappingType: { type: string, enum: [yarn, vanilla] }
+      responses:
+        '200':
+          description: OK
+  /v1/admin/audit/logs:
+    get:
+      tags: [Admin]
+      summary: Paginated query of sensitive operation audit logs (Admin)
+      operationId: adminGetAuditLogs
+      security:
+        - AdminBearerAuth: []
+        - AdminHeaderAuth: []
+      parameters:
+        - name: page
+          in: query
+          schema: { type: integer, default: 1 }
+        - name: pageSize
+          in: query
+          schema: { type: integer, default: 20 }
+        - name: action
+          in: query
+          schema: { type: string }
+        - name: keyword
+          in: query
+          schema: { type: string }
+        - name: since
+          in: query
+          schema: { type: integer }
+        - name: until
+          in: query
+          schema: { type: integer }
+      responses:
+        '200':
+          description: OK
+    delete:
+      tags: [Admin]
+      summary: Clear sensitive operation audit logs (Admin)
+      operationId: adminClearAuditLogs
+      security:
+        - AdminBearerAuth: []
+        - AdminHeaderAuth: []
+      responses:
+        '200':
+          description: OK
 components:
   securitySchemes:
     AdminBearerAuth:
