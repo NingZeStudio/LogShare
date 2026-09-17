@@ -123,6 +123,8 @@ test('parseLauncherSource accepts launcher/version formats', function () {
     expect(App\ContentParser::parseLauncherSource('HMCL/3.5.3.245'))->toBe('HMCL/3.5.3.245');
     expect(App\ContentParser::parseLauncherSource('PCL2/2.8.0'))->toBe('PCL2/2.8.0');
     expect(App\ContentParser::parseLauncherSource('  FoldCraft/1.2.0  '))->toBe('FoldCraft/1.2.0');
+    expect(App\ContentParser::parseLauncherSource('折叠工艺/1.2.0'))->toBe('折叠工艺/1.2.0');
+    expect(App\ContentParser::parseLauncherSource('Launcher/1.0.0+build.42'))->toBe('Launcher/1.0.0+build.42');
 });
 
 test('parseLauncherSource rejects browsers, tools, and invalid formats', function () {
@@ -164,4 +166,30 @@ test('parseJsonData does not overwrite explicit source with User-Agent', functio
 
     expect($result)->toBeArray();
     expect($result['source'])->toBe('custom-source');
+});
+
+test('parseJsonData falls back to 未指定 when both source and User-Agent launcher are absent', function () {
+    $request = Mockery::mock(\Hyperf\HttpServer\Contract\RequestInterface::class);
+    $request->shouldReceive('getHeaderLine')->with('User-Agent')->andReturn('Mozilla/5.0 (Windows NT 10.0; Win64; x64)');
+
+    $parser = new App\ContentParser($request);
+    $ref = new ReflectionClass(App\ContentParser::class);
+    $method = $ref->getMethod('parseJsonData');
+    $result = $method->invoke($parser, ['content' => 'test log']);
+
+    expect($result)->toBeArray();
+    expect($result['source'])->toBe('未指定');
+});
+
+test('parseJsonData falls back to 未指定 when User-Agent is empty', function () {
+    $request = Mockery::mock(\Hyperf\HttpServer\Contract\RequestInterface::class);
+    $request->shouldReceive('getHeaderLine')->with('User-Agent')->andReturn('');
+
+    $parser = new App\ContentParser($request);
+    $ref = new ReflectionClass(App\ContentParser::class);
+    $method = $ref->getMethod('parseJsonData');
+    $result = $method->invoke($parser, ['content' => 'test log']);
+
+    expect($result)->toBeArray();
+    expect($result['source'])->toBe('未指定');
 });

@@ -144,15 +144,16 @@ class ContentParser
             $result['metadata'] = MetadataEntry::allFromArray($data['metadata']);
         }
 
-        // Parse source if provided, or fallback to User-Agent launcher format
+        // Parse source if provided, or fallback to User-Agent launcher format, otherwise '未指定'
         if (isset($data['source']) && is_string($data['source']) && trim($data['source']) !== '') {
             $result['source'] = substr(trim($data['source']), 0, 64);
         } else {
             try {
                 $ua = $this->request->getHeaderLine('User-Agent');
-                $result['source'] = static::parseLauncherSource($ua);
+                $launcher = static::parseLauncherSource($ua);
+                $result['source'] = $launcher ?? '未指定';
             } catch (\Throwable) {
-                $result['source'] = null;
+                $result['source'] = '未指定';
             }
         }
 
@@ -194,8 +195,8 @@ class ContentParser
         }
 
         // 必须严格符合 "启动器名称/版本号" 单段格式（中间仅一个斜杠，无空格或多层段）
-        // 名称与版本允许字母、数字、点、下划线、短横线
-        if (!preg_match('/^[a-zA-Z0-9_-]+\/[a-zA-Z0-9_.-]+$/', $ua)) {
+        // 名称与版本允许字母、数字、点、下划线、短横线、加号（兼容 semver build metadata）
+        if (!preg_match('/^[\p{L}\p{N}_-]+\/[\p{L}\p{N}_.+\-]+$/u', $ua)) {
             return null;
         }
 

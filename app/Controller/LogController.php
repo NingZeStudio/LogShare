@@ -32,7 +32,9 @@ class LogController extends AbstractController
         }
 
         if (empty($source)) {
-            $source = \App\ContentParser::parseLauncherSource($this->request->getHeaderLine('User-Agent'));
+            $ua = $this->request->getHeaderLine('User-Agent');
+            $launcher = \App\ContentParser::parseLauncherSource($ua);
+            $source = $launcher ?? '未指定';
         }
 
         $log = new \App\Log();
