@@ -55,9 +55,9 @@ class MariaDbStorage implements StorageInterface
             $document['token'] = $token->get();
         }
 
-        if ($source !== null) {
-            $document['source'] = substr($source, 0, 64);
-        }
+        $document['source'] = ($source !== null && trim($source) !== '')
+            ? substr(trim($source), 0, 64)
+            : '未指定';
 
         Db::table(self::TABLE_LOGS)->insert($document);
 
@@ -170,7 +170,7 @@ class MariaDbStorage implements StorageInterface
             'data' => $log->data,
             'token' => $log->token,
             'metadata' => $metadata,
-            'source' => $log->source,
+            'source' => $log->source !== null && (string) $log->source !== '' ? (string) $log->source : '未指定',
             'created' => (int) $log->created,
             'files' => $files,
         ];
@@ -229,7 +229,15 @@ class MariaDbStorage implements StorageInterface
     {
         $query = Db::table(self::TABLE_LOGS);
         if ($source !== null && $source !== '') {
-            $query->where('source', $source);
+            if ($source === '未指定') {
+                $query->where(function ($q) {
+                    $q->whereNull('source')
+                      ->orWhere('source', '')
+                      ->orWhere('source', '未指定');
+                });
+            } else {
+                $query->where('source', $source);
+            }
         }
         if ($since !== null) {
             $query->where('created', '>=', $since);
@@ -268,7 +276,7 @@ class MariaDbStorage implements StorageInterface
             $results[] = [
                 'id' => $fullId,
                 'size' => (int) $row->size,
-                'source' => $row->source !== null ? (string) $row->source : null,
+                'source' => $row->source !== null && (string) $row->source !== '' ? (string) $row->source : '未指定',
                 'created' => (int) $row->created,
                 'filesCount' => (int) $row->files_count,
             ];
@@ -280,7 +288,15 @@ class MariaDbStorage implements StorageInterface
     {
         $query = Db::table(self::TABLE_LOGS);
         if ($source !== null && $source !== '') {
-            $query->where('source', $source);
+            if ($source === '未指定') {
+                $query->where(function ($q) {
+                    $q->whereNull('source')
+                      ->orWhere('source', '')
+                      ->orWhere('source', '未指定');
+                });
+            } else {
+                $query->where('source', $source);
+            }
         }
         if ($since !== null) {
             $query->where('created', '>=', $since);

@@ -44,9 +44,9 @@ class FilesystemStorage implements StorageInterface
             $document['metadata'] = array_map(fn($entry) => $entry->jsonSerialize(), $metadata);
         }
 
-        if ($source !== null) {
-            $document['source'] = substr($source, 0, 64);
-        }
+        $document['source'] = ($source !== null && trim($source) !== '')
+            ? substr(trim($source), 0, 64)
+            : '未指定';
 
         if (!empty($files)) {
             $document['files'] = array_values(array_map(
@@ -67,7 +67,11 @@ class FilesystemStorage implements StorageInterface
             @unlink($path . '.meta.json');
             throw $e;
         }
-        self::writeAtomically($path . '.meta.json', ['created' => $document['created']]);
+        self::writeAtomically($path . '.meta.json', [
+            'created' => $document['created'],
+            'source' => $document['source'],
+            'filesCount' => count($document['files'] ?? []),
+        ]);
         return $id;
     }
 
@@ -94,7 +98,7 @@ class FilesystemStorage implements StorageInterface
             'data' => $document['data'] ?? null,
             'token' => $document['token'] ?? null,
             'metadata' => $document['metadata'] ?? [],
-            'source' => $document['source'] ?? null,
+            'source' => (isset($document['source']) && $document['source'] !== '') ? (string) $document['source'] : '未指定',
             'created' => self::readCreated($basePath . $id->getRaw(), $document),
             // 与 MariaDbStorage 对称：includeContent=false 仅剥离附加文件内容
             'files' => self::normalizeFiles($document['files'] ?? [], $includeContent),
@@ -285,15 +289,42 @@ class FilesystemStorage implements StorageInterface
                 continue;
             }
 
+            $itemSource = is_array($metaData) && isset($metaData['source']) && (string) $metaData['source'] !== ''
+                ? (string) $metaData['source']
+                : null;
+            if ($itemSource === null) {
+                $rawContent = @file_get_contents($basePath . $file);
+                if ($rawContent !== false) {
+                    $doc = json_decode($rawContent, true);
+                    if (is_array($doc) && isset($doc['source']) && (string) $doc['source'] !== '') {
+                        $itemSource = (string) $doc['source'];
+                    }
+                }
+            }
+            $itemSource = $itemSource ?? '未指定';
+
+            if ($source !== null && $source !== '') {
+                if ($source === '未指定') {
+                    if ($itemSource !== '未指定') {
+                        continue;
+                    }
+                } else {
+                    if ($itemSource !== $source) {
+                        continue;
+                    }
+                }
+            }
+
             $fullId = \App\Id::fromRaw('f', $file)->get();
             $fileSize = filesize($basePath . $file);
+            $filesCount = is_array($metaData) && isset($metaData['filesCount']) ? (int) $metaData['filesCount'] : 0;
 
             $entries[] = [
                 'id' => $fullId,
                 'size' => $fileSize !== false ? $fileSize : 0,
-                'source' => null,
+                'source' => $itemSource,
                 'created' => $created,
-                'filesCount' => 0,
+                'filesCount' => $filesCount,
             ];
         }
 
@@ -345,6 +376,32 @@ class FilesystemStorage implements StorageInterface
             }
             if ($until !== null && $created > $until) {
                 continue;
+            }
+
+            $itemSource = is_array($metaData) && isset($metaData['source']) && (string) $metaData['source'] !== ''
+                ? (string) $metaData['source']
+                : null;
+            if ($itemSource === null) {
+                $rawContent = @file_get_contents($basePath . $file);
+                if ($rawContent !== false) {
+                    $doc = json_decode($rawContent, true);
+                    if (is_array($doc) && isset($doc['source']) && (string) $doc['source'] !== '') {
+                        $itemSource = (string) $doc['source'];
+                    }
+                }
+            }
+            $itemSource = $itemSource ?? '未指定';
+
+            if ($source !== null && $source !== '') {
+                if ($source === '未指定') {
+                    if ($itemSource !== '未指定') {
+                        continue;
+                    }
+                } else {
+                    if ($itemSource !== $source) {
+                        continue;
+                    }
+                }
             }
 
             $count++;

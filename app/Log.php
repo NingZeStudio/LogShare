@@ -109,7 +109,7 @@ class Log
         $this->data = $result['data'];
         $this->token = isset($result['token']) ? new Token($result['token']) : null;
         $this->metadata = MetadataEntry::allFromArray($result['metadata'] ?? []);
-        $this->source = $result['source'] ?? null;
+        $this->source = (isset($result['source']) && $result['source'] !== '') ? (string) $result['source'] : '未指定';
         $createdValue = $result['created'] ?? null;
         $this->created = is_numeric($createdValue) ? (int) $createdValue : null;
         $this->expires = $this->created !== null ? $this->created + $config['storageTime'] : null;
@@ -348,7 +348,7 @@ class Log
         // 上传响应通过调用方持有的 $token 原对象返回原文。
         $this->token = new Token(hash('sha256', (string) $plainToken->get()));
         $this->metadata = $metadata;
-        $this->source = $source;
+        $this->source = ($source !== null && trim($source) !== '') ? trim($source) : '未指定';
         $this->files = [];
 
         if (!empty($files)) {
@@ -562,7 +562,7 @@ class Log
      */
     public function getSource(): ?string
     {
-        return $this->source;
+        return $this->source !== null && $this->source !== '' ? $this->source : '未指定';
     }
 
     /**
