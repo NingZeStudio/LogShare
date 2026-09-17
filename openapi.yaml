@@ -1645,6 +1645,105 @@ paths:
       responses:
         '200':
           description: OK
+  /v1/admin/security/bans:
+    get:
+      tags: [Admin]
+      summary: List banned IP addresses (Admin)
+      operationId: adminListBans
+      security:
+        - AdminBearerAuth: []
+        - AdminHeaderAuth: []
+      responses:
+        '200':
+          description: OK
+  /v1/admin/security/ban:
+    post:
+      tags: [Admin]
+      summary: Manually ban an IP address (Admin)
+      operationId: adminBanIp
+      security:
+        - AdminBearerAuth: []
+        - AdminHeaderAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [ip]
+              properties:
+                ip: { type: string }
+                ttl: { type: integer, default: 86400 }
+                reason: { type: string }
+      responses:
+        '200':
+          description: OK
+  /v1/admin/security/unban:
+    post:
+      tags: [Admin]
+      summary: Manually unban an IP address (Admin)
+      operationId: adminUnbanIp
+      security:
+        - AdminBearerAuth: []
+        - AdminHeaderAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [ip]
+              properties:
+                ip: { type: string }
+      responses:
+        '200':
+          description: OK
+  /v1/admin/security/overview:
+    get:
+      tags: [Admin]
+      summary: Get edge WAF attack stats overview (Admin)
+      operationId: adminGetSecurityOverview
+      security:
+        - AdminBearerAuth: []
+        - AdminHeaderAuth: []
+      responses:
+        '200':
+          description: OK
+  /v1/admin/security/content-rules:
+    get:
+      tags: [Admin]
+      summary: Get content reject rules (Admin)
+      operationId: adminGetContentRules
+      security:
+        - AdminBearerAuth: []
+        - AdminHeaderAuth: []
+      responses:
+        '200':
+          description: OK
+    put:
+      tags: [Admin]
+      summary: Update content reject rules (Admin)
+      operationId: adminUpdateContentRules
+      security:
+        - AdminBearerAuth: []
+        - AdminHeaderAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                enabled: { type: boolean }
+                keywords:
+                  type: array
+                  items: { type: string }
+                patterns:
+                  type: array
+                  items: { type: string }
+      responses:
+        '200':
+          description: OK
 components:
   securitySchemes:
     AdminBearerAuth:

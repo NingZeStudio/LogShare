@@ -957,7 +957,63 @@ POST /v1/admin/logs/batch-delete
 - `keyword`: 可选关键词
 - `limit`: 单次上限（1-1000，默认 500）
 
+### 28. 封禁 IP 清单查询
+
+```
+GET /v1/admin/security/bans
+```
+
+返回当前所有处于封禁状态的 IP 地址、解封时间戳、剩余有效期与封禁原因（合并 Redis 活跃键与 OpenLiteWaf 本地持久化）。
+
+### 29. 手动封禁 IP
+
+```
+POST /v1/admin/security/ban
+```
+
+请求体：
+- `ip`: 目标 IPv4 或 IPv6 地址（必填）
+- `ttl`: 封禁时长（秒，默认 86400）
+- `reason`: 封禁原因备注（可选）
+
+### 30. 手动解除 IP 封禁
+
+```
+POST /v1/admin/security/unban
+```
+
+请求体：
+- `ip`: 目标 IP 地址（必填）
+
+### 31. 边缘防御概览与分类拦截统计
+
+```
+GET /v1/admin/security/overview
+```
+
+返回 OpenLiteWaf 拦截大盘数据，包括累计拦截次数、当前封禁 IP 总量、分类拦截计数（CC、SQL 注入、XSS、目录穿越、RCE/探针等）。
+
+### 32. 获取违规内容过滤规则
+
+```
+GET /v1/admin/security/content-rules
+```
+
+返回当前生效的违规内容过滤开关（`enabled`）、关键词黑名单（`keywords`）和正则表达式规则列表（`patterns`）。
+
+### 33. 更新违规内容过滤规则
+
+```
+PUT /v1/admin/security/content-rules
+```
+
+请求体：
+- `enabled`: 布尔值，是否启用内容过滤
+- `keywords`: 字符串数组，违规关键词列表
+- `patterns`: 字符串数组，违规正则列表
+
 ---
+
 
 ## 通用响应格式
 

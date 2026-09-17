@@ -12,6 +12,7 @@ use App\Middleware\AdminAuthMiddleware;
 use App\Rag\RagManager;
 use App\Storage\StorageInterface;
 use App\System\AnalyticsService;
+use App\System\SecurityService;
 use App\System\StorageHealthService;
 use App\System\SystemLogManager;
 use App\Telemetry\TelemetryService;
@@ -813,6 +814,75 @@ class AdminController extends AbstractController
             'totalMatched' => $totalMatched,
             'remaining' => max(0, $totalMatched - count($deleted)),
         ], 'Batch deletion completed');
+    }
+
+    #[GetMapping(path: 'security/bans')]
+    public function getSecurityBans(): ResponseInterface
+    {
+        $bans = SecurityService::getBannedIps();
+        return $this->respondSuccess([
+            'bans' => $bans,
+            'total' => count($bans),
+        ], 'Banned IP list retrieved successfully');
+    }
+
+    #[PostMapping(path: 'security/ban')]
+    public function banIp(): ResponseInterface
+    {
+        $body = $this->request->getParsedBody();
+        if (!is_array($body) || empty($body['ip'])) {
+            throw new ApiError(400, 'IP address is required');
+        }
+
+        $ip = trim((string) $body['ip']);
+        $ttl = isset($body['ttl']) && is_numeric($body['ttl']) ? (int) $body['ttl'] : 86400;
+        $reason = isset($body['reason']) && is_string($body['reason']) ? trim($body['reason']) : '管理员主动封禁';
+
+        $result = SecurityService::banIp($ip, $ttl, $reason);
+        return $this->respondSuccess($result, "IP [{$ip}] successfully banned");
+    }
+
+    #[PostMapping(path: 'security/unban')]
+    public function unbanIp(): ResponseInterface
+    {
+        $body = $this->request->getParsedBody();
+        if (!is_array($body) || empty($body['ip'])) {
+            throw new ApiError(400, 'IP address is required');
+        }
+
+        $ip = trim((string) $body['ip']);
+        $success = SecurityService::unbanIp($ip);
+
+        return $this->respondSuccess([
+            'ip' => $ip,
+            'unbanned' => $success,
+        ], "IP [{$ip}] unbanned successfully");
+    }
+
+    #[GetMapping(path: 'security/overview')]
+    public function getSecurityOverview(): ResponseInterface
+    {
+        $overview = SecurityService::getWafOverview();
+        return $this->respondSuccess($overview, 'Security overview retrieved successfully');
+    }
+
+    #[GetMapping(path: 'security/content-rules')]
+    public function getContentRules(): ResponseInterface
+    {
+        $rules = SecurityService::getContentRules();
+        return $this->respondSuccess($rules, 'Content reject rules retrieved successfully');
+    }
+
+    #[PutMapping(path: 'security/content-rules')]
+    public function updateContentRules(): ResponseInterface
+    {
+        $body = $this->request->getParsedBody();
+        if (!is_array($body)) {
+            throw new ApiError(400, 'Invalid request body');
+        }
+
+        $rules = SecurityService::saveContentRules($body);
+        return $this->respondSuccess($rules, 'Content reject rules updated successfully');
     }
 }
 
