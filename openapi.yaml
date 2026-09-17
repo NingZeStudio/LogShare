@@ -1744,6 +1744,82 @@ paths:
       responses:
         '200':
           description: OK
+  /v1/admin/ai/metrics:
+    get:
+      tags: [Admin]
+      summary: Get AI operations and quality metrics (Admin)
+      operationId: adminGetAiMetrics
+      security:
+        - AdminBearerAuth: []
+        - AdminHeaderAuth: []
+      parameters:
+        - name: days
+          in: query
+          required: false
+          schema: { type: integer, default: 7 }
+      responses:
+        '200':
+          description: OK
+  /v1/admin/ai/queue/inspect:
+    get:
+      tags: [Admin]
+      summary: Deep inspect AI micro-queue and dead letters (Admin)
+      operationId: adminInspectAiQueue
+      security:
+        - AdminBearerAuth: []
+        - AdminHeaderAuth: []
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, default: 20 }
+      responses:
+        '200':
+          description: OK
+  /v1/admin/ai/queue/pause:
+    post:
+      tags: [Admin]
+      summary: Pause AI micro-queue consumer (Admin)
+      operationId: adminPauseAiQueue
+      security:
+        - AdminBearerAuth: []
+        - AdminHeaderAuth: []
+      responses:
+        '200':
+          description: OK
+  /v1/admin/ai/queue/resume:
+    post:
+      tags: [Admin]
+      summary: Resume AI micro-queue consumer (Admin)
+      operationId: adminResumeAiQueue
+      security:
+        - AdminBearerAuth: []
+        - AdminHeaderAuth: []
+      responses:
+        '200':
+          description: OK
+  /v1/admin/ai/queue/flush:
+    post:
+      tags: [Admin]
+      summary: Flush pending AI micro-queue backlog (Admin)
+      operationId: adminFlushAiQueue
+      security:
+        - AdminBearerAuth: []
+        - AdminHeaderAuth: []
+      responses:
+        '200':
+          description: OK
+  /v1/admin/ai/queue/dead/clear:
+    post:
+      tags: [Admin]
+      summary: Clear AI dead jobs list (Admin)
+      operationId: adminClearAiDeadJobs
+      security:
+        - AdminBearerAuth: []
+        - AdminHeaderAuth: []
+      responses:
+        '200':
+          description: OK
 components:
   securitySchemes:
     AdminBearerAuth:

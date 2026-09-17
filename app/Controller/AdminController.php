@@ -184,6 +184,7 @@ class AdminController extends AbstractController
         return $this->respondSuccess([
             'enabled' => $queueCfg['enabled'],
             'depth' => $depth,
+            'isPaused' => \App\System\AiMetricsService::isPaused(),
             'maxQueue' => (int) $queueCfg['maxQueue'],
             'maxConcurrent' => (int) $queueCfg['maxConcurrent'],
             'waitTimeout' => (int) $queueCfg['waitTimeout'],
@@ -191,6 +192,52 @@ class AdminController extends AbstractController
             'jobTtl' => (int) $queueCfg['jobTtl'],
             'failOpen' => (bool) $queueCfg['failOpen'],
         ], 'Queue status retrieved successfully');
+    }
+
+    #[GetMapping(path: 'ai/metrics')]
+    public function getAiMetrics(): ResponseInterface
+    {
+        $params = $this->request->getQueryParams();
+        $days = isset($params['days']) ? (int) $params['days'] : 7;
+        $data = \App\System\AiMetricsService::getMetrics($days);
+        return $this->respondSuccess($data, 'AI metrics retrieved successfully');
+    }
+
+    #[GetMapping(path: 'ai/queue/inspect')]
+    public function inspectAiQueue(): ResponseInterface
+    {
+        $params = $this->request->getQueryParams();
+        $limit = isset($params['limit']) ? (int) $params['limit'] : 20;
+        $data = \App\System\AiMetricsService::inspectQueue($limit);
+        return $this->respondSuccess($data, 'AI queue inspected successfully');
+    }
+
+    #[PostMapping(path: 'ai/queue/pause')]
+    public function pauseAiQueue(): ResponseInterface
+    {
+        \App\System\AiMetricsService::setPaused(true);
+        return $this->respondSuccess(['paused' => true], 'AI queue consumer paused');
+    }
+
+    #[PostMapping(path: 'ai/queue/resume')]
+    public function resumeAiQueue(): ResponseInterface
+    {
+        \App\System\AiMetricsService::setPaused(false);
+        return $this->respondSuccess(['paused' => false], 'AI queue consumer resumed');
+    }
+
+    #[PostMapping(path: 'ai/queue/flush')]
+    public function flushAiQueue(): ResponseInterface
+    {
+        $res = \App\System\AiMetricsService::flushQueue();
+        return $this->respondSuccess($res, 'AI queue backlog flushed');
+    }
+
+    #[PostMapping(path: 'ai/queue/dead/clear')]
+    public function clearAiDeadJobs(): ResponseInterface
+    {
+        $cleared = \App\System\AiMetricsService::clearDeadJobs();
+        return $this->respondSuccess(['cleared' => $cleared], 'AI dead jobs cleared');
     }
 
     #[GetMapping(path: 'system/stats')]

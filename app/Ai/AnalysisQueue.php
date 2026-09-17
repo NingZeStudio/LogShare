@@ -302,13 +302,17 @@ final class AnalysisQueue
             return;
         }
 
+        $startMs = (int) round(microtime(true) * 1000);
         $cleanupCacheKey = null;
+        $success = false;
+        $inputLen = 0;
         try {
             $decoded = json_decode((string) gzuncompress($payloadRaw), true);
             if (!is_array($decoded) || !isset($decoded['content'], $decoded['cacheKey'])) {
                 throw new \RuntimeException('malformed job payload');
             }
             $cleanupCacheKey = (string) $decoded['cacheKey'];
+            $inputLen = strlen((string) $decoded['content']);
 
             $emitter = new StreamEmitter($jobId, (int) $cfg['jobTtl']);
             $agentConfig = \App\Config::Get('ai')['agent'] ?? [];
@@ -328,10 +332,12 @@ final class AnalysisQueue
                     $emitter
                 );
             }
+            $success = true;
         } catch (\Throwable $e) {
             // LogAgent/AIClient 正常路径已在流内收敛异常；到这里的是载荷损坏等
             // 执行框架故障，对外只给固定文案，细节仅进 Syslog
             \App\Syslog::error('AiQueue', 'job ' . $jobId . ' failed: ' . $e->getMessage());
+            \App\System\AiMetricsService::recordDeadJob($jobId, '任务执行异常: ' . $e->getMessage(), ['entryId' => $entryId]);
             try {
                 (new StreamEmitter($jobId, (int) $cfg['jobTtl']))->finish('error', json_encode(
                     ['error' => '分析执行失败，请稍后重试。'],
@@ -340,6 +346,8 @@ final class AnalysisQueue
             } catch (\Throwable $ignored) {
             }
         } finally {
+            $durationMs = max(1, (int) round(microtime(true) * 1000) - $startMs);
+            \App\System\AiMetricsService::recordAnalysis($success, $durationMs, $inputLen, 1200);
             try {
                 RedisStreams::del(self::payloadKey($jobId));
                 RedisStreams::del(self::runningKey($jobId));

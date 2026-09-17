@@ -85,13 +85,21 @@ abstract class AbstractController
             }
         }
 
-        if ($agent) {
-            \App\Agent\LogAgent::analyze($content, [
-                'cacheKey' => $cacheKey,
-                'logId' => $logId,
-            ], $this->response);
-        } else {
-            \App\Client\AIClient::analyzeStream($content, $cacheKey, 1800, $this->response);
+        $startMs = (int) round(microtime(true) * 1000);
+        $success = false;
+        try {
+            if ($agent) {
+                \App\Agent\LogAgent::analyze($content, [
+                    'cacheKey' => $cacheKey,
+                    'logId' => $logId,
+                ], $this->response);
+            } else {
+                \App\Client\AIClient::analyzeStream($content, $cacheKey, 1800, $this->response);
+            }
+            $success = true;
+        } finally {
+            $durationMs = max(1, (int) round(microtime(true) * 1000) - $startMs);
+            \App\System\AiMetricsService::recordAnalysis($success, $durationMs, strlen($content), 1200);
         }
         return $this->response;
     }

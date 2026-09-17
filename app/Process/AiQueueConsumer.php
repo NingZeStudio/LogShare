@@ -231,6 +231,10 @@ class AiQueueConsumer extends AbstractProcess
     public function consumeLoop(string $consumer): void
     {
         while ($this->running && !$this->draining) {
+            if (\App\System\AiMetricsService::isPaused()) {
+                sleep(1);
+                continue;
+            }
             try {
                 foreach (RedisStreams::xReadGroup(AnalysisQueue::GROUP, $consumer, AnalysisQueue::QUEUE_KEY, 5000) as [$id, $fields]) {
                     $this->runJob($id, (string) ($fields['jobId'] ?? ''));
@@ -272,6 +276,10 @@ class AiQueueConsumer extends AbstractProcess
                     RedisStreams::expire($reclaimCountKey, 3600);
                     if ($times > 3) {
                         \App\Syslog::error('AiQueue', "job entry {$id} reached max delivery limit ({$times}), dropping poisoned entry");
+                        \App\System\AiMetricsService::recordDeadJob((string) ($fields['jobId'] ?? $id), 'Exceeded max delivery limit (3)', [
+                            'entryId' => $id,
+                            'deliveries' => $times,
+                        ]);
                         RedisStreams::xAck(AnalysisQueue::QUEUE_KEY, AnalysisQueue::GROUP, $id);
                         RedisStreams::xDel(AnalysisQueue::QUEUE_KEY, $id);
                         RedisStreams::del($reclaimCountKey);
