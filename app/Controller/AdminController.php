@@ -12,7 +12,9 @@ use App\Middleware\AdminAuthMiddleware;
 use App\Rag\RagManager;
 use App\Storage\StorageInterface;
 use App\System\AnalyticsService;
+use App\System\AuditLogManager;
 use App\System\SecurityService;
+use App\System\SpinYarnManager;
 use App\System\StorageHealthService;
 use App\System\SystemLogManager;
 use App\Telemetry\TelemetryService;
@@ -161,6 +163,12 @@ class AdminController extends AbstractController
             return $this->respondError('Failed to delete logs: ' . implode('; ', $errorMessages), 400, $results['failed']);
         }
 
+        AuditLogManager::record('log.delete', implode(',', $results['deleted']), [
+            'total' => count($logIds),
+            'deletedCount' => count($results['deleted']),
+            'failedCount' => count($results['failed']),
+        ], true, 'admin', $this->getClientIp());
+
         return $this->respondSuccess([
             'deleted' => $results['deleted'],
             'failed' => $results['failed'],
@@ -216,6 +224,7 @@ class AdminController extends AbstractController
     public function pauseAiQueue(): ResponseInterface
     {
         \App\System\AiMetricsService::setPaused(true);
+        AuditLogManager::record('ai.queue.pause', 'queue', [], true, 'admin', $this->getClientIp());
         return $this->respondSuccess(['paused' => true], 'AI queue consumer paused');
     }
 
@@ -223,6 +232,7 @@ class AdminController extends AbstractController
     public function resumeAiQueue(): ResponseInterface
     {
         \App\System\AiMetricsService::setPaused(false);
+        AuditLogManager::record('ai.queue.resume', 'queue', [], true, 'admin', $this->getClientIp());
         return $this->respondSuccess(['paused' => false], 'AI queue consumer resumed');
     }
 
@@ -230,6 +240,7 @@ class AdminController extends AbstractController
     public function flushAiQueue(): ResponseInterface
     {
         $res = \App\System\AiMetricsService::flushQueue();
+        AuditLogManager::record('ai.queue.flush', 'queue', $res, true, 'admin', $this->getClientIp());
         return $this->respondSuccess($res, 'AI queue backlog flushed');
     }
 
@@ -237,6 +248,7 @@ class AdminController extends AbstractController
     public function clearAiDeadJobs(): ResponseInterface
     {
         $cleared = \App\System\AiMetricsService::clearDeadJobs();
+        AuditLogManager::record('ai.dead.clear', 'dead_jobs', ['cleared' => $cleared], true, 'admin', $this->getClientIp());
         return $this->respondSuccess(['cleared' => $cleared], 'AI dead jobs cleared');
     }
 
@@ -285,6 +297,9 @@ class AdminController extends AbstractController
 
         try {
             Config::saveDynamic($payload);
+            AuditLogManager::record('config.update', 'dynamic_config', [
+                'keys' => array_keys($payload),
+            ], true, 'admin', $this->getClientIp());
         } catch (\InvalidArgumentException $e) {
             throw new ApiError(422, 'Configuration validation failed: ' . $e->getMessage());
         } catch (\Throwable $e) {
@@ -299,6 +314,7 @@ class AdminController extends AbstractController
     {
         try {
             Config::resetDynamic();
+            AuditLogManager::record('config.reset', 'dynamic_config', [], true, 'admin', $this->getClientIp());
         } catch (\Throwable $e) {
             throw new ApiError(500, 'Failed to reset configuration: ' . $e->getMessage());
         }
@@ -800,8 +816,10 @@ class AdminController extends AbstractController
     {
         try {
             $result = StorageHealthService::cleanupExpired();
+            AuditLogManager::record('system.cleanup_expired', 'logs', $result, true, 'admin', $this->getClientIp());
             return $this->respondSuccess($result, "Cleanup completed: {$result['deletedCount']} logs removed");
         } catch (\Throwable $e) {
+            AuditLogManager::record('system.cleanup_expired', 'logs', ['error' => $e->getMessage()], false, 'admin', $this->getClientIp());
             throw new ApiError(500, 'Failed to execute expired log cleanup: ' . $e->getMessage());
         }
     }
@@ -812,6 +830,7 @@ class AdminController extends AbstractController
         $body = $this->request->getParsedBody();
         $prefix = isset($body['prefix']) && is_string($body['prefix']) ? trim($body['prefix']) : 'log:*';
         $result = StorageHealthService::flushCache($prefix);
+        AuditLogManager::record('system.cache_flush', $prefix, $result, true, 'admin', $this->getClientIp());
         return $this->respondSuccess($result, "Cache flush executed for prefix: {$prefix}");
     }
 
@@ -855,6 +874,19 @@ class AdminController extends AbstractController
             }
         }
 
+        AuditLogManager::record('log.batch_delete', 'batch', [
+            'deletedCount' => count($deleted),
+            'failedCount' => count($failed),
+            'totalMatched' => $totalMatched,
+            'criteria' => [
+                'source' => $source,
+                'since' => $since,
+                'until' => $until,
+                'keyword' => $keyword,
+                'limit' => $limit,
+            ],
+        ], true, 'admin', $this->getClientIp());
+
         return $this->respondSuccess([
             'deletedCount' => count($deleted),
             'failedCount' => count($failed),
@@ -886,6 +918,10 @@ class AdminController extends AbstractController
         $reason = isset($body['reason']) && is_string($body['reason']) ? trim($body['reason']) : '管理员主动封禁';
 
         $result = SecurityService::banIp($ip, $ttl, $reason);
+        AuditLogManager::record('security.ban', $ip, [
+            'ttl' => $ttl,
+            'reason' => $reason,
+        ], true, 'admin', $this->getClientIp());
         return $this->respondSuccess($result, "IP [{$ip}] successfully banned");
     }
 
@@ -899,6 +935,9 @@ class AdminController extends AbstractController
 
         $ip = trim((string) $body['ip']);
         $success = SecurityService::unbanIp($ip);
+        AuditLogManager::record('security.unban', $ip, [
+            'unbanned' => $success,
+        ], true, 'admin', $this->getClientIp());
 
         return $this->respondSuccess([
             'ip' => $ip,
@@ -929,7 +968,63 @@ class AdminController extends AbstractController
         }
 
         $rules = SecurityService::saveContentRules($body);
+        AuditLogManager::record('security.content_rules_update', 'rules', [
+            'enabled' => $rules['enabled'],
+            'keywordCount' => count($rules['keywords']),
+            'patternCount' => count($rules['patterns']),
+        ], true, 'admin', $this->getClientIp());
         return $this->respondSuccess($rules, 'Content reject rules updated successfully');
+    }
+
+    #[GetMapping(path: 'spinyarn/status')]
+    public function getSpinYarnStatus(): ResponseInterface
+    {
+        $status = SpinYarnManager::getStatus();
+        return $this->respondSuccess($status, 'SpinYarn status retrieved successfully');
+    }
+
+    #[PostMapping(path: 'spinyarn/test')]
+    public function testSpinYarnDeobfuscate(): ResponseInterface
+    {
+        $body = $this->request->getParsedBody();
+        if (!is_array($body) || empty($body['content']) || empty($body['version'])) {
+            throw new ApiError(400, 'Both content and version are required');
+        }
+
+        $content = (string) $body['content'];
+        $version = trim((string) $body['version']);
+        $mappingType = isset($body['mappingType']) && $body['mappingType'] === 'vanilla' ? 'vanilla' : 'yarn';
+
+        $result = SpinYarnManager::testDeobfuscate($content, $version, $mappingType);
+        return $this->respondSuccess($result, 'SpinYarn deobfuscation test completed');
+    }
+
+    #[GetMapping(path: 'audit/logs')]
+    public function getAuditLogs(): ResponseInterface
+    {
+        $params = $this->request->getQueryParams();
+        $page = isset($params['page']) ? (int) $params['page'] : 1;
+        $pageSize = isset($params['pageSize']) ? (int) $params['pageSize'] : 20;
+        $action = isset($params['action']) && $params['action'] !== '' ? (string) $params['action'] : null;
+        $keyword = isset($params['keyword']) && $params['keyword'] !== '' ? (string) $params['keyword'] : null;
+        $since = isset($params['since']) && is_numeric($params['since']) ? (int) $params['since'] : null;
+        $until = isset($params['until']) && is_numeric($params['until']) ? (int) $params['until'] : null;
+
+        $logs = AuditLogManager::getLogs($page, $pageSize, $action, $keyword, $since, $until);
+        return $this->respondSuccess($logs, 'Audit logs retrieved successfully');
+    }
+
+    #[DeleteMapping(path: 'audit/logs')]
+    public function clearAuditLogs(): ResponseInterface
+    {
+        $count = AuditLogManager::clearLogs();
+        return $this->respondSuccess(['cleared' => $count], 'Audit logs cleared');
+    }
+
+    private function getClientIp(): string
+    {
+        $serverParams = $this->request->getServerParams();
+        return (string) ($serverParams['remote_addr'] ?? '127.0.0.1');
     }
 }
 

@@ -1067,6 +1067,65 @@ POST /v1/admin/ai/queue/dead/clear
 
 清空所有被判定为死信的任务记录。
 
+### 40. 获取 SpinYarn 映射状态与本地映射库清单
+
+```
+GET /v1/admin/spinyarn/status
+```
+
+返回 SpinYarn PHP 扩展加载状态、版本、本地 `mappings/` 目录路径以及 Yarn 与 Vanilla 映射文件列表与大小统计。
+
+### 41. SpinYarn 在线反混淆测试探针
+
+```
+POST /v1/admin/spinyarn/test
+```
+
+测试混淆类名与方法的实时反混淆解析能力。
+
+**请求体（JSON）：**
+```json
+{
+    "content": "java.lang.NullPointerException\n\tat net.minecraft.class_310.method_1508",
+    "version": "1.20.1",
+    "mapping_type": "yarn"
+}
+```
+
+**响应示例：**
+```json
+{
+    "success": true,
+    "message": "SpinYarn deobfuscation test completed",
+    "data": {
+        "success": true,
+        "available": true,
+        "changed": true,
+        "version": "1.20.1",
+        "mappingType": "yarn",
+        "durationMs": 4,
+        "original": "...",
+        "deobfuscated": "..."
+    }
+}
+```
+
+### 42. 分页获取操作审计日志
+
+```
+GET /v1/admin/audit/logs?page=1&pageSize=20&action=log.delete&keyword=s123456
+```
+
+支持按动作代号（`action`）、关键词（`keyword`）与时间戳范围（`since`/`until`）筛选检索管理员高危运维操作记录（包含删除、封禁、解封、规则修改、队列控制等）。
+
+### 43. 清空操作审计日志
+
+```
+DELETE /v1/admin/audit/logs
+```
+
+清空 Redis 环形缓冲区及本地审计日志文件。返回清空条数 `{"cleared": N}`。
+
 ---
 
 
