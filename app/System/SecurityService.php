@@ -277,7 +277,7 @@ final class SecurityService
                 'blocked_total' => $blockedTotal,
                 'banned_active' => $bannedActive,
                 'categories' => $categories,
-                'top_ips' => is_array($topIps) ? $topIps : [],
+                'top_ips' => $topIps,
                 'trend' => is_array($trends) ? $trends : [],
             ];
         }
