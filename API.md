@@ -1012,6 +1012,61 @@ PUT /v1/admin/security/content-rules
 - `keywords`: 字符串数组，违规关键词列表
 - `patterns`: 字符串数组，违规正则列表
 
+### 34. AI 智能分析运营指标查询
+
+```
+GET /v1/admin/ai/metrics?days=7
+```
+
+参数：
+- `days`: 统计天数（1-30，默认 7）
+
+响应：
+- `summary`: 核心运营总览（总分析请求数、成功/失败数、成功率、平均耗时、P50/P90/P99 耗时、Token 输入/输出/总计预估、RAG 检索调用次数）
+- `trends`: 按日分析吞吐量与平均耗时走势
+- `topics`: 知识库 Top 命中 Topic 排行及占比
+- `durationDistribution`: 响应耗时分布区间统计（极速、正常、较长、深度推理）
+
+### 35. AI 微队列深层探查
+
+```
+GET /v1/admin/ai/queue/inspect?limit=20
+```
+
+返回队列暂停消费状态、当前排队深度、活跃消费者 Workers 状态与 pending 消息、在途待处理任务列表（等待时长、重试次数）以及死信任务记录。
+
+### 36. 暂停 AI 微队列消费
+
+```
+POST /v1/admin/ai/queue/pause
+```
+
+手动暂停消费者进程拉取新任务（适合上游 LLM 额度超标或突发故障时运维干预），任务仍可入队但暂缓消费。
+
+### 37. 恢复 AI 微队列消费
+
+```
+POST /v1/admin/ai/queue/resume
+```
+
+解除暂停标记，消费者协程立即恢复拉取积压任务。
+
+### 38. 一键安全排空积压队列
+
+```
+POST /v1/admin/ai/queue/flush
+```
+
+立即移除当前队列中积压待处理的任务，释放中继连接并从 Redis Stream 中 ACK 与删除。返回清理条数 `{"cleared": N}`。
+
+### 39. 清空死信任务列表
+
+```
+POST /v1/admin/ai/queue/dead/clear
+```
+
+清空所有被判定为死信的任务记录。
+
 ---
 
 

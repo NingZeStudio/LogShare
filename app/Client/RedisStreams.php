@@ -72,6 +72,26 @@ class RedisStreams extends RedisClient
     }
 
     /**
+     * XPENDING 查询待确认条目列表或汇总。
+     *
+     * @return array<int, mixed>
+     */
+    public static function xPending(string $key, string $group, ?string $start = null, ?string $end = null, int $count = 10): array
+    {
+        try {
+            $conn = self::connection();
+            if ($start !== null && $end !== null) {
+                $reply = $conn->xpending($key, $group, $start, $end, $count);
+            } else {
+                $reply = $conn->xpending($key, $group);
+            }
+            return is_array($reply) ? $reply : [];
+        } catch (\Throwable) {
+            return [];
+        }
+    }
+
+    /**
      * XLEN：Stream 累计条目数（注意：XACK 不移除条目，此值不是「排队深度」）。
      */
     public static function xLen(string $key): int

@@ -170,6 +170,12 @@ class RedisMock
         return count(self::$lists[$key]);
     }
 
+    public function llen(string $key): int
+    {
+        self::guard();
+        return isset(self::$lists[$key]) ? count(self::$lists[$key]) : 0;
+    }
+
     public function lrange(string $key, int $start, int $stop): array
     {
         self::guard();
