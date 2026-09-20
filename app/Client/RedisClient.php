@@ -28,6 +28,14 @@ class RedisClient
      */
     protected static ?\Redis $connection = null;
 
+    /** @var ?object 测试专用注入连接（如 RedisMock） */
+    protected static ?object $testConnection = null;
+
+    public static function setTestConnection(?object $conn): void
+    {
+        self::$testConnection = $conn;
+    }
+
     protected static function inCoroutine(): bool
     {
         return extension_loaded('swoole')
@@ -38,11 +46,15 @@ class RedisClient
     /**
      * Return a usable Redis connection for the current context.
      *
-     * @return \Redis
+     * @return \Redis|object
      * @throws \Exception When Redis is unreachable or unavailable
      */
-    protected static function connection(): \Redis
+    protected static function connection(): object
     {
+        if (self::$testConnection !== null) {
+            return self::$testConnection;
+        }
+
         $config = \App\Config::Get('cache');
         $redisConfig = $config['redis'] ?? ['host' => 'mclogs-redis', 'port' => 6379];
         $host = (string) ($redisConfig['host'] ?? 'mclogs-redis');
