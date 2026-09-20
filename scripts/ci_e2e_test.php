@@ -183,14 +183,14 @@ runCheck('GET /v1/raw/{id}/{filename} 获取指定附加文件内容', function 
     }
 });
 
-runCheck('GET /v1/meta/{id} 获取日志元数据信息', function () use ($baseUrl, &$logId) {
-    $res = httpRequest('GET', "{$baseUrl}/v1/meta/{$logId}");
-    if ($res['status'] !== 200) {
-        throw new RuntimeException("获取元数据失败: {$res['status']}");
+runCheck('GET /v1/errors/rate 速率超限错误端点检查', function () use ($baseUrl) {
+    $res = httpRequest('GET', "{$baseUrl}/v1/errors/rate");
+    if ($res['status'] !== 429) {
+        throw new RuntimeException("速率超限端点应返回 429，实际状态: {$res['status']}");
     }
     $json = json_decode($res['body'], true);
-    if (empty($json['success']) || $json['id'] !== $logId || empty($json['files'])) {
-        throw new RuntimeException("元数据响应不合法: {$res['body']}");
+    if (!isset($json['error']) || !str_contains($json['error'], 'rate limit')) {
+        throw new RuntimeException("速率超限响应文本不符合预期: {$res['body']}");
     }
 });
 
