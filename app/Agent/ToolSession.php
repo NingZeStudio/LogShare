@@ -38,4 +38,6 @@ final class ToolSession
      */
     public int $ragSearchCalls = 0;
     public int $webSearchCalls = 0;
+    public int $githubSearchCalls = 0;
+    public int $githubDetailCalls = 0;
 }
