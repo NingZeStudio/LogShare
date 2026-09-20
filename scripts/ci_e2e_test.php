@@ -91,8 +91,8 @@ runCheck('GET /v1/limits 存储限制与大小配置', function () use ($baseUrl
         throw new RuntimeException("状态码非 200: {$res['status']}");
     }
     $json = json_decode($res['body'], true);
-    if (!isset($json['storageTime'], $json['maxSize'])) {
-        throw new RuntimeException("响应中缺少 storageTime 或 maxSize 字段: {$res['body']}");
+    if (!isset($json['storageTime'], $json['maxLength'])) {
+        throw new RuntimeException("响应中缺少 storageTime 或 maxLength 字段: {$res['body']}");
     }
 });
 
