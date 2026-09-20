@@ -198,7 +198,7 @@ test('AnalyticsService MariaDb backend and heuristic version parsing', function 
 
         $storageHealth = \App\System\StorageHealthService::getHealth();
         expect($storageHealth['storageBackend'])->toBe('s');
-        expect($storageHealth['mariadb'])->toBeArray();
+        expect($storageHealth['database'])->toBeArray();
     } finally {
         if (isset($id1)) \App\Storage\MariaDbStorage::Delete($id1);
         if (isset($id2)) \App\Storage\MariaDbStorage::Delete($id2);
