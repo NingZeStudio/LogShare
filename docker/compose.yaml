@@ -128,6 +128,7 @@ services:
       # 生产部署请通过宿主机环境变量覆盖默认密码
       MARIADB_PASSWORD: ${MARIADB_PASSWORD:?MARIADB_PASSWORD must be set}
       MARIADB_ROOT_PASSWORD: ${MARIADB_ROOT_PASSWORD:?MARIADB_ROOT_PASSWORD must be set}
+      MARIADB_ROOT_HOST: "%"
     volumes:
       - mariadb-data:/var/lib/mysql
       - ./mariadb-init.sql:/docker-entrypoint-initdb.d/init.sql:ro
@@ -138,7 +139,8 @@ services:
       test: ["CMD-SHELL", "healthcheck.sh --connect --innodb_initialized && mariadb -uroot -p\"$$MARIADB_ROOT_PASSWORD\" -Nse \"SELECT COUNT(*) = 1 FROM information_schema.EVENTS WHERE EVENT_SCHEMA = 'logshare' AND EVENT_NAME = 'cleanup_expired_logs' AND STATUS = 'ENABLED'\" | grep -q 1"]
       interval: 10s
       timeout: 5s
-      retries: 6
+      retries: 8
+      start_period: 30s
 
   mariadb-events:
     image: mariadb:11.8
@@ -148,7 +150,8 @@ services:
       export MYSQL_PWD="$$MARIADB_ROOT_PASSWORD";
       until mariadb-admin ping -hmariadb -uroot --silent;
       do sleep 2; done;
-      mariadb -hmariadb -uroot logshare < /mariadb-events.sql
+      until mariadb -hmariadb -uroot logshare < /mariadb-events.sql;
+      do sleep 2; done;
     environment:
       MARIADB_ROOT_PASSWORD: ${MARIADB_ROOT_PASSWORD:?MARIADB_ROOT_PASSWORD must be set}
     volumes:
