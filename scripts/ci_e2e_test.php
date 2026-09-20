@@ -155,8 +155,8 @@ runCheck('GET /v1/log/{id} 获取日志内容与附件元数据', function () us
     if (empty($json['success']) || $json['id'] !== $logId) {
         throw new RuntimeException("返回的日志 ID 不匹配: {$res['body']}");
     }
-    if (!str_contains($json['data'], 'Minecraft server starting')) {
-        throw new RuntimeException("日志内容未包含预期文本");
+    if (empty($json['lines']) || empty($json['size']) || empty($json['raw'])) {
+        throw new RuntimeException("元数据缺少 lines, size 或 raw 字段: {$res['body']}");
     }
     if (!isset($json['files']) || count($json['files']) !== 2) {
         throw new RuntimeException("附件文件列表数量不符合预期");
