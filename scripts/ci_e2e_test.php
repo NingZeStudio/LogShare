@@ -367,7 +367,8 @@ runCheck('GET /v1/admin/system/stats 与 storage-health 系统状态检查', fun
     ]);
     if ($stats['status'] === 200) {
         $json = json_decode($stats['body'], true);
-        if (empty($json['success']) || !isset($json['data'])) {
+        $hasVersion = isset($json['version']) || isset($json['data']['version']);
+        if (empty($json['success']) || !$hasVersion) {
             throw new RuntimeException("系统统计数据不合法: {$stats['body']}");
         }
     }
@@ -377,7 +378,8 @@ runCheck('GET /v1/admin/system/stats 与 storage-health 系统状态检查', fun
     ]);
     if ($health['status'] === 200) {
         $json = json_decode($health['body'], true);
-        if (empty($json['success']) || !isset($json['data'])) {
+        $hasBackend = isset($json['storageBackend']) || isset($json['data']['storageBackend']);
+        if (empty($json['success']) || !$hasBackend) {
             throw new RuntimeException("存储健康度数据不合法: {$health['body']}");
         }
     }
