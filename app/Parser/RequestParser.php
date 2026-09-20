@@ -69,14 +69,6 @@ class RequestParser extends HyperfParser
                 }
             }
 
-            // Brotli (RFC 7932)
-            if (function_exists('brotli_uncompress')) {
-                $decompressed = brotli_uncompress($rawBody, static::MAX_DECOMPRESSED_BYTES);
-                if ($decompressed !== false) {
-                    return $decompressed;
-                }
-            }
-
             // Deflate (raw RFC 1951 or zlib RFC 1950)
             $decompressed = gzinflate($rawBody, static::MAX_DECOMPRESSED_BYTES);
             if ($decompressed === false) {
@@ -84,6 +76,18 @@ class RequestParser extends HyperfParser
             }
             if ($decompressed !== false) {
                 return $decompressed;
+            }
+
+            // Brotli (RFC 7932)
+            if (function_exists('brotli_uncompress')) {
+                try {
+                    $decompressed = brotli_uncompress($rawBody);
+                    if ($decompressed !== false && strlen($decompressed) <= static::MAX_DECOMPRESSED_BYTES) {
+                        return $decompressed;
+                    }
+                } catch (\Throwable) {
+                    // Ignore malformed brotli payload
+                }
             }
         } finally {
             restore_error_handler();
