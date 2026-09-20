@@ -97,8 +97,10 @@ services:
       AI_RAG_ENABLED: ${AI_RAG_ENABLED:-false}
       AI_RAG_PROVIDERS: ${AI_RAG_PROVIDERS:-}
     depends_on:
-      - mariadb
-      - redis
+      mariadb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     networks:
       - logshare-network
     restart: unless-stopped

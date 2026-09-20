@@ -113,6 +113,10 @@ test('ContentParser handles Content-Encoding: br appropriately', function () {
         expect($result)->toBeInstanceOf(App\ApiError::class);
         expect($result->getHttpCode())->toBe(501);
         expect($result->getMessage())->toContain('Brotli');
+    } else {
+        expect($result)->toBeInstanceOf(App\ApiError::class);
+        expect($result->getHttpCode())->toBe(400);
+        expect($result->getMessage())->toContain('Brotli');
     }
 });
 

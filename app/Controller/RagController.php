@@ -44,7 +44,11 @@ class RagController extends AbstractController
 
     private static function currentIndexMtime(): ?int
     {
-        $mtime = @filemtime(RagSearch::resolveDbPath());
+        $dbPath = RagSearch::resolveDbPath();
+        if (!file_exists($dbPath)) {
+            return null;
+        }
+        $mtime = @filemtime($dbPath);
         return $mtime === false ? null : $mtime;
     }
 
