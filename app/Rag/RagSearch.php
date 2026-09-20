@@ -42,34 +42,13 @@ class RagSearch
      * 数量信息由 topics() 返回的动态 count 承载。
      */
     private const TOPIC_DESCRIPTIONS = [
-        // ── 核心诊断资产 ──
+        // ── 核心诊断资产与常见报错分析 ──
         '日志分析' => '成体系的报错条目库（KB 编号条目），按异常类型归类，每条含现象、原因与解决方案',
         'patterns' => '常见崩溃与故障模式库：mixin 注入失败、内存不足、Java 版本错误、mod 依赖缺失等，按「签名-含义-解决方案」组织',
         'format' => '三大日志文件（crash-report / hs_err_pid / latest.log）的格式解读方法与信号速查',
-        'mg-issues' => 'MobileGlues 渲染器专题：定位与架构、关键设置概念、实战 issue 蒸馏与排障决策树',
-        'amc-issues' => 'Amethyst 启动器（PojavLauncher 官方续作）专题：官方立场、版本兼容、实战 issue 蒸馏',
-        'pgw-issues' => 'Pojav Glow·Worm (PGW) 专题：地位与现状、渲染器武器库、实战 issue 蒸馏',
-        'zl2-issues' => 'ZL2 启动器实战案例库：渲染器策略、账户输入联机、Mod 兼容分册',
-        'fcl-issues' => 'FCL 启动器实战案例：账户/联机、启动器本体、Mod 兼容、渲染器分册',
-        'fcl' => 'FCL 官方文档与非崩溃问题集',
-        // ── 启动器/渲染器生态 ──
-        'mobileglues' => 'MobileGlues 兼容性矩阵：mod/光影支持矩阵与真实设备实测记录',
-        'renderers' => '各渲染器家族专题文档：ANGLE、gl4es 家族、ltw、MobileGlues、Zink/Virgl 的差异与适用场景',
-        'launchers' => 'Pojav Glow·Worm (PGW) 专题文档',
         'android-native-lib' => 'Android 原生库（lib 型 mod）加载问题：动态库缺失与插件系统',
-        'mobile_launcher' => '手机启动器常识：渲染器选择与 Minecraft 版本对应关系',
-        'zl_help' => 'Zalith 启动器用户帮助：账号登录（微软/离线/外置）、版本隔离、mod 加载器等操作说明',
-        'zl_control2_help' => 'Zalith 控制布局编辑器帮助：控件层创建、编辑器基本操作、菜单功能',
-        'zl_projects' => 'Zalith 项目介绍页（zl1/zl2 主要特点、开源信息、支持与反馈）',
-        // ── modloader / 服务端开发文档 ──
-        'fabric_develop' => 'Fabric 官方开发文档（含 Mixin、注册、事件、渲染等），用于判断 mod 侧代码与 API 问题',
-        'forge' => 'Forge 官方开发文档：访问变换器、BER、事件、注册表、资源、本地化',
-        'neoforge' => 'NeoForge 官方开发文档',
-        'quilt' => 'Quilt（QSL）开发文档',
-        'papermc' => 'PaperMC/Adventure 插件开发文档：Audiences、BossBar 等 API',
-        'purpur' => 'Purpur 服务端文档：命令、配置、权限、log4j',
-        'geyser' => 'Geyser（基岩互通）文档：Floodgate API、命令、FAQ、配置',
-        'glowstone' => 'Glowstone 服务端开发文档：代码风格、实体实现、NBT 操作',
+        // ── 手机启动器常识与版本列表 ──
+        'mobile_launcher' => '手机启动器常识：渲染器选择与 Minecraft 版本更新列表对应关系',
         // ── 其他 ──
         'tools' => '样例崩溃报告（测试素材）',
         // ── 运营内容（明确标注低价值，防止模型空跑）──
