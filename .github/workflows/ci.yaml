@@ -7,6 +7,9 @@ on:
     branches: [main, master]
   workflow_dispatch:
 
+env:
+  ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: true
+
 jobs:
   test:
     name: Tests (PHP ${{ matrix.php-version }})
@@ -42,7 +45,7 @@ jobs:
         uses: shivammathur/setup-php@v2
         with:
           php-version: ${{ matrix.php-version }}
-          extensions: mbstring, json, zlib, pdo_mysql, redis, pcntl, posix, sockets, swoole
+          extensions: mbstring, json, zlib, pdo_mysql, redis, pcntl, posix, sockets, swoole, brotli
           coverage: pcov
           tools: composer:v2
 
@@ -59,15 +62,18 @@ jobs:
       - name: Copy Config
         run: cp Config.inc.example.php Config.inc.php
 
-      - name: Initialize MariaDB Schema
+      - name: Initialize MariaDB Schema & Events
         run: |
+          php scripts/sync_mariadb_events.php
           php -r '
-          $pdo = new PDO("mysql:host=127.0.0.1;dbname=logshare", "logshare", "logshare", [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]);
+          $pdo = new PDO("mysql:host=127.0.0.1;dbname=logshare", "root", "root", [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]);
           $pdo->exec(file_get_contents("docker/mariadb-init.sql"));
-          echo "schema initialized\n";
+          $pdo->exec(file_get_contents("docker/mariadb-events.sql"));
+          echo "schema and events initialized\n";
           '
 
       - name: Run Tests
+        if: matrix.php-version != '8.4'
         run: composer test
         env:
           DB_HOST: 127.0.0.1
@@ -78,7 +84,7 @@ jobs:
           REDIS_HOST: 127.0.0.1
           REDIS_PORT: 6379
 
-      - name: Generate Coverage
+      - name: Run Tests with Coverage
         if: matrix.php-version == '8.4'
         run: composer test:coverage
         env:
@@ -98,6 +104,7 @@ jobs:
         uses: codecov/codecov-action@v4
         if: matrix.php-version == '8.4'
         with:
+          token: ${{ secrets.CODECOV_TOKEN }}
           files: ./coverage/clover.xml
           fail_ci_if_error: false
 
@@ -226,12 +233,11 @@ jobs:
         run: |
           php bin/hyperf.php start > /tmp/hyperf.log 2>&1 &
           sleep 15
-          # HTTP + 路由
-          curl -sf http://127.0.0.1:9501/v1/limits | grep -q storageTime || { echo '=== hyperf.log ==='; cat /tmp/hyperf.log; exit 1; }
-          # MariaDB 存储（POST /v1/log 走 MariaDbStorage）
-          curl -sf http://127.0.0.1:9501/v1/log -H 'Content-Type: application/json' -d '{"content":"[INFO] smoke test"}' | grep -q '"id"' || { echo '=== hyperf.log ==='; cat /tmp/hyperf.log; exit 1; }
-          # RAG MCP（主 server /rag 路径）
-          curl -sf http://127.0.0.1:9501/rag -X POST -H 'Content-Type: application/json' -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}' | grep -q jsonrpc || { echo '=== hyperf.log ==='; cat /tmp/hyperf.log; exit 1; }
+          php scripts/ci_e2e_test.php --base-url=http://127.0.0.1:9501 --admin-token=ci-test-token || {
+            echo '=== hyperf.log ==='
+            cat /tmp/hyperf.log
+            exit 1
+          }
           kill $(cat runtime/hyperf.pid)
         env:
           DB_HOST: 127.0.0.1
@@ -241,6 +247,8 @@ jobs:
           DB_PASSWORD: logshare
           REDIS_HOST: 127.0.0.1
           REDIS_PORT: 6379
+          ADMIN_ENABLED: 'true'
+          ADMIN_TOKEN: 'ci-test-token'
 
   docker:
     name: Docker Build
@@ -268,6 +276,8 @@ jobs:
         run: |
           cp Config.inc.example.php Config.inc.php
           cp .env.example .env
+          echo "ADMIN_ENABLED=true" >> .env
+          echo "ADMIN_TOKEN=ci-placeholder" >> .env
 
       - name: Generate Self-Signed Certificate for Smoke Test
         # nginx 443 与 healthcheck 需要证书文件；CI 上 docker/certs/ 为空。
@@ -285,7 +295,7 @@ jobs:
             -out "docker/certs/live/$DOMAIN/fullchain.pem" \
             -days 1 -subj "/CN=$DOMAIN"
 
-      - name: Test Image Starts
+      - name: Test Image Starts & Run E2E Suite
         run: |
           docker compose -f docker/compose.yaml up -d
           ready=0
@@ -297,12 +307,17 @@ jobs:
             sleep 3
           done
           if [ "$ready" != "1" ]; then
-            echo "=== hyperf 日志 ==="
+            echo "=== 服务启动超时，输出容器日志 ==="
             docker compose -f docker/compose.yaml logs hyperf nginx
             docker compose -f docker/compose.yaml down
             exit 1
           fi
-          # OpenLiteWaf 统计页（经 nginx 的 OpenResty Lua 直接响应）
-          curl -skf https://localhost/security/stats || { echo '=== nginx 日志 ==='; docker compose -f docker/compose.yaml logs nginx; docker compose -f docker/compose.yaml down; exit 1; }
-          echo "smoke test 通过"
+          # 执行涵盖 Nginx 反代、HTTPS、OpenLiteWaf 防护与 OpenLiteStats 的全量真实环境测试
+          php scripts/ci_e2e_test.php --base-url=https://localhost --admin-token=ci-placeholder --waf-test || {
+            echo '=== 测试失败，输出容器日志 ==='
+            docker compose -f docker/compose.yaml logs hyperf nginx
+            docker compose -f docker/compose.yaml down
+            exit 1
+          }
+          echo "Docker 真实生产环境全量 E2E 测试全部通过"
           docker compose -f docker/compose.yaml down

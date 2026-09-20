@@ -22,17 +22,15 @@ function queueOrigConfig(): array
 }
 
 beforeEach(function () {
-    // 本文件以 RedisMock 为地基（reset/failAll/peekStream/groups 反射均为 mock 语义）；
-    // ext-redis 存在时 RedisClient 走真实连接，mock 被整体旁路、跨用例状态互串。
-    // 真 Redis 环境的同等语义由 tests/Integration/AiQueueRedisTest.php 覆盖。
-    if (extension_loaded('redis')) {
-        $this->markTestSkipped('本文件依赖 RedisMock；ext-redis 环境由 AiQueueRedisTest 覆盖');
-    }
+    // 注入 RedisMock，使本文件的 21 个边界与状态测试在无论是本地（无 ext-redis）
+    // 还是 CI（有 ext-redis）环境都能稳定以 Mock 运行，绝不无故跳过。
+    \App\Client\RedisClient::setTestConnection(new \Tests\Mocks\RedisMock());
     \Tests\Mocks\RedisMock::reset();
     $this->orig = queueOrigConfig();
 });
 
 afterEach(function () {
+    \App\Client\RedisClient::setTestConnection(null);
     if (($this->orig ?? null) === null) {
         return;
     }
