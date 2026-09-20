@@ -15,9 +15,9 @@ test('RagManager lists topics and documents correctly', function () {
     expect($result['total'])->toBeGreaterThanOrEqual(0);
 
     // Filter by existing topic
-    $forgeDocs = RagManager::listDocs('forge');
-    foreach ($forgeDocs['docs'] as $d) {
-        expect($d['topic'])->toBe('forge');
+    $patternsDocs = RagManager::listDocs('patterns');
+    foreach ($patternsDocs['docs'] as $d) {
+        expect($d['topic'])->toBe('patterns');
     }
 });
 

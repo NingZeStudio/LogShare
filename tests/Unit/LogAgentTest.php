@@ -250,6 +250,12 @@ test('topic routing rule present', function () {
     expect($system)->toContain('topic 参数');
 });
 
+test('system prompt guides direct Java Error summary retrieval without rigid categories', function () {
+    $system = agentSystemPrompt();
+    expect($system)->toContain('Java Error 直接报错摘要');
+    expect($system)->toContain('大分类');
+});
+
 test('few-shot example present', function () {
     $system = agentSystemPrompt();
     expect($system)->toContain('MixinApplyError');
@@ -539,4 +545,38 @@ test('compact summary formats grep_log_file with match markers', function () {
     expect($summary)->toContain('> 180 | hit line 2');
     expect($summary)->not->toContain('before');
 });
+
+test('buildTools registers github tools when github.enabled is true', function () {
+    $cfg = [
+        'github' => [
+            'enabled' => true,
+        ],
+    ];
+    $tools = agentCall('buildTools', [$cfg, null]);
+    $names = array_column(array_column($tools, 'function'), 'name');
+
+    expect($names)->toContain('github_list_repos');
+    expect($names)->toContain('github_search');
+    expect($names)->toContain('github_get_content');
+});
+
+test('executeTool dispatches github_list_repos and enforces budget limits', function () {
+    $ref = new ReflectionClass(LogAgent::class);
+    $m = $ref->getMethod('executeTool');
+
+    $session = new \App\Agent\ToolSession();
+    $listResult = $m->invoke(null, 'github_list_repos', [], [], null, $session);
+    expect($listResult)->toContain('FoldCraftLauncher');
+
+    // 预算限制：githubSearchCalls 上限为 2
+    $session->githubSearchCalls = 2;
+    $searchResult = $m->invoke(null, 'github_search', ['repo' => 'fcl', 'query' => 'crash'], [], null, $session);
+    expect($searchResult)->toContain('GitHub 检索次数已达本次分析上限');
+
+    // 预算限制：githubDetailCalls 上限为 2
+    $session->githubDetailCalls = 2;
+    $detailResult = $m->invoke(null, 'github_get_content', ['repo' => 'fcl', 'number' => 123], [], null, $session);
+    expect($detailResult)->toContain('GitHub 详情阅读次数已达本次分析上限');
+});
+
 

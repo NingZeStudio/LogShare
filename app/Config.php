@@ -123,6 +123,34 @@ class Config
         if ($adminToken = getenv('ADMIN_TOKEN')) {
             $data['admin']['token'] = $adminToken;
         }
+
+        // GitHub 排障工具配置覆盖
+        if (!isset($data['github']) || !is_array($data['github'])) {
+            $data['github'] = [];
+        }
+        if (($ghEnabled = getenv('GITHUB_ENABLED')) !== false) {
+            $data['github']['enabled'] = in_array(strtolower($ghEnabled), ['1', 'true', 'on', 'yes'], true);
+        }
+        if ($ghTokens = getenv('GITHUB_TOKENS')) {
+            $data['github']['tokens'] = array_values(array_filter(array_map('trim', explode(',', $ghTokens)), fn($k) => $k !== ''));
+        } elseif ($ghToken = getenv('GITHUB_TOKEN')) {
+            $data['github']['tokens'] = [$ghToken];
+        }
+        if ($ghProxy = getenv('GITHUB_PROXY')) {
+            $data['github']['proxy'] = $ghProxy;
+        }
+        if (($ghCacheTtl = getenv('GITHUB_CACHE_TTL')) !== false && ctype_digit($ghCacheTtl)) {
+            $data['github']['cache_ttl'] = (int) $ghCacheTtl;
+        }
+        // 若配置了旧版单个 token 则归一化进 tokens 列表
+        if (isset($data['github']['token']) && is_string($data['github']['token']) && $data['github']['token'] !== '') {
+            if (!isset($data['github']['tokens']) || !is_array($data['github']['tokens'])) {
+                $data['github']['tokens'] = [];
+            }
+            if (!in_array($data['github']['token'], $data['github']['tokens'], true)) {
+                array_unshift($data['github']['tokens'], $data['github']['token']);
+            }
+        }
     }
 
     private static function validate(array $data): void
@@ -165,6 +193,16 @@ class Config
         if (($admin['enabled'] ?? false) === true) {
             if (empty($admin['token']) || !is_string($admin['token'])) {
                 throw new \InvalidArgumentException('admin.token is required when admin is enabled');
+            }
+        }
+
+        $github = $data['github'] ?? [];
+        if (($github['enabled'] ?? false) === true) {
+            if (isset($github['tokens']) && !is_array($github['tokens'])) {
+                throw new \InvalidArgumentException('github.tokens must be an array');
+            }
+            if (isset($github['timeout']) && ((int) $github['timeout'] <= 0)) {
+                throw new \InvalidArgumentException('github.timeout must be greater than zero');
             }
         }
     }
@@ -337,6 +375,7 @@ class Config
             ['cache', 'redis', 'password'],
             ['storage', 'mariadb', 'password'],
             ['ai', 'mcp', 'rag', 'authToken'],
+            ['github', 'token'],
         ];
         foreach ($secretFields as $path) {
             $curr = &$updates;
@@ -368,6 +407,36 @@ class Config
                 }
             }
         }
+        // 5. github.tokens
+        if (isset($updates['github']['tokens']) && is_array($updates['github']['tokens'])) {
+            $origTokens = $original['github']['tokens'] ?? [];
+            if (isset($original['github']['token']) && is_string($original['github']['token']) && $original['github']['token'] !== '') {
+                $origTokens[] = $original['github']['token'];
+            }
+            $restoredTokens = [];
+            foreach ($updates['github']['tokens'] as $idx => $token) {
+                $token = trim((string) $token);
+                if ($token === '') {
+                    continue;
+                }
+                if (str_contains($token, '****') || $token === '******' || $token === '********') {
+                    $matched = false;
+                    foreach ($origTokens as $orig) {
+                        if (self::maskSecret($orig) === $token) {
+                            $restoredTokens[] = $orig;
+                            $matched = true;
+                            break;
+                        }
+                    }
+                    if (!$matched && isset($origTokens[$idx])) {
+                        $restoredTokens[] = $origTokens[$idx];
+                    }
+                } else {
+                    $restoredTokens[] = $token;
+                }
+            }
+            $updates['github']['tokens'] = $restoredTokens;
+        }
     }
 
     /**
@@ -391,6 +460,12 @@ class Config
         }
         if (isset($masked['ai']['mcp']['rag']['authToken']) && (string) $masked['ai']['mcp']['rag']['authToken'] !== '') {
             $masked['ai']['mcp']['rag']['authToken'] = '******';
+        }
+        if (isset($masked['github']['token']) && (string) $masked['github']['token'] !== '') {
+            $masked['github']['token'] = self::maskSecret((string) $masked['github']['token']);
+        }
+        if (isset($masked['github']['tokens']) && is_array($masked['github']['tokens'])) {
+            $masked['github']['tokens'] = array_map(fn($t) => self::maskSecret((string) $t), $masked['github']['tokens']);
         }
         if (isset($masked['ai']['apiKeys']) && is_array($masked['ai']['apiKeys'])) {
             $masked['ai']['apiKeys'] = array_map(fn($k) => self::maskSecret((string) $k), $masked['ai']['apiKeys']);

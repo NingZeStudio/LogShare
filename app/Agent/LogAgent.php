@@ -153,13 +153,11 @@ class LogAgent
                     $result = self::executeTool($name, $arguments, $config, $logId, $session);
                     self::emitToolResult($name, $result);
 
-                    // read_log_file 的全文结果已在 readLogFile 内按 maxFileBytes 截断并附提示，
-                    // 不再套用通用工具的 12KB 截断（否则「一次读全」会被无声砍成残篇）；
-                    // 检索类工具（rag_search/web_search_exa）是分析的核心证据，放宽到 32KB；
+                    // 检索类工具（rag_search/web_search_exa/github_*）是分析的核心证据，放宽到 32KB；
                     // 其余工具保留 12000 字节上限，超限时附带可见标记。
                     $toolContent = match ($name) {
                         'read_log_file' => $result,
-                        'rag_search', 'web_search_exa', 'grep_log_file' => self::truncateForModel($result, self::MAX_RETRIEVAL_RESULT_BYTES),
+                        'rag_search', 'web_search_exa', 'grep_log_file', 'github_search', 'github_get_content' => self::truncateForModel($result, self::MAX_RETRIEVAL_RESULT_BYTES),
                         default => self::truncateForModel($result),
                     };
 
@@ -251,6 +249,84 @@ class LogAgent
             ];
         }
 
+        $githubConfig = $config['github'] ?? \App\Config::Get('github');
+        if (!empty($githubConfig['enabled'])) {
+            $tools[] = [
+                'type' => 'function',
+                'function' => [
+                    'name' => 'github_list_repos',
+                    'description' => '列出官方支持与推荐排障的 Minecraft 启动器与渲染器仓库列表（含官方全名、别名、owner/repo 与适用场景）。'
+                        . '不确定启动器仓库名或检索方向时优先调用。',
+                    'parameters' => [
+                        'type' => 'object',
+                        'properties' => new \stdClass(),
+                    ],
+                ],
+            ];
+            $tools[] = [
+                'type' => 'function',
+                'function' => [
+                    'name' => 'github_search',
+                    'description' => '在指定开源启动器或渲染器的 GitHub 仓库中，按关键词联合检索相关的 Issues、Pull Requests（很多崩溃修复记录在 PR 解决说明中）与 Discussions。'
+                        . '日志中出现启动器名称（如 FoldCraftLauncher、PojavLauncher 等）或渲染器（MobileGlues、gl4es 等）报错时使用。',
+                    'parameters' => [
+                        'type' => 'object',
+                        'properties' => [
+                            'repo' => [
+                                'type' => 'string',
+                                'description' => '启动器或渲染器名称：支持官方全名（如 FoldCraftLauncher、PojavLauncher、MobileGlues）、常用别名（如 fcl、pojav、mg、hmcl）或规范的 owner/repo（可先用 github_list_repos 查看）',
+                            ],
+                            'query' => [
+                                'type' => 'string',
+                                'description' => '检索关键词或报错原文信号（如异常类名、SIGSEGV、崩溃特征短语、中文症状）',
+                            ],
+                            'type' => [
+                                'type' => 'string',
+                                'enum' => ['all', 'issue', 'pr', 'discussion'],
+                                'description' => '检索范围：all（默认，综合检索）、issue（仅工单）、pr（仅合并请求/代码修复）、discussion（仅问答讨论）',
+                            ],
+                            'state' => [
+                                'type' => 'string',
+                                'enum' => ['all', 'closed', 'open'],
+                                'description' => '状态：all（默认）、closed（已解决/已合并，排障优先）、open（开放中）',
+                            ],
+                            'max_results' => [
+                                'type' => 'integer',
+                                'description' => '最大返回条目数（1-10，默认 5）',
+                            ],
+                        ],
+                        'required' => ['repo', 'query'],
+                    ],
+                ],
+            ];
+            $tools[] = [
+                'type' => 'function',
+                'function' => [
+                    'name' => 'github_get_content',
+                    'description' => '获取指定 Issue、PR 或 Discussion 的详细描述、PR 修复说明与维护者采纳的高质量解答。在通过 github_search 定位到高相关条目后调用。',
+                    'parameters' => [
+                        'type' => 'object',
+                        'properties' => [
+                            'repo' => [
+                                'type' => 'string',
+                                'description' => '启动器全名、别名或 owner/repo',
+                            ],
+                            'number' => [
+                                'type' => 'integer',
+                                'description' => 'Issue/PR/Discussion 编号',
+                            ],
+                            'type' => [
+                                'type' => 'string',
+                                'enum' => ['auto', 'issue', 'pr', 'discussion'],
+                                'description' => '条目类型：auto（默认自动识别）、issue、pr、discussion',
+                            ],
+                        ],
+                        'required' => ['repo', 'number'],
+                    ],
+                ],
+            ];
+        }
+
         if ($logId !== null) {
             $tools[] = [
                 'type' => 'function',
@@ -309,26 +385,29 @@ class LogAgent
     {
         $system = $config['systemPrompt'] ?? self::defaultSystemPrompt($logId);
 
-        $system .= "\n\n检索策略（证据驱动）：\n"
-            . "- 先通读日志，提取具体信号：异常类名、模组名、启动器名、版本号、错误串原文。\n"
-            . "- 发起 rag_search 前先对照主题地图判断信号归属：明确报错条目 → 日志分析；通用崩溃模式（内存/Java 版本/mixin 等）→ patterns；启动器与渲染器问题 → 对应启动器 issue 蒸馏库（fcl-issues/zl2-issues/amc-issues/pgw-issues/mg-issues）与 renderers；mod 开发类 API 报错 → 对应 modloader 文档目录（fabric_develop/forge/neoforge 等）。地图上没有对应目录时全库检索，不要硬套目录。\n"
-            . "- 检索词直接用信号原词（英文异常类名/错误串原样保留，中文症状直接用中文），可配合 topic 参数限定目录。\n"
+        $system .= "\n\n检索策略（证据驱动与轻量辅助）：\n"
+            . "- 辅助定位原则：所有 Tools 与知识库均为辅助分析工具，并不是一定要基于这些 tools，更不是所有工具都必须调用。若日志原文证据已确凿，直接输出分析结论，切忌机械式调用。\n"
+            . "- 报错检索策略（大分类无实际检索价值，直搜 Java Error 报错摘要）：知识库的大分类层级对实际检索没有太大作用，切勿纠结分类或强行匹配目录。日志报错时直接提取日志里的 Java Error 直接报错摘要（如 Caused by 后的异常类名、报错消息文本、关键错误特征等）作为 query 进行检索；常见报错参考 patterns 与 日志分析，手机启动器常识与版本列表参考 mobile_launcher，不确定或未包含时直接全库检索，不要硬套目录。\n"
+            . "- 启动器与渲染器问题（动态实时排障）：当日志中出现启动器名称（如 FoldCraftLauncher、PojavLauncher、Amethyst-Launcher、PojavLauncher-Glow-Worm 等）或渲染器（MobileGlues、gl4es 等）报错时，优先调用 `github_list_repos` 确认官方全名与仓库，使用 `github_search` 在 GitHub 官方仓库的 Issues、PRs（很多疑难崩溃与修复记录在 PR 解决说明中）及 Discussions 中检索最新线索，并调用 `github_get_content` 获取最吻合条目的解决方案。\n"
+            . "- 检索词提取规则：直接从日志中摘取 Java Error 原文报错摘要（如 Caused by: 后的异常全名或类名，如 NullPointerException、MixinApplyError 等），英文异常类名/错误串原样保留，中文症状直接用中文，可配合 topic 参数或直接全库检索。\n"
             . "- 检索结果必须与日志中的异常真正对应才可采用；无关结果不进入分析。\n"
-            . "- 无结果时换词重试最多一次，按以下方向改写（选一，不要叠加）：① 长类名去包路径取简短类名（org.spongepowered...MixinApplyError → MixinApplyError）；② 英文异常类名与中文症状词互译（OutOfMemoryError → 内存不足）；③ 叠加限定词（模组名/加载器名/启动器名）；④ 改用其他目录或放大全库。仍无结果说明知识库未覆盖，改用 web_search_exa。\n"
-            . "- 预算按信息缺口计数：每个独立待核实的信号或问题，检索类调用不超过 2 次（信号原词 1 次 + 改写重试 1 次）；全对话 rag_search 与 web_search_exa 合计约 6 次时代码会注入收敛提示，此后应立即基于已有证据输出并标注未核实项。web_search_exa 全对话最多 5 次，超出将被工具直接拒绝。\n"
-            . "- 引用来源：知识库结论标注条目来源路径（检索结果自带）；网络结论标注返回内容中的 URL 或站点名。\n"
-            . "- 知识库结论与日志证据矛盾时，以日志为准；结论中注明哪些方面未能核实，不要臆测。\n"
+            . "- 无结果时换词重试最多一次，按以下方向改写（选一，不要叠加）：① 长类名去包路径取简短类名（org.spongepowered...MixinApplyError → MixinApplyError）；② 英文异常类名与中文症状词互译（OutOfMemoryError → 内存不足）；③ 叠加限定词（模组名/启动器全名）；④ 改用其他目录或放大全库。仍无结果说明未覆盖，改用 web_search_exa。\n"
+            . "- 预算按信息缺口计数：每个独立待核实的信号或问题，检索类调用不超过 2 次；全对话 rag_search 与 web_search_exa 合计约 6 次时代码会注入收敛提示，github_search 与 github_get_content 严格各限 2 次，超额直接拦截。此后应立即基于已有证据输出并标注未核实项。web_search_exa 全对话最多 5 次。\n"
+            . "- 引用来源：知识库结论标注条目来源路径；GitHub 结论注明具体仓库、条目类型与编号（如 FoldCraftLauncher PR #852）；网络结论标注 URL。\n"
+            . "- 知识库/社区结论与日志证据矛盾时，以日志为准；结论中注明哪些方面未能核实，不要臆测。\n"
             . "- 附件中存在 crash-reports 类文件时，优先用 read_log_file 读取它：崩溃报告含完整堆栈、系统状态与 mod 列表，信息密度高于 latest.log 尾部；主日志仅用于补充崩溃报告未覆盖的时间线。\n"
             . "- 大日志与多附件定位：排查特定异常类名、报错文本、mod ID 或配置行时，优先使用 grep_log_file 检索行号与上下文，避免通读无用段落；确认具体行号后再使用 read_log_file(filename, line_start, line_end) 定向扩展。\n"
             . "- 长日志未定位到显式错误时：先按提示的基础常用 grep 关键词快速探测；若排查后确认无异常，应适可而止给出未发现异常的客观结论，切勿为了寻找不存在的问题而陷入盲目循环调用。\n"
             . "- read_log_file 返回的主日志和附加日志均已经过与上传主日志相同的脱敏过滤；不得声称附加日志未脱敏，也不得要求用户重新提供其中的敏感信息。\n\n"
             . "示例（正确的检索路径）：\n"
-            . "日志片段「Caused by: org.spongepowered.asm.mixin.transformer.MixinApplyError: ...」\n"
-            . "→ 调用 rag_search(query: \"MixinApplyError\") → 命中 patterns/mixin-apply-failed.md，条目含签名与修复步骤\n"
-            . "→ 直接基于日志与该条目给出结论，不再追加检索。";
+            . "1. 日志片段「Caused by: org.spongepowered.asm.mixin.transformer.MixinApplyError: ...」\n"
+            . "   → 提取 Java Error 报错摘要 \"MixinApplyError\" → 调用 rag_search(query: \"MixinApplyError\") → 命中 patterns/mixin-apply-failed.md，条目含签名与修复步骤，直接给出结论。\n"
+            . "2. 日志出现 FoldCraftLauncher 启动时渲染崩溃并提示 SIGSEGV：\n"
+            . "   → 调用 github_search(repo: \"FoldCraftLauncher\", query: \"SIGSEGV\", type: \"all\") → 命中 PR 修复或采纳回答\n"
+            . "   → 调用 github_get_content(repo: \"FoldCraftLauncher\", number: ...) 获取具体解决方案并给出建议。";
 
         if ($topicsText !== '') {
-            $system .= "\n\n以下是你可检索的内部知识库所涵盖的主题（帮助判断检索方向）：\n" . $topicsText;
+            $system .= "\n\n以下是内部知识库目录概览（大分类无需硬套，仅供参考）：\n" . $topicsText;
         }
 
         // 初始日志内容：长度 < 12KB 时不触发定位并直接塞入；>= 12KB 时统一触发定位，定位到塞聚焦窗口，未定位到不塞日志正文
@@ -589,12 +668,18 @@ class LogAgent
         $prompt = <<<PROMPT
 你是一个专业的 Minecraft 服务器日志分析助手。你的任务是分析玩家提交的日志，定位问题并提供解决方案。用户正在实时等待分析结果，追求速度、适可而止：日志内容本身通常已包含定位问题所需的全部证据，通读后若足以形成结论，直接开始分析并输出，不要为了求稳而追加工具调用。每次调用工具前先自问：这个结果会改变结论吗？不会就不要调用。
 
+核心原则：
+- 所有 Tools 包括知识库都仅为辅助日志分析的手段，并不是一定要基于这些 tools，更不是所有工具都必须调用。
+- 当日志内容或错误信息本身证据已充足、足以定位根因时，直接给出结论，严禁机械式或流程化调用工具。
+
 工作方式：
 1. 如需查看或定位日志内容：
    - 先用 `list_log_files` 查看有哪些文件。
    - 若需在长日志或多个附件中查找特定异常、报错关键字、mod ID 或配置，优先使用 `grep_log_file` 快速获取匹配行号与上下文，避免盲目通读整篇。
    - 若需通读完整文件或特定行区间，调用 `read_log_file`。默认不传范围参数以读取完整文件；需要聚焦局部内容时，由你传入 `line_start` 和 `line_end` 指定行区间。超大内容需要续读时，使用返回的 `next_offset`。
-2. 若知识库检索结果被截断（出现"…"或"已截断"标记），基于被截断处再次检索补全，不需要重复读取文件。
+2. 启动器与渲染器排障：遇启动器报错时，可调用 `github_list_repos` 查看支持仓库官方全名，使用 `github_search` 在 GitHub 官方仓库的 Issues/PRs/Discussions 检索最新排障线索，使用 `github_get_content` 获取解决方案。
+3. 报错与知识库检索：大分类对检索没有太大作用，切勿纠结分类或目录。遇到报错需要检索时，直接提取日志中的 Java Error 直接报错摘要（如 `Caused by:` 后的异常全名、错误类型、具体报错消息等）作为检索关键词；手机启动器与渲染器常识或版本关系查 `mobile_launcher`。
+4. 若知识库检索结果被截断（出现"…"或"已截断"标记），基于被截断处再次检索补全，不需要重复读取文件。
 
 重要停止规则：
 - 不要在已经有完整日志内容的情况下再次调用 `read_log_file`，重复调用会被拒绝并浪费预算。
@@ -700,6 +785,31 @@ PROMPT;
 
                 case 'grep_log_file':
                     return self::grepLogFile($logId, $arguments);
+
+                case 'github_list_repos':
+                    return \App\Client\GitHubClient::listRepos();
+
+                case 'github_search':
+                    if ($session->githubSearchCalls >= 2) {
+                        return 'GitHub 检索次数已达本次分析上限。请基于已有线索收敛并输出结论，未能核实的信息在结论中明确标注。';
+                    }
+                    $session->githubSearchCalls++;
+                    $repo = (string) ($arguments['repo'] ?? '');
+                    $query = (string) ($arguments['query'] ?? '');
+                    $type = (string) ($arguments['type'] ?? 'all');
+                    $state = (string) ($arguments['state'] ?? 'all');
+                    $maxResults = (int) ($arguments['max_results'] ?? 5);
+                    return \App\Client\GitHubClient::search($repo, $query, $type, $state, $maxResults);
+
+                case 'github_get_content':
+                    if ($session->githubDetailCalls >= 2) {
+                        return 'GitHub 详情阅读次数已达本次分析上限。请基于已有线索收敛并输出结论。';
+                    }
+                    $session->githubDetailCalls++;
+                    $repo = (string) ($arguments['repo'] ?? '');
+                    $number = (int) ($arguments['number'] ?? 0);
+                    $type = (string) ($arguments['type'] ?? 'auto');
+                    return \App\Client\GitHubClient::getContent($repo, $number, $type);
 
                 default:
                     return '未知工具: ' . $name;
