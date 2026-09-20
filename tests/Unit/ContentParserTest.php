@@ -116,8 +116,30 @@ test('ContentParser handles Content-Encoding: br appropriately', function () {
     } else {
         expect($result)->toBeInstanceOf(App\ApiError::class);
         expect($result->getHttpCode())->toBe(400);
-        expect($result->getMessage())->toContain('Brotli');
+        expect($result->getMessage())->toContain('Failed to decode request body with encoding: br');
     }
+});
+
+test('ContentParser decompresses valid brotli payload when extension is available', function () {
+    if (!function_exists('brotli_compress') || !function_exists('brotli_uncompress')) {
+        $this->markTestSkipped('brotli extension not loaded');
+    }
+
+    $request = Mockery::mock(\Hyperf\HttpServer\Contract\RequestInterface::class);
+    $stream = Mockery::mock(\Psr\Http\Message\StreamInterface::class);
+    $payload = json_encode(['content' => 'hello brotli world', 'source' => 'test']);
+    $compressed = brotli_compress((string) $payload);
+    $stream->shouldReceive('getContents')->andReturn($compressed);
+    $request->shouldReceive('getBody')->andReturn($stream);
+    $request->shouldReceive('getHeaderLine')->with('Content-Encoding')->andReturn('br');
+    $request->shouldReceive('getHeaderLine')->with('Content-Type')->andReturn('application/json');
+    $request->shouldReceive('getHeaderLine')->with('User-Agent')->byDefault()->andReturn('');
+
+    $parser = new App\ContentParser($request);
+    $result = $parser->getContent();
+
+    expect($result)->toBeArray();
+    expect($result['content'])->toBe('hello brotli world');
 });
 
 test('parseLauncherSource accepts launcher/version formats', function () {

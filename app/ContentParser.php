@@ -59,7 +59,16 @@ class ContentParser
                         if (!function_exists('brotli_uncompress')) {
                             return new ApiError(501, "Brotli decompression is not supported on this server.");
                         }
-                        $body = @brotli_uncompress($body, $limit);
+                        try {
+                            $uncompressed = @brotli_uncompress($body);
+                            if ($uncompressed === false || ($limit > 0 && strlen($uncompressed) > $limit)) {
+                                $body = false;
+                            } else {
+                                $body = $uncompressed;
+                            }
+                        } catch (\Throwable) {
+                            $body = false;
+                        }
                         break;
                     default:
                         return new ApiError(415, "Unsupported Content-Encoding: " . htmlspecialchars($step));
