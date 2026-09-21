@@ -22,12 +22,18 @@
   - `SecurityService::resolveClientIp()` 统一加固真实客户端 IP 判定，仅允许受信任反向代理及私有网段透传 `X-Real-IP` / `X-Forwarded-For`。
   - `App\Config::ensureFresh()` 结合 Redis 版本号与文件时间戳，实现跨 Swoole Resident Worker 毫秒级配置热重载与零残留。
 
+- **LogAgent 深度排障与已知领域知识机制**：
+  - **因果追踪硬性约束**：重构 LogAgent 思维链（CoT）与系统提示词，明确复杂日志绝非仅看表象错误。除非报错原因极其明确孤立无需上下文，否则硬性要求模型【必须至少进行一次日志上下文线索查找】（使用 `read_log_file` 读取上下文行区间、检索 `crash-reports` 崩溃报告附件、或调用 `grep_log_file` 追踪前置异常链与模组初始化状态），探明真正诱因，彻底杜绝单点报错草率收敛。
+  - **已知领域知识强行注入**：支持由运维管理员在后台统一录入与维护领域知识（单条严格限制 ≤ 200 字），落盘 `runtime/domain_knowledge.json` 并配合 Redis 高速同步；在组织分析请求时直接以先验规则格式拼接入系统提示词，LLM 自身无写权限且不走动态 Tools，形成确定性业务约束。
+
 ### 新增管理后台 API 端点
 
 - `GET /v1/admin/event-queue/stats`：查询事件队列运行概况与指标（吞吐、背压、死信数、驱动模式）。
 - `GET /v1/admin/event-queue/dead`：获取死信队列条目列表（分页、错误信息、失败时间戳）。
 - `POST /v1/admin/event-queue/dead/retry`：重放指定死信条目，重新投入事件流消费。
 - `DELETE /v1/admin/event-queue/dead`：清空死信队列。
+- `GET/POST /v1/admin/ai/domain-knowledge`：获取已知领域知识列表 / 新增领域知识条目（≤200 字校验）。
+- `PUT/DELETE /v1/admin/ai/domain-knowledge/{id}`：更新已知领域知识内容与启用状态 / 安全删除。
 
 ### 文档更新与补全
 
