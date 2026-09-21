@@ -426,6 +426,54 @@ class RedisMock
         return ['0-0', $claimed, []];
     }
 
+    public function xrange(string $key, string $start, string $end, ?int $count = null): array
+    {
+        self::guard();
+        if (!isset(self::$streams[$key])) {
+            return [];
+        }
+        $entries = self::$streams[$key];
+        $out = [];
+        foreach ($entries as $entry) {
+            $id = $entry['id'];
+            if ($start !== '-' && $id < $start) {
+                continue;
+            }
+            if ($end !== '+' && $id > $end) {
+                continue;
+            }
+            $out[$id] = $entry['fields'];
+            if ($count !== null && count($out) >= $count) {
+                break;
+            }
+        }
+        return $out;
+    }
+
+    public function xrevrange(string $key, string $end, string $start, ?int $count = null): array
+    {
+        self::guard();
+        if (!isset(self::$streams[$key])) {
+            return [];
+        }
+        $entries = array_reverse(self::$streams[$key]);
+        $out = [];
+        foreach ($entries as $entry) {
+            $id = $entry['id'];
+            if ($end !== '+' && $id > $end) {
+                continue;
+            }
+            if ($start !== '-' && $id < $start) {
+                continue;
+            }
+            $out[$id] = $entry['fields'];
+            if ($count !== null && count($out) >= $count) {
+                break;
+            }
+        }
+        return $out;
+    }
+
     private static function idSeq(string $id): int
     {
         return (int) explode('-', $id)[0];

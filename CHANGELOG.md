@@ -1,5 +1,43 @@
 # Changelog
 
+## 1.8.0 — 2026-09-21
+
+### 重大架构演进与新特性
+
+- **统一日志异步事件队列（EventQueue）体系**：
+  - **极速上传彻底解耦**：用户上传日志（`LogController::create`）彻底移除同步阻塞的 SpinYarn 反混淆和全量敏感词/正则扫描，仅保留轻量 `preFilter()` 基础脱敏和 `$this->analyse()` Codex 分析，入库后立即派发 `EventQueue::EVENT_LOG_UPLOADED` 事件并毫秒级向客户端返回 200 响应。
+  - **发布-订阅调度中心**：强类型事件模型 `QueueEvent`（包含 UUID、重试次数、时间戳与 `stopPropagation()` 流程阻断控制），支持按优先级降序调度（`EventHandlerInterface` 标准化处理器接口）。
+  - **多层降级调度**：优先写入 Redis Stream（`events:log:stream`，消费组 `log-event-workers`），Redis 不可用时在 Swoole 协程环境下无缝降级为异步子协程并发执行，CLI/单测环境下同步降级执行，保证 100% 健壮可用。
+  - **死信队列（DeadLetterQueue / DLQ）**：重试耗尽（默认最大 3 次）或毒丸条目自动归档至独立死信流 `events:log:dead` 并安全出队，提供 Admin API 进行死信列表检索、单条重放（`retry`）和安全清空（`clear`）。
+  - **异步安全审计与反混淆处理流水线**：
+    - `SecurityAuditHandler` 提取主日志正文与附加文件（`Log::getRawFiles()`）执行规则检测，违规时即刻物理清除日志及缓存、阻断后续流转、记录高危操作审计日志并自动封禁恶意来源 IP；
+    - `DeobfuscateHandler` 对未混淆日志调用 SpinYarn 并通过统一的 `StorageInterface::Update()` 与 `Log::updateContent()` 完成持久化与缓存原子回写。
+  - **常驻消费进程自回收与优雅排空**：`EventQueueConsumer`（`event-queue-consumer`）支持在进程内派生固定命名消费协程（`worker-0`, `worker-1`），后台协程自动周期性（30s）执行 `XAUTOCLAIM` 回收超时待决条目；支持两阶段排空（30s 宽限期）与三重自回收策略（处理 ≥1000 任务、OS 真实物理常驻内存 VmRSS ≥256MB 或空闲 ≥180s），退出后由 Swoole manager 自动重新拉起干净进程重置 RSS。
+
+- **违规规则 AES-256-GCM 认证加密安全存储**：
+  - 敏感关键词与正则表达式使用 AES-256-GCM 密文存储（标识前缀 `enc:v1:<base64(iv.tag.cipher)>`），密钥由环境变量 `SECURITY_ENCRYPTION_KEY`、配置或自动生成存盘于 `runtime/.security_secret`（0600 权限保护）。
+  - 磁盘文件 `runtime/content_reject_rules.json` 及 `dynamic_config.json` 严格全量密文落盘，杜绝敏感词泄露；`Config::validate()` 自动解密后再进行正则表达式语法校验，Admin 控制台则解密后友好呈现。
+
+- **配置热重载与安全防护增强**：
+  - `SecurityService::resolveClientIp()` 统一加固真实客户端 IP 判定，仅允许受信任反向代理及私有网段透传 `X-Real-IP` / `X-Forwarded-For`。
+  - `App\Config::ensureFresh()` 结合 Redis 版本号与文件时间戳，实现跨 Swoole Resident Worker 毫秒级配置热重载与零残留。
+
+### 新增管理后台 API 端点
+
+- `GET /v1/admin/event-queue/stats`：查询事件队列运行概况与指标（吞吐、背压、死信数、驱动模式）。
+- `GET /v1/admin/event-queue/dead`：获取死信队列条目列表（分页、错误信息、失败时间戳）。
+- `POST /v1/admin/event-queue/dead/retry`：重放指定死信条目，重新投入事件流消费。
+- `DELETE /v1/admin/event-queue/dead`：清空死信队列。
+
+### 文档更新与补全
+
+- **`README.md`**：全面改写架构与组件说明，重构安装配置指南（补充 security、eventQueue、admin 等配置说明），更新请求处理流程与异步事件队列时序图。
+- **`API.md`**：上传日志流程补充极速解耦与事件流说明，新增第 44-47 节关于事件队列与死信管理的 Admin 端点规范与请求响应示例。
+- **`openapi.yaml`**：版本升级至 1.8.0，补全事件队列指标与死信管理端点定义。
+- **`postman_collection.json`**：在 Admin 分组下补充事件队列与死信操作用例。
+- **`rag/README.md`**：更新 Agentic RAG Plus 机制、向量召回配置与 CMS 在线管理端点说明。
+- **`AGENTS.md`**：更新事件队列、死信机制与敏感规则加密技术约定。
+
 ## 1.7.8 — 2026-09-12
 
 ### 新功能

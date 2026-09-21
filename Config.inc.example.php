@@ -68,6 +68,33 @@ return [
     ],
 
     /* ─── Rate limit（Redis INCR 限流，按 IP + method + path）── */
+    'rateLimit' => [
+        'enabled' => false,
+        'trustedProxies' => ['127.0.0.1', '::1', '10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16'],
+        'default' => [60, 60],
+        'routes' => [
+            '/v1/log' => ['limit' => 30, 'window' => 60],
+            '/1/log' => ['limit' => 30, 'window' => 60],
+            '/v1/ai' => ['limit' => 10, 'window' => 60],
+            '/1/ai' => ['limit' => 10, 'window' => 60],
+            '/rag' => ['limit' => 60, 'window' => 60],
+        ],
+    ],
+
+    /* ─── Security（安全防御与合规规则）──────────────────── */
+    'security' => [
+        'enabled' => true,
+        // 受信任反向代理列表（用于识别客户端真实 IP，支持 CIDR 网段）
+        'trustedProxies' => ['127.0.0.1', '::1', '10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16'],
+        // 违规内容前置过滤规则
+        'contentRules' => [
+            'enabled' => true,
+            'keywords' => [],
+            'patterns' => [],
+        ],
+        // 预设封禁 IP 列表与策略
+        'ipBans' => [],
+    ],
 
     /* ─── Legal ────────────────────────────────────────────── */
     'legal' => [
@@ -229,6 +256,19 @@ return [
         // 管理员鉴权 Token，请求时通过 Authorization: Bearer <token> 或 X-Admin-Token 传入
         // 可由环境变量 ADMIN_TOKEN 覆盖
         'token' => 'change-this-to-a-secure-random-token',
+    ],
+
+    /* ─── 统一事件队列（EventQueue）────────────────────────── */
+    'eventQueue' => [
+        // 是否启用异步事件队列（关闭时降级为同步执行）
+        'enabled' => true,
+        // Redis Stream 键名与消费组名
+        'stream' => 'events:log:stream',
+        'group' => 'log-event-workers',
+        // 是否异步执行 SpinYarn 反混淆
+        'asyncDeobfuscate' => true,
+        // 是否异步执行关键词与正则安全审计
+        'asyncSecurityAudit' => true,
     ],
 
 ];

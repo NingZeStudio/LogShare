@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: LogShare API
-  version: 1.7.8
+  version: 1.8.0
   description: |
     Minecraft / Hytale log analysis and sharing platform.
     
@@ -1890,6 +1890,59 @@ paths:
       security:
         - AdminBearerAuth: []
         - AdminHeaderAuth: []
+  /v1/admin/event-queue/stats:
+    get:
+      tags: [Admin]
+      summary: Get asynchronous event queue stats and telemetry (Admin)
+      operationId: adminGetEventQueueStats
+      security:
+        - AdminBearerAuth: []
+        - AdminHeaderAuth: []
+      responses:
+        '200':
+          description: OK
+  /v1/admin/event-queue/dead:
+    get:
+      tags: [Admin]
+      summary: List dead letter tasks with error traces (Admin)
+      operationId: adminListDeadLetters
+      security:
+        - AdminBearerAuth: []
+        - AdminHeaderAuth: []
+      parameters:
+        - name: limit
+          in: query
+          schema: { type: integer, default: 50 }
+      responses:
+        '200':
+          description: OK
+    delete:
+      tags: [Admin]
+      summary: Clear dead letter queue (Admin)
+      operationId: adminClearDeadLetters
+      security:
+        - AdminBearerAuth: []
+        - AdminHeaderAuth: []
+      responses:
+        '200':
+          description: OK
+  /v1/admin/event-queue/dead/retry:
+    post:
+      tags: [Admin]
+      summary: Retry a dead letter task back into main event stream (Admin)
+      operationId: adminRetryDeadLetter
+      security:
+        - AdminBearerAuth: []
+        - AdminHeaderAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [streamId]
+              properties:
+                streamId: { type: string }
       responses:
         '200':
           description: OK

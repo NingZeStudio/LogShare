@@ -7,30 +7,38 @@ class Config
     private static array $data = [];
     private static bool $loaded = false;
     private static int $dynamicMtime = 0;
+    private static int $dynamicSize = -1;
+    private static string $dynamicVersion = '';
     private static string $baseConfigPath = '';
 
     public static function load(string $path): void
     {
         self::$baseConfigPath = $path;
 
+        $example = CORE_PATH . '/Config.inc.example.php';
+        $defaultData = [];
+        if (is_file($example)) {
+            $defaultData = require $example;
+            if (!is_array($defaultData)) {
+                $defaultData = [];
+            }
+        }
+
         if (!is_file($path)) {
-            // 配置缺失（如 Docker 镜像内无 Config.inc.php）时回退到示例配置，
-            // 避免 `require` 直接 fatal 导致进程无法启动。
-            $example = CORE_PATH . '/Config.inc.example.php';
-            if (is_file($example)) {
-                $path = $example;
+            if (!empty($defaultData)) {
+                $data = $defaultData;
             } else {
                 self::$loaded = true;
                 return;
             }
+        } else {
+            $userConfig = require $path;
+            if (!is_array($userConfig)) {
+                throw new \InvalidArgumentException("Config file {$path} must return an array.");
+            }
+            $data = !empty($defaultData) ? self::deepMerge($defaultData, $userConfig) : $userConfig;
         }
 
-        $data = require $path;
-        if (!is_array($data)) {
-            // 配置文件损坏/返回类型错误时 fail-fast：常驻进程下静默降级会导致
-            // 每次访问配置都重读文件，且业务拿到空配置产生更难排查的次生故障
-            throw new \InvalidArgumentException("Config file {$path} must return an array.");
-        }
         self::applyEnvironmentOverrides($data);
         self::applyDynamicOverrides($data);
         // Example 配置中的占位符（如 '${REDIS_PASSWORD}'）在非 Docker 部署下不会
@@ -45,6 +53,7 @@ class Config
         $dynamicPath = self::getDynamicConfigPath();
         clearstatcache(true, $dynamicPath);
         self::$dynamicMtime = is_file($dynamicPath) ? (filemtime($dynamicPath) ?: 0) : 0;
+        self::$dynamicSize = is_file($dynamicPath) ? (filesize($dynamicPath) ?: 0) : -1;
 
         self::$data = $data;
         self::$loaded = true;
@@ -205,11 +214,36 @@ class Config
                 throw new \InvalidArgumentException('github.timeout must be greater than zero');
             }
         }
+
+        $security = $data['security'] ?? [];
+        if (($security['enabled'] ?? true) === true) {
+            if (isset($security['trustedProxies']) && !is_array($security['trustedProxies'])) {
+                throw new \InvalidArgumentException('security.trustedProxies must be an array');
+            }
+            if (isset($security['contentRules']['patterns']) && is_array($security['contentRules']['patterns'])) {
+                foreach ($security['contentRules']['patterns'] as $pt) {
+                    $plainPt = is_string($pt) ? \App\System\SecurityService::decryptSecret($pt) : '';
+                    if ($plainPt !== '' && @preg_match($plainPt, '') === false) {
+                        throw new \InvalidArgumentException("Invalid regular expression in security patterns: {$pt}");
+                    }
+                }
+            }
+        }
+
+        $rateLimit = $data['rateLimit'] ?? [];
+        if (($rateLimit['enabled'] ?? false) === true) {
+            if (isset($rateLimit['trustedProxies']) && !is_array($rateLimit['trustedProxies'])) {
+                throw new \InvalidArgumentException('rateLimit.trustedProxies must be an array');
+            }
+            if (isset($rateLimit['default']) && (!is_array($rateLimit['default']) || count($rateLimit['default']) < 2)) {
+                throw new \InvalidArgumentException('rateLimit.default must contain [limit, window]');
+            }
+        }
     }
 
     /**
      * Ensure in-memory configuration is fresh across Swoole resident worker processes
-     * by detecting dynamic config file mtime changes.
+     * by detecting dynamic config file mtime/size changes and Redis version bump.
      */
     public static function ensureFresh(): void
     {
@@ -221,10 +255,26 @@ class Config
 
         $dynamicPath = self::getDynamicConfigPath();
         clearstatcache(true, $dynamicPath);
-        $currentMtime = is_file($dynamicPath) ? (filemtime($dynamicPath) ?: 0) : 0;
+        $exists = is_file($dynamicPath);
+        $currentMtime = $exists ? (filemtime($dynamicPath) ?: 0) : 0;
+        $currentSize = $exists ? (filesize($dynamicPath) ?: 0) : -1;
 
-        if ($currentMtime !== self::$dynamicMtime) {
+        if ($currentMtime !== self::$dynamicMtime || $currentSize !== self::$dynamicSize) {
             self::load($basePath);
+            return;
+        }
+
+        if ($exists && extension_loaded('redis')) {
+            try {
+                $redis = \App\Client\RedisClient::getRedis();
+                if ($redis !== null) {
+                    $remoteVer = (string) ($redis->get('config:dynamic:version') ?: '');
+                    if ($remoteVer !== '' && self::$dynamicVersion !== '' && $remoteVer !== self::$dynamicVersion) {
+                        self::load($basePath);
+                    }
+                }
+            } catch (\Throwable) {
+            }
         }
     }
 
@@ -294,15 +344,37 @@ class Config
     {
         $path = self::getDynamicConfigPath();
         if (!is_file($path)) {
+            self::$dynamicVersion = '';
             return;
         }
         $content = @file_get_contents($path);
         if ($content === false || $content === '') {
+            self::$dynamicVersion = '';
             return;
         }
         $decoded = json_decode($content, true);
         if (is_array($decoded)) {
+            if (isset($decoded['_meta']['version'])) {
+                self::$dynamicVersion = (string) $decoded['_meta']['version'];
+                unset($decoded['_meta']);
+            }
             $data = self::deepMerge($data, $decoded);
+            $explicitKeys = [
+                ['ai', 'headers'],
+                ['security', 'contentRules'],
+                ['security', 'ipBans'],
+                ['security', 'trustedProxies'],
+                ['rateLimit', 'routes'],
+                ['rateLimit', 'trustedProxies'],
+                ['github', 'tokens'],
+                ['github', 'repos'],
+                ['filter', 'pre'],
+            ];
+            foreach ($explicitKeys as [$section, $field]) {
+                if (isset($decoded[$section][$field]) && is_array($decoded[$section][$field])) {
+                    $data[$section][$field] = $decoded[$section][$field];
+                }
+            }
         }
     }
 
@@ -448,6 +520,7 @@ class Config
     {
         self::ensureFresh();
         $masked = self::$data;
+        unset($masked['_meta']);
 
         if (isset($masked['admin']['token']) && (string) $masked['admin']['token'] !== '') {
             $masked['admin']['token'] = '******';
@@ -490,6 +563,13 @@ class Config
             unset($p);
         }
 
+        if (isset($masked['security']['contentRules']['keywords']) && is_array($masked['security']['contentRules']['keywords'])) {
+            $masked['security']['contentRules']['keywords'] = \App\System\SecurityService::decryptRulesList($masked['security']['contentRules']['keywords']);
+        }
+        if (isset($masked['security']['contentRules']['patterns']) && is_array($masked['security']['contentRules']['patterns'])) {
+            $masked['security']['contentRules']['patterns'] = \App\System\SecurityService::decryptRulesList($masked['security']['contentRules']['patterns']);
+        }
+
         return $masked;
     }
 
@@ -501,9 +581,30 @@ class Config
     public static function saveDynamic(array $updates): void
     {
         self::ensureFresh();
+        if (isset($updates['_meta'])) {
+            unset($updates['_meta']);
+        }
         self::restoreMaskedSecrets($updates, self::$data);
 
+        $explicitKeys = [
+            ['ai', 'headers'],
+            ['security', 'contentRules'],
+            ['security', 'ipBans'],
+            ['security', 'trustedProxies'],
+            ['rateLimit', 'routes'],
+            ['rateLimit', 'trustedProxies'],
+            ['github', 'tokens'],
+            ['github', 'repos'],
+            ['filter', 'pre'],
+        ];
+
         $candidate = self::deepMerge(self::$data, $updates);
+        foreach ($explicitKeys as [$section, $field]) {
+            if (isset($updates[$section][$field]) && is_array($updates[$section][$field])) {
+                $candidate[$section][$field] = $updates[$section][$field];
+            }
+        }
+
         self::validate($candidate);
 
         $path = self::getDynamicConfigPath();
@@ -512,9 +613,45 @@ class Config
             $raw = @file_get_contents($path);
             if ($raw !== false && $raw !== '') {
                 $existing = json_decode($raw, true) ?: [];
+                unset($existing['_meta']);
             }
         }
         $newDynamic = self::deepMerge($existing, $updates);
+        foreach ($explicitKeys as [$section, $field]) {
+            if (isset($updates[$section][$field]) && is_array($updates[$section][$field])) {
+                $newDynamic[$section][$field] = $updates[$section][$field];
+            }
+        }
+
+        // 双向同步：若更新了 security.contentRules，加密持久化写入 runtime/content_reject_rules.json
+        if (isset($updates['security']['contentRules']) && is_array($updates['security']['contentRules'])) {
+            $rulesPath = CORE_PATH . '/runtime/content_reject_rules.json';
+            $rulesDir = dirname($rulesPath);
+            if (!is_dir($rulesDir)) {
+                @mkdir($rulesDir, 0777, true);
+            }
+            $rawKw = (array) ($updates['security']['contentRules']['keywords'] ?? []);
+            $rawPt = (array) ($updates['security']['contentRules']['patterns'] ?? []);
+            $encKw = \App\System\SecurityService::encryptRulesList($rawKw);
+            $encPt = \App\System\SecurityService::encryptRulesList($rawPt);
+
+            $newDynamic['security']['contentRules']['keywords'] = $encKw;
+            $newDynamic['security']['contentRules']['patterns'] = $encPt;
+
+            $rulesData = [
+                'enabled' => (bool) ($updates['security']['contentRules']['enabled'] ?? true),
+                'keywords' => $encKw,
+                'patterns' => $encPt,
+                'updatedAt' => time(),
+            ];
+            @file_put_contents($rulesPath, json_encode($rulesData, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE));
+        }
+
+        $version = (string) (int) (microtime(true) * 1000000);
+        $newDynamic['_meta'] = [
+            'version' => $version,
+            'updatedAt' => time(),
+        ];
 
         $dir = dirname($path);
         if (!is_dir($dir)) {
@@ -535,7 +672,17 @@ class Config
 
         clearstatcache(true, $path);
         self::$dynamicMtime = filemtime($path) ?: time();
+        self::$dynamicSize = filesize($path) ?: strlen((string) $encoded);
+        self::$dynamicVersion = $version;
         self::$data = $candidate;
+
+        if (extension_loaded('redis')) {
+            try {
+                $redis = \App\Client\RedisClient::getRedis();
+                $redis?->set('config:dynamic:version', $version);
+            } catch (\Throwable) {
+            }
+        }
     }
 
     /**
@@ -549,6 +696,15 @@ class Config
             clearstatcache(true, $path);
         }
         self::$dynamicMtime = 0;
+        self::$dynamicSize = -1;
+        self::$dynamicVersion = '';
+        if (extension_loaded('redis')) {
+            try {
+                $redis = \App\Client\RedisClient::getRedis();
+                $redis?->del('config:dynamic:version');
+            } catch (\Throwable) {
+            }
+        }
         self::load(self::$baseConfigPath !== '' ? self::$baseConfigPath : (CORE_PATH . '/Config.inc.php'));
     }
 }

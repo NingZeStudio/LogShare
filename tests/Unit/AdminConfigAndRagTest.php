@@ -53,7 +53,11 @@ afterEach(function () {
     $dynamicPath = Config::getDynamicConfigPath();
     if (is_file($dynamicPath)) {
         @unlink($dynamicPath);
+        clearstatcache(true, $dynamicPath);
     }
+    $this->configRef->getProperty('dynamicMtime')->setValue(null, 0);
+    $this->configRef->getProperty('dynamicSize')->setValue(null, -1);
+    $this->configRef->getProperty('dynamicVersion')->setValue(null, '');
 });
 
 test('Config getMasked masks sensitive credentials', function () {

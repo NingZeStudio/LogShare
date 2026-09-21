@@ -75,6 +75,54 @@ class FilesystemStorage implements StorageInterface
         return $id;
     }
 
+    public static function Update(\App\Id $id, string $data, ?array $files = null): bool
+    {
+        $config = \App\Config::Get("filesystem");
+        $basePath = CORE_PATH . $config['path'];
+        $path = $basePath . $id->getRaw();
+
+        if (!is_file($path)) {
+            return false;
+        }
+
+        $raw = @file_get_contents($path);
+        if ($raw === false || $raw === '') {
+            return false;
+        }
+
+        $document = json_decode($raw, true);
+        if (!is_array($document)) {
+            return false;
+        }
+
+        $document['data'] = $data;
+        if ($files !== null) {
+            $document['files'] = array_values(array_map(
+                fn($file) => [
+                    'name' => $file['name'],
+                    'data' => $file['data'],
+                    'size' => strlen($file['data']),
+                ],
+                $files
+            ));
+        }
+
+        self::writeAtomically($path, $document);
+
+        // 同步更新 .meta.json
+        $metaPath = $path . '.meta.json';
+        if (is_file($metaPath)) {
+            $metaRaw = @file_get_contents($metaPath);
+            $metaDoc = $metaRaw ? json_decode($metaRaw, true) : [];
+            if (is_array($metaDoc)) {
+                $metaDoc['filesCount'] = count($document['files'] ?? []);
+                self::writeAtomically($metaPath, $metaDoc);
+            }
+        }
+
+        return true;
+    }
+
     public static function Get(\App\Id $id, bool $includeContent = true): ?array
     {
         $config = \App\Config::Get("filesystem");

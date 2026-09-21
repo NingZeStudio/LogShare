@@ -4,6 +4,7 @@ namespace App\Controller;
 
 use App\ApiError;
 use App\Data\Token;
+use App\Queue\EventQueue;
 use Hyperf\HttpServer\Annotation\Controller;
 use Hyperf\HttpServer\Annotation\DeleteMapping;
 use Hyperf\HttpServer\Annotation\PostMapping;
@@ -16,10 +17,7 @@ class LogController extends AbstractController
     public function create(): ResponseInterface
     {
         // 1. IP 黑名单校验
-        $clientIp = $this->request->getServerParams()['remote_addr'] ?? null;
-        if ($clientIp && \App\System\SecurityService::isIpBanned((string) $clientIp)) {
-            throw new ApiError(403, 'Your IP has been blocked from submitting logs.');
-        }
+        $this->checkIpBan();
 
         $content = $this->validateContentExists($this->parseContent());
 
@@ -37,12 +35,9 @@ class LogController extends AbstractController
             }
         }
 
-        // 2. 动态违规内容前置过滤
-        \App\System\SecurityService::validateContent((string) $content);
-        if (!empty($files)) {
-            foreach ($files as $file) {
-                \App\System\SecurityService::validateContent((string) ($file['data'] ?? ''));
-            }
+        // 违规内容过滤：若开启异步审核则交由队列处理以大幅提升上传速度，否则保留同步检查
+        if (!EventQueue::config()['asyncSecurityAudit']) {
+            $this->checkContentSecurity($content, $files);
         }
 
         if (empty($source)) {
@@ -55,6 +50,13 @@ class LogController extends AbstractController
         $token = new Token();
 
         $id = $log->put($content, $token, $metadata, $source, $files);
+
+        // 统一异步队列事件调度：反混淆、关键词安全审核等后台排队异步执行
+        EventQueue::dispatch(EventQueue::EVENT_LOG_UPLOADED, [
+            'logId' => $id->get(),
+            'clientIp' => $this->getClientRealIp(),
+            'source' => $source,
+        ]);
 
         $urls = \App\Config::Get('urls');
         $apiPrefix = $this->apiPrefix();

@@ -24,8 +24,16 @@ function instantiateController(string $class, ?RequestInterface $request = null,
     $ref = new ReflectionClass($class);
     $instance = $ref->newInstanceWithoutConstructor();
 
+    if ($request === null) {
+        $request = Mockery::mock(RequestInterface::class);
+    }
+    if ($request instanceof \Mockery\MockInterface) {
+        $request->shouldReceive('getServerParams')->byDefault()->andReturn(['remote_addr' => '127.0.0.1']);
+        $request->shouldReceive('getHeaders')->byDefault()->andReturn([]);
+    }
+
     $reqProp = $ref->getProperty('request');
-    $reqProp->setValue($instance, $request ?? Mockery::mock(RequestInterface::class));
+    $reqProp->setValue($instance, $request);
 
     $respProp = $ref->getProperty('response');
     $respProp->setValue($instance, $response ?? new Response());

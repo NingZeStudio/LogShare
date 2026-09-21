@@ -43,6 +43,31 @@ class MariaDbStorage implements StorageInterface
         return $id;
     }
 
+    public static function Update(\App\Id $id, string $data, ?array $files = null): bool
+    {
+        $rawId = $id->getRaw();
+        return Db::transaction(function () use ($rawId, $data, $files) {
+            $updated = Db::table(self::TABLE_LOGS)->where('id', $rawId)->update(['data' => $data]);
+            if ($files !== null) {
+                Db::table(self::TABLE_FILES)->where('log_id', $rawId)->delete();
+                if (!empty($files)) {
+                    $rows = [];
+                    foreach ($files as $file) {
+                        $fileData = $file['data'] ?? '';
+                        $rows[] = [
+                            'log_id' => $rawId,
+                            'name' => $file['name'] ?? '',
+                            'data' => $fileData,
+                            'size' => isset($file['size']) ? (int) $file['size'] : strlen($fileData),
+                        ];
+                    }
+                    Db::table(self::TABLE_FILES)->insert($rows);
+                }
+            }
+            return $updated >= 0;
+        });
+    }
+
     private static function insertLog(string $rawId, string $data, ?Token $token, array $metadata, ?string $source, ?array $files): void
     {
         $document = [

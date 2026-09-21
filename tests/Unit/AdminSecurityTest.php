@@ -24,6 +24,7 @@ beforeEach(function () {
     $cfg['filesystem']['path'] = substr($this->tmpDir, strlen(CORE_PATH)) . '/';
     $cfg['storage']['storageId'] = 'f';
     $cfg['storage']['storages']['f']['enabled'] = true;
+    $cfg['eventQueue']['asyncSecurityAudit'] = false;
     $this->dataProp->setValue(null, $cfg);
 
     if (!\Hyperf\Context\ApplicationContext::hasContainer()) {
@@ -139,4 +140,123 @@ test('AdminController security endpoints respond properly', function () {
     \Hyperf\Context\Context::set(\Psr\Http\Message\ServerRequestInterface::class, $unbanReq);
     $unbanResp = $controller->unbanIp();
     expect($unbanResp->getStatusCode())->toBe(200);
+});
+
+test('SecurityService resolveClientIp handles trusted reverse proxies and prevents spoofing', function () {
+    // 1. 本地回环或 Docker 内网（受信任代理）转发真实客户端 IP
+    $headers = ['x-real-ip' => ['203.0.113.50']];
+    $serverParams = ['remote_addr' => '172.18.0.2']; // Docker bridge IP
+    $ip = SecurityService::resolveClientIp($serverParams, $headers);
+    expect($ip)->toBe('203.0.113.50');
+
+    // 2. 127.0.0.1 回环受信任代理转发多级 X-Forwarded-For
+    $headersXff = ['x-forwarded-for' => ['198.51.100.22, 10.0.0.1']];
+    $serverParamsXff = ['remote_addr' => '127.0.0.1'];
+    $ipXff = SecurityService::resolveClientIp($serverParamsXff, $headersXff);
+    expect($ipXff)->toBe('198.51.100.22');
+
+    // 3. 不受信任公网 IP（非代理）伪造 X-Real-IP 时，忽略伪造头部，使用直连 remote_addr
+    $headersSpoof = ['x-real-ip' => ['1.1.1.1']];
+    $serverParamsSpoof = ['remote_addr' => '198.51.100.99'];
+    $ipSpoof = SecurityService::resolveClientIp($serverParamsSpoof, $headersSpoof);
+    expect($ipSpoof)->toBe('198.51.100.99');
+});
+
+test('LogController, AnalyseController and AIAnalyseController enforce IP ban and content rules', function () {
+    $bannedIp = '203.0.113.77';
+    SecurityService::banIp($bannedIp, 3600, 'Test ban');
+
+    // 1. LogController 拦截封禁 IP
+    $bannedStream = Mockery::mock(\Psr\Http\Message\StreamInterface::class);
+    $bannedStream->shouldReceive('getContents')->andReturn(json_encode(['content' => 'hello']));
+    $bannedStream->shouldReceive('__toString')->andReturn(json_encode(['content' => 'hello']));
+
+    $bannedReq = Mockery::mock(\Hyperf\HttpServer\Contract\RequestInterface::class);
+    $bannedReq->shouldReceive('getServerParams')->andReturn(['remote_addr' => '172.18.0.2']);
+    $bannedReq->shouldReceive('getHeaders')->andReturn(['x-real-ip' => [$bannedIp]]);
+    $bannedReq->shouldReceive('getHeaderLine')->with('Content-Type')->andReturn('application/json');
+    $bannedReq->shouldReceive('getHeaderLine')->with('Content-Encoding')->andReturn('');
+    $bannedReq->shouldReceive('getBody')->andReturn($bannedStream);
+    $bannedReq->shouldReceive('getUploadedFiles')->andReturn([]);
+    $bannedReq->shouldReceive('getParsedBody')->andReturn(['content' => 'hello']);
+
+    $refLog = new ReflectionClass(LogController::class);
+    $logController = $refLog->newInstanceWithoutConstructor();
+    $refLog->getProperty('request')->setValue($logController, $bannedReq);
+    $refLog->getProperty('response')->setValue($logController, new \Hyperf\HttpServer\Response());
+
+    try {
+        $logController->create();
+        test()->fail('Expected ApiError 403 was not thrown for banned IP in LogController');
+    } catch (ApiError $e) {
+        expect($e->getCode())->toBe(403);
+        expect($e->getMessage())->toContain('blocked');
+    }
+
+    // 2. 解除封禁后，测试违规内容拦截
+    SecurityService::unbanIp($bannedIp);
+    SecurityService::saveContentRules([
+        'enabled' => true,
+        'keywords' => ['forbidden_secret_payload'],
+        'patterns' => [],
+    ]);
+
+    $badContentStream = Mockery::mock(\Psr\Http\Message\StreamInterface::class);
+    $badContentPayload = json_encode(['content' => 'Notice: forbidden_secret_payload detected']);
+    $badContentStream->shouldReceive('getContents')->andReturn($badContentPayload);
+    $badContentStream->shouldReceive('__toString')->andReturn($badContentPayload);
+
+    $badContentReq = Mockery::mock(\Hyperf\HttpServer\Contract\RequestInterface::class);
+    $badContentReq->shouldReceive('getServerParams')->andReturn(['remote_addr' => '127.0.0.1']);
+    $badContentReq->shouldReceive('getHeaders')->andReturn([]);
+    $badContentReq->shouldReceive('getHeaderLine')->with('Content-Type')->andReturn('application/json');
+    $badContentReq->shouldReceive('getHeaderLine')->with('Content-Encoding')->andReturn('');
+    $badContentReq->shouldReceive('getBody')->andReturn($badContentStream);
+    $badContentReq->shouldReceive('getUploadedFiles')->andReturn([]);
+    $badContentReq->shouldReceive('getParsedBody')->andReturn(['content' => 'Notice: forbidden_secret_payload detected']);
+
+    $badContentCtrl = $refLog->newInstanceWithoutConstructor();
+    $refLog->getProperty('request')->setValue($badContentCtrl, $badContentReq);
+    $refLog->getProperty('response')->setValue($badContentCtrl, new \Hyperf\HttpServer\Response());
+
+    try {
+        $badContentCtrl->create();
+        test()->fail('Expected ApiError 400 was not thrown for prohibited content in LogController');
+    } catch (ApiError $e) {
+        expect($e->getCode())->toBe(400);
+        expect($e->getMessage())->toContain('prohibited keyword');
+    }
+
+    // 3. AnalyseController 违规内容拦截
+    $refAnalyse = new ReflectionClass(\App\Controller\AnalyseController::class);
+    $analyseCtrl = $refAnalyse->newInstanceWithoutConstructor();
+    $refAnalyse->getProperty('request')->setValue($analyseCtrl, $badContentReq);
+    $refAnalyse->getProperty('response')->setValue($analyseCtrl, new \Hyperf\HttpServer\Response());
+
+    try {
+        $analyseCtrl->analyse();
+        test()->fail('Expected ApiError 400 was not thrown in AnalyseController');
+    } catch (ApiError $e) {
+        expect($e->getCode())->toBe(400);
+        expect($e->getMessage())->toContain('prohibited keyword');
+    }
+
+    // 4. AIAnalyseController 违规内容拦截
+    $cfg = Config::all();
+    $cfg['ai']['enabled'] = true;
+    $cfg['ai']['apiKeys'] = ['sk-test'];
+    $this->dataProp->setValue(null, $cfg);
+
+    $refAi = new ReflectionClass(\App\Controller\AIAnalyseController::class);
+    $aiCtrl = $refAi->newInstanceWithoutConstructor();
+    $refAi->getProperty('request')->setValue($aiCtrl, $badContentReq);
+    $refAi->getProperty('response')->setValue($aiCtrl, new \Hyperf\HttpServer\Response());
+
+    try {
+        $aiCtrl->analyse();
+        test()->fail('Expected ApiError 400 was not thrown in AIAnalyseController');
+    } catch (ApiError $e) {
+        expect($e->getCode())->toBe(400);
+        expect($e->getMessage())->toContain('prohibited keyword');
+    }
 });

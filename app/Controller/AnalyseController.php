@@ -12,8 +12,11 @@ class AnalyseController extends AbstractController
     #[PostMapping(path: 'analyse')]
     public function analyse(): ResponseInterface
     {
+        $this->checkIpBan();
+
         $contentResult = $this->parseContent();
         $contentResult = $this->validateContentExists($contentResult);
+        $this->checkContentSecurity($contentResult);
 
         $content = is_array($contentResult) ? $contentResult['content'] : $contentResult;
 
