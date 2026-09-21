@@ -134,6 +134,12 @@ class Config
             $data['admin']['token'] = $adminToken;
         }
 
+        if ($ragAuthToken = getenv('AI_MCP_RAG_AUTH_TOKEN')) {
+            $data['ai']['mcp']['rag']['authToken'] = $ragAuthToken;
+        } elseif ($ragAuthToken = getenv('MCP_RAG_AUTH_TOKEN')) {
+            $data['ai']['mcp']['rag']['authToken'] = $ragAuthToken;
+        }
+
         // GitHub 排障工具配置覆盖
         if (!isset($data['github']) || !is_array($data['github'])) {
             $data['github'] = [];
