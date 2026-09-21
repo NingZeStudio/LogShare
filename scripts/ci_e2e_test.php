@@ -9,9 +9,10 @@ declare(strict_types=1);
  *   php scripts/ci_e2e_test.php --base-url=http://127.0.0.1:9501 [--admin-token=xxx] [--waf-test]
  */
 
-$options = getopt('', ['base-url:', 'admin-token::', 'waf-test::']);
+$options = getopt('', ['base-url:', 'admin-token::', 'waf-test::', 'rag-token::']);
 $baseUrl = rtrim((string) ($options['base-url'] ?? 'http://127.0.0.1:9501'), '/');
 $adminToken = (string) ($options['admin-token'] ?? 'test-admin-secret-token');
+$ragToken = (string) ($options['rag-token'] ?? ($options['admin-token'] ?? ''));
 $testWaf = isset($options['waf-test']);
 
 echo "=== 开始 LogShare 真实环境端到端测试 ===\n";
@@ -282,7 +283,12 @@ runCheck('DELETE /v1/log/{id} 鉴权拦截与有效 Token 成功删除', functio
 
 // ── 3. RAG MCP Streamable HTTP 协议验证 ──
 
-runCheck('POST /rag MCP JSON-RPC 2.0 initialize 协议握手', function () use ($baseUrl) {
+$ragHeaders = ['Content-Type' => 'application/json'];
+if ($ragToken !== '') {
+    $ragHeaders['Authorization'] = "Bearer {$ragToken}";
+}
+
+runCheck('POST /rag MCP JSON-RPC 2.0 initialize 协议握手', function () use ($baseUrl, $ragHeaders) {
     $payload = json_encode([
         'jsonrpc' => '2.0',
         'id' => 1,
@@ -292,7 +298,7 @@ runCheck('POST /rag MCP JSON-RPC 2.0 initialize 协议握手', function () use (
             'clientInfo' => ['name' => 'e2e-test', 'version' => '1.0'],
         ],
     ]);
-    $res = httpRequest('POST', "{$baseUrl}/rag", ['Content-Type' => 'application/json'], $payload);
+    $res = httpRequest('POST', "{$baseUrl}/rag", $ragHeaders, $payload);
     if ($res['status'] !== 200) {
         throw new RuntimeException("MCP initialize 失败: {$res['status']}");
     }
@@ -302,13 +308,13 @@ runCheck('POST /rag MCP JSON-RPC 2.0 initialize 协议握手', function () use (
     }
 });
 
-runCheck('POST /rag MCP tools/list 与 list_topics / rag_search 声明', function () use ($baseUrl) {
+runCheck('POST /rag MCP tools/list 与 list_topics / rag_search 声明', function () use ($baseUrl, $ragHeaders) {
     $payload = json_encode([
         'jsonrpc' => '2.0',
         'id' => 2,
         'method' => 'tools/list',
     ]);
-    $res = httpRequest('POST', "{$baseUrl}/rag", ['Content-Type' => 'application/json'], $payload);
+    $res = httpRequest('POST', "{$baseUrl}/rag", $ragHeaders, $payload);
     if ($res['status'] !== 200) {
         throw new RuntimeException("MCP tools/list 失败: {$res['status']}");
     }
@@ -319,7 +325,7 @@ runCheck('POST /rag MCP tools/list 与 list_topics / rag_search 声明', functio
     }
 });
 
-runCheck('POST /rag MCP tools/call (list_topics)', function () use ($baseUrl) {
+runCheck('POST /rag MCP tools/call (list_topics)', function () use ($baseUrl, $ragHeaders) {
     $payload = json_encode([
         'jsonrpc' => '2.0',
         'id' => 3,
@@ -329,7 +335,7 @@ runCheck('POST /rag MCP tools/call (list_topics)', function () use ($baseUrl) {
             'arguments' => new stdClass(),
         ],
     ]);
-    $res = httpRequest('POST', "{$baseUrl}/rag", ['Content-Type' => 'application/json'], $payload);
+    $res = httpRequest('POST', "{$baseUrl}/rag", $ragHeaders, $payload);
     if ($res['status'] !== 200) {
         throw new RuntimeException("MCP 调用 list_topics 失败: {$res['status']}");
     }
