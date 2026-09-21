@@ -1068,7 +1068,47 @@ POST /v1/admin/ai/queue/dead/clear
 
 清空所有被判定为死信的任务记录。
 
-### 40. 获取 SpinYarn 映射状态与本地映射库清单
+### 40. 获取已知领域知识条目列表
+
+```
+GET /v1/admin/ai/domain-knowledge
+```
+
+响应：
+- `items`: 数组，领域知识条目列表（包含 `id`, `content`, `enabled`, `created_at`, `updated_at`）
+- `total`: 整数，条目总数
+
+### 41. 新增已知领域知识条目
+
+```
+POST /v1/admin/ai/domain-knowledge
+```
+
+请求体：
+- `content`: 字符串，必填，单条知识正文（单条严格不超过 200 字）
+- `enabled`: 布尔值，可选，是否启用（默认 true）
+
+说明：已知领域知识条目由管理员统一维护，系统在执行 AI 分析时将直接拼接入系统提示词段落『已知领域知识』，LLM 自身无写权限且不走动态 Tools 读取，作为硬性先验业务排障规则。
+
+### 42. 更新已知领域知识条目
+
+```
+PUT /v1/admin/ai/domain-knowledge/{id}
+```
+
+请求体：
+- `content`: 字符串，可选，修改正文（单条不超过 200 字）
+- `enabled`: 布尔值，可选，启停开关
+
+### 43. 删除已知领域知识条目
+
+```
+DELETE /v1/admin/ai/domain-knowledge/{id}
+```
+
+删除指定领域知识条目。
+
+### 44. 获取 SpinYarn 映射状态与本地映射库清单
 
 ```
 GET /v1/admin/spinyarn/status

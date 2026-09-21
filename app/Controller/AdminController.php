@@ -252,6 +252,95 @@ class AdminController extends AbstractController
         return $this->respondSuccess(['cleared' => $cleared], 'AI dead jobs cleared');
     }
 
+    // ── LLM 已知领域知识管理（Known Domain Knowledge） ──
+
+    #[GetMapping(path: 'ai/domain-knowledge')]
+    public function listDomainKnowledge(): ResponseInterface
+    {
+        $items = \App\System\DomainKnowledgeManager::getAll();
+        return $this->respondSuccess([
+            'items' => $items,
+            'total' => count($items),
+        ]);
+    }
+
+    #[PostMapping(path: 'ai/domain-knowledge')]
+    public function createDomainKnowledge(): ResponseInterface
+    {
+        $body = (array) ($this->request->getParsedBody() ?? []);
+        $content = isset($body['content']) ? trim((string) $body['content']) : '';
+        $enabled = isset($body['enabled']) ? (bool) $body['enabled'] : true;
+
+        if ($content === '') {
+            throw new ApiError(400, '领域知识内容不能为空');
+        }
+
+        $charCount = mb_strlen($content, 'UTF-8');
+        if ($charCount > \App\System\DomainKnowledgeManager::MAX_ITEM_LENGTH) {
+            throw new ApiError(400, "领域知识单条长度不能超过 200 字，当前为 {$charCount} 字");
+        }
+
+        try {
+            $created = \App\System\DomainKnowledgeManager::add($content, $enabled);
+            AuditLogManager::record('ai.domain_knowledge.create', $created['id'], [
+                'content' => mb_substr($content, 0, 50, 'UTF-8') . ($charCount > 50 ? '...' : ''),
+                'enabled' => $enabled,
+            ], true, 'admin', $this->getClientIp());
+
+            return $this->respondSuccess($created, '创建已知领域知识条目成功');
+        } catch (\Throwable $e) {
+            throw new ApiError(400, $e->getMessage());
+        }
+    }
+
+    #[PutMapping(path: 'ai/domain-knowledge/{id}')]
+    public function updateDomainKnowledge(string $id): ResponseInterface
+    {
+        $body = (array) ($this->request->getParsedBody() ?? []);
+        $content = isset($body['content']) ? trim((string) $body['content']) : null;
+        $enabled = isset($body['enabled']) ? (bool) $body['enabled'] : null;
+
+        if ($content !== null) {
+            if ($content === '') {
+                throw new ApiError(400, '领域知识内容不能为空');
+            }
+            $charCount = mb_strlen($content, 'UTF-8');
+            if ($charCount > \App\System\DomainKnowledgeManager::MAX_ITEM_LENGTH) {
+                throw new ApiError(400, "领域知识单条长度不能超过 200 字，当前为 {$charCount} 字");
+            }
+        }
+
+        try {
+            $updated = \App\System\DomainKnowledgeManager::update($id, $content, $enabled);
+            if ($updated === null) {
+                throw new ApiError(404, '指定领域知识条目不存在');
+            }
+
+            AuditLogManager::record('ai.domain_knowledge.update', $id, [
+                'content' => $content !== null ? mb_substr($content, 0, 50, 'UTF-8') . '...' : null,
+                'enabled' => $enabled,
+            ], true, 'admin', $this->getClientIp());
+
+            return $this->respondSuccess($updated, '更新已知领域知识条目成功');
+        } catch (ApiError $e) {
+            throw $e;
+        } catch (\Throwable $e) {
+            throw new ApiError(400, $e->getMessage());
+        }
+    }
+
+    #[DeleteMapping(path: 'ai/domain-knowledge/{id}')]
+    public function deleteDomainKnowledge(string $id): ResponseInterface
+    {
+        $deleted = \App\System\DomainKnowledgeManager::delete($id);
+        if (!$deleted) {
+            throw new ApiError(404, '指定领域知识条目不存在');
+        }
+
+        AuditLogManager::record('ai.domain_knowledge.delete', $id, [], true, 'admin', $this->getClientIp());
+        return $this->respondSuccess(['deleted' => true, 'id' => $id], '删除已知领域知识条目成功');
+    }
+
     #[GetMapping(path: 'system/stats')]
     public function getSystemStats(): ResponseInterface
     {
