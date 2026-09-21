@@ -20,28 +20,17 @@ class TelemetryController extends AbstractController
     #[PostMapping(path: 'report')]
     public function report(): ResponseInterface
     {
-        $body = $this->request->getParsedBody();
-        if (!is_array($body) || $body === []) {
-            $raw = (string) $this->request->getBody();
-            if ($raw !== '') {
-                $decoded = json_decode($raw, true);
-                if (is_array($decoded)) {
-                    $body = $decoded;
-                }
-            }
-        }
+        $body = $this->getParsedBody();
 
         /** @var array<int, mixed> $items */
         $items = [];
-        if (is_array($body)) {
-            if (isset($body['items']) && is_array($body['items'])) {
-                $items = array_values($body['items']);
-            } elseif (array_is_list($body)) {
-                $items = $body;
-            } elseif (isset($body['type'])) {
-                // 单条上报直接包成单元素数组
-                $items = [$body];
-            }
+        if (isset($body['items']) && is_array($body['items'])) {
+            $items = array_values($body['items']);
+        } elseif (array_is_list($body)) {
+            $items = $body;
+        } elseif (isset($body['type'])) {
+            // 单条上报直接包成单元素数组
+            $items = [$body];
         }
 
         $processed = TelemetryService::recordBatch($items);

@@ -63,7 +63,6 @@ COPY . .
 # 映射目录：/app/mappings（compose 以 bind mount 挂载宿主机 ./mappings，映射表由
 # 下载脚本 scripts/download_mappings.sh + download_vanilla_mappings.py 预先生成）
 
-# 启动：先构建 RAG 索引（幂等）；远程 embedding 供应商故障时 rag:build 会失败，
-# 用 `||` 降级为沿用现有索引并正常启动主服务，避免容器 crash-loop。
+# 启动：先清理挂载的陈旧注解容器缓存，再构建 RAG 索引并启动服务。
 # `exec` 让 Hyperf 成为 PID 1，保证信号能正确传递。
-CMD ["sh", "-c", "php bin/hyperf.php rag:build || echo '[entrypoint] rag:build failed, starting server with existing index'; exec php bin/hyperf.php start"]
+CMD ["sh", "-c", "rm -rf /app/runtime/container; php bin/hyperf.php rag:build || echo '[entrypoint] rag:build failed, starting server with existing index'; exec php bin/hyperf.php start"]

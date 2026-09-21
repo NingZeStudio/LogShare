@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Process;
 
+use App\Client\RedisClient;
 use App\Client\RedisStreams;
 use App\Queue\DeadLetterQueue;
 use App\Queue\EventQueue;
@@ -151,6 +152,18 @@ class EventQueueConsumer extends AbstractProcess
         $this->lastBusyAt = time();
 
         $event = QueueEvent::fromStreamData($fields, $id);
+        $attemptKey = "events:attempts:{$id}";
+        $redis = RedisClient::getRedis();
+        if ($redis) {
+            try {
+                $attempts = (int) $redis->incr($attemptKey);
+                $redis->expire($attemptKey, 86400);
+                $event->setAttempts($attempts);
+            } catch (\Throwable) {
+                // ignore
+            }
+        }
+
         $success = false;
 
         try {
@@ -164,17 +177,34 @@ class EventQueueConsumer extends AbstractProcess
                 if ($success || $event->isPropagationStopped()) {
                     RedisStreams::xAck($stream, $group, $id);
                     RedisStreams::xDel($stream, $id);
+                    if ($redis) {
+                        try {
+                            $redis->del($attemptKey);
+                        } catch (\Throwable) {
+                            // ignore
+                        }
+                    }
                 } else {
                     // 2. 失败处理：检查重试上限
                     if (!$event->canRetry()) {
                         // 重试耗尽，进入死信流保护并出队
-                        DeadLetterQueue::push($event, $event->getLastError() ?? 'Max retries exhausted');
-                        RedisStreams::xAck($stream, $group, $id);
-                        RedisStreams::xDel($stream, $id);
-                        \App\Syslog::error('EventQueue', "Event {$event->getName()} [{$id}] moved to DLQ after {$event->getAttempts()} attempts");
+                        $dlqId = DeadLetterQueue::push($event, $event->getLastError() ?? 'Max retries exhausted');
+                        if ($dlqId !== null) {
+                            RedisStreams::xAck($stream, $group, $id);
+                            RedisStreams::xDel($stream, $id);
+                            if ($redis) {
+                                try {
+                                    $redis->del($attemptKey);
+                                } catch (\Throwable) {
+                                    // ignore
+                                }
+                            }
+                            \App\Syslog::error('EventQueue', "Event {$event->getName()} [{$id}] moved to DLQ after {$event->getAttempts()} attempts");
+                        } else {
+                            \App\Syslog::error('EventQueue', "CRITICAL: Failed to push event {$event->getName()} [{$id}] to DLQ, message kept pending in stream");
+                        }
                     } else {
                         // 尚可重试：记录警告，保留 pending 由 reclaim 协程在退避后拉取重试
-                        $event->incrementAttempts();
                         \App\Syslog::error('EventQueue', "Event {$event->getName()} [{$id}] failed, will retry (attempt {$event->getAttempts()}/{$event->getMaxAttempts()}): " . ($event->getLastError() ?? 'unknown error'));
                     }
                 }

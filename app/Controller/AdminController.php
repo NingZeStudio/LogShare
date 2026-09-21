@@ -267,7 +267,7 @@ class AdminController extends AbstractController
     #[PostMapping(path: 'ai/domain-knowledge')]
     public function createDomainKnowledge(): ResponseInterface
     {
-        $body = (array) ($this->request->getParsedBody() ?? []);
+        $body = $this->getParsedBody();
         $content = isset($body['content']) ? trim((string) $body['content']) : '';
         $enabled = isset($body['enabled']) ? (bool) $body['enabled'] : true;
 
@@ -296,7 +296,7 @@ class AdminController extends AbstractController
     #[PutMapping(path: 'ai/domain-knowledge/{id}')]
     public function updateDomainKnowledge(string $id): ResponseInterface
     {
-        $body = (array) ($this->request->getParsedBody() ?? []);
+        $body = $this->getParsedBody();
         $content = isset($body['content']) ? trim((string) $body['content']) : null;
         $enabled = isset($body['enabled']) ? (bool) $body['enabled'] : null;
 
@@ -379,8 +379,8 @@ class AdminController extends AbstractController
     #[PutMapping(path: 'config')]
     public function updateConfig(): ResponseInterface
     {
-        $payload = $this->request->getParsedBody();
-        if (!is_array($payload) || empty($payload)) {
+        $payload = $this->getParsedBody();
+        if (empty($payload)) {
             throw new ApiError(400, 'Invalid or empty configuration payload');
         }
 
@@ -414,7 +414,7 @@ class AdminController extends AbstractController
     #[PostMapping(path: 'config/test-ai')]
     public function testAiConnection(): ResponseInterface
     {
-        $body = $this->request->getParsedBody();
+        $body = $this->getParsedBody();
         $rawConfig = Config::all();
         $aiConfig = $rawConfig['ai'] ?? [];
 
@@ -533,7 +533,7 @@ class AdminController extends AbstractController
     #[PostMapping(path: 'config/test-rag-provider')]
     public function testRagProvider(): ResponseInterface
     {
-        $body = $this->request->getParsedBody();
+        $body = $this->getParsedBody();
         $rawConfig = Config::all();
         $providers = $rawConfig['ai']['rag']['providers'] ?? [];
 
@@ -658,7 +658,7 @@ class AdminController extends AbstractController
     #[PostMapping(path: 'rag/search')]
     public function searchRag(): ResponseInterface
     {
-        $body = $this->request->getParsedBody();
+        $body = $this->getParsedBody();
         $query = trim((string) ($body['query'] ?? ''));
         $limit = min(20, max(1, (int) ($body['limit'] ?? 5)));
 
@@ -718,8 +718,8 @@ class AdminController extends AbstractController
     #[PostMapping(path: 'rag/docs/save')]
     public function saveRagDoc(): ResponseInterface
     {
-        $body = $this->request->getParsedBody();
-        if (!is_array($body)) {
+        $body = $this->getParsedBody();
+        if (empty($body)) {
             throw new ApiError(400, 'Invalid request body');
         }
 
@@ -757,7 +757,7 @@ class AdminController extends AbstractController
     public function deleteRagDoc(): ResponseInterface
     {
         $params = $this->request->getQueryParams();
-        $body = $this->request->getParsedBody();
+        $body = $this->getParsedBody();
         $path = trim((string) ($params['path'] ?? ($body['path'] ?? '')));
 
         if ($path === '') {
@@ -779,8 +779,8 @@ class AdminController extends AbstractController
     public function uploadRagDoc(): ResponseInterface
     {
         $topic = trim((string) ($this->request->input('topic') ?? ''));
-        $body = $this->request->getParsedBody();
-        if (is_array($body) && $topic === '') {
+        $body = $this->getParsedBody();
+        if (!empty($body) && $topic === '') {
             $topic = trim((string) ($body['topic'] ?? ''));
         }
 
@@ -812,7 +812,7 @@ class AdminController extends AbstractController
         }
 
         // 2. Direct JSON payload upload (topic + filename + content)
-        if (is_array($body) && isset($body['content'])) {
+        if (isset($body['content'])) {
             $filename = trim((string) ($body['filename'] ?? 'uploaded_doc.md'));
             $content = (string) $body['content'];
 
@@ -916,7 +916,7 @@ class AdminController extends AbstractController
     #[PostMapping(path: 'system/cache/flush')]
     public function flushCache(): ResponseInterface
     {
-        $body = $this->request->getParsedBody();
+        $body = $this->getParsedBody();
         $prefix = isset($body['prefix']) && is_string($body['prefix']) ? trim($body['prefix']) : 'log:*';
         $result = StorageHealthService::flushCache($prefix);
         AuditLogManager::record('system.cache_flush', $prefix, $result, true, 'admin', $this->getClientIp());
@@ -926,8 +926,8 @@ class AdminController extends AbstractController
     #[PostMapping(path: 'logs/batch-delete')]
     public function batchDeleteLogs(): ResponseInterface
     {
-        $body = $this->request->getParsedBody();
-        if (!is_array($body)) {
+        $body = $this->getParsedBody();
+        if (empty($body)) {
             throw new ApiError(400, 'Invalid request body');
         }
 
@@ -997,8 +997,8 @@ class AdminController extends AbstractController
     #[PostMapping(path: 'security/ban')]
     public function banIp(): ResponseInterface
     {
-        $body = $this->request->getParsedBody();
-        if (!is_array($body) || empty($body['ip'])) {
+        $body = $this->getParsedBody();
+        if (empty($body['ip'])) {
             throw new ApiError(400, 'IP address is required');
         }
 
@@ -1017,8 +1017,8 @@ class AdminController extends AbstractController
     #[PostMapping(path: 'security/unban')]
     public function unbanIp(): ResponseInterface
     {
-        $body = $this->request->getParsedBody();
-        if (!is_array($body) || empty($body['ip'])) {
+        $body = $this->getParsedBody();
+        if (empty($body['ip'])) {
             throw new ApiError(400, 'IP address is required');
         }
 
@@ -1051,8 +1051,8 @@ class AdminController extends AbstractController
     #[PutMapping(path: 'security/content-rules')]
     public function updateContentRules(): ResponseInterface
     {
-        $body = $this->request->getParsedBody();
-        if (!is_array($body)) {
+        $body = $this->getParsedBody();
+        if (empty($body)) {
             throw new ApiError(400, 'Invalid request body');
         }
 
@@ -1075,8 +1075,8 @@ class AdminController extends AbstractController
     #[PostMapping(path: 'spinyarn/test')]
     public function testSpinYarnDeobfuscate(): ResponseInterface
     {
-        $body = $this->request->getParsedBody();
-        if (!is_array($body) || empty($body['content']) || empty($body['version'])) {
+        $body = $this->getParsedBody();
+        if (empty($body['content']) || empty($body['version'])) {
             throw new ApiError(400, 'Both content and version are required');
         }
 
@@ -1132,7 +1132,7 @@ class AdminController extends AbstractController
     #[PostMapping(path: 'event-queue/dead/retry')]
     public function retryDeadLetter(): ResponseInterface
     {
-        $body = $this->request->getParsedBody();
+        $body = $this->getParsedBody();
         $streamId = isset($body['streamId']) && is_string($body['streamId']) ? trim($body['streamId']) : null;
         if (empty($streamId)) {
             throw new ApiError(400, 'Parameter streamId is required');

@@ -40,28 +40,10 @@ final class SecurityService
             (array) ($rateLimit['trustedProxies'] ?? [])
         );
 
-        $isTrusted = false;
-        foreach ($trustedProxies as $proxy) {
-            $proxy = trim((string) $proxy);
-            if ($proxy === '') {
-                continue;
-            }
-            if ($proxy === $remote) {
-                $isTrusted = true;
-                break;
-            }
-            if (str_contains($proxy, '/') && self::ipInCidr($remote, $proxy)) {
-                $isTrusted = true;
-                break;
-            }
-        }
-
-        if (!$isTrusted && (self::isPrivateIp($remote) || $remote === '127.0.0.1' || $remote === '::1')) {
-            $isTrusted = true;
-        }
+        $isTrusted = self::isIpTrusted($remote, $trustedProxies);
 
         if ($isTrusted) {
-            // 1. 优先提取 X-Real-IP
+            // 1. 优先提取反向代理强行覆盖的 X-Real-IP
             $realIp = $serverParams['http_x_real_ip'] ?? null;
             if (empty($realIp) && is_array($headers) && !empty($headers['x-real-ip'][0])) {
                 $realIp = $headers['x-real-ip'][0];
@@ -70,23 +52,52 @@ final class SecurityService
                 return trim($realIp);
             }
 
-            // 2. 提取 X-Forwarded-For
+            // 2. 提取 X-Forwarded-For 并从右向左逐级剥离信任代理，提取最外层的不可信真实 IP
             $forwardedFor = $serverParams['http_x_forwarded_for'] ?? null;
             if (empty($forwardedFor) && is_array($headers) && !empty($headers['x-forwarded-for'][0])) {
                 $forwardedFor = $headers['x-forwarded-for'][0];
             }
             if (is_string($forwardedFor) && $forwardedFor !== '') {
-                $parts = explode(',', $forwardedFor);
-                foreach ($parts as $p) {
-                    $p = trim($p);
-                    if (filter_var($p, FILTER_VALIDATE_IP)) {
-                        return $p;
+                $parts = array_filter(
+                    array_map('trim', explode(',', $forwardedFor)),
+                    static fn ($p) => filter_var($p, FILTER_VALIDATE_IP) !== false
+                );
+                $parts = array_values($parts);
+                for ($i = count($parts) - 1; $i >= 0; $i--) {
+                    $ip = $parts[$i];
+                    if (!self::isIpTrusted($ip, $trustedProxies)) {
+                        return $ip;
                     }
+                }
+                if (!empty($parts)) {
+                    return $parts[0];
                 }
             }
         }
 
         return $remote;
+    }
+
+    /**
+     * 判断指定 IP 是否在受信任代理名单中。
+     *
+     * @param array<int, string> $trustedProxies
+     */
+    public static function isIpTrusted(string $ip, array $trustedProxies): bool
+    {
+        foreach ($trustedProxies as $proxy) {
+            $proxy = trim((string) $proxy);
+            if ($proxy === '') {
+                continue;
+            }
+            if ($proxy === $ip) {
+                return true;
+            }
+            if (str_contains($proxy, '/') && self::ipInCidr($ip, $proxy)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**
@@ -469,13 +480,41 @@ final class SecurityService
             }
         }
 
-        $generated = bin2hex(random_bytes(32));
         $dir = dirname($secretPath);
         if (!is_dir($dir)) {
             @mkdir($dir, 0700, true);
         }
-        @file_put_contents($secretPath, $generated);
-        @chmod($secretPath, 0600);
+
+        // 使用专属临时文件以 0600 安全权限写入，并在原子重命名前后保持权限，避免竞态覆盖
+        $tempPath = $secretPath . '.' . bin2hex(random_bytes(8)) . '.tmp';
+        $generated = bin2hex(random_bytes(32));
+        $oldUmask = umask(0077);
+        $fp = @fopen($tempPath, 'wb');
+        umask($oldUmask);
+        if ($fp !== false) {
+            @chmod($tempPath, 0600);
+            fwrite($fp, $generated);
+            fclose($fp);
+            @chmod($tempPath, 0600);
+
+            // 若已有其他并发 Worker 创建成功，则保留先创建的文件以保全密钥一致性
+            if (!is_file($secretPath)) {
+                if (!@rename($tempPath, $secretPath)) {
+                    @unlink($tempPath);
+                }
+            } else {
+                @unlink($tempPath);
+            }
+        }
+
+        // 读取持久化文件中的最终唯一密钥，确保所有常驻 Worker 密钥绝对一致
+        if (is_file($secretPath)) {
+            $raw = @file_get_contents($secretPath);
+            if (is_string($raw) && strlen(trim($raw)) >= 32) {
+                $cachedKey = hash('sha256', trim($raw), true);
+                return $cachedKey;
+            }
+        }
 
         $cachedKey = hash('sha256', $generated, true);
         return $cachedKey;
@@ -503,6 +542,8 @@ final class SecurityService
 
     /**
      * 解密单个密文字符串。
+     *
+     * @throws \RuntimeException 当密文格式损坏或认证解密失败时
      */
     public static function decryptSecret(string $ciphertext): string
     {
@@ -512,7 +553,8 @@ final class SecurityService
 
         $raw = base64_decode(substr($ciphertext, strlen(self::CIPHER_PREFIX)), true);
         if ($raw === false || strlen($raw) < 28) {
-            return $ciphertext;
+            \App\Syslog::error('SecurityService', 'Malformed encrypted secret: invalid base64 or length');
+            throw new \RuntimeException('Malformed encrypted secret payload');
         }
 
         $iv = substr($raw, 0, 12);
@@ -521,7 +563,12 @@ final class SecurityService
 
         $key = self::getEncryptionKey();
         $plain = openssl_decrypt($cipher, 'aes-256-gcm', $key, OPENSSL_RAW_DATA, $iv, $tag);
-        return $plain !== false ? $plain : $ciphertext;
+        if ($plain === false) {
+            \App\Syslog::error('SecurityService', 'Failed to decrypt secret: decryption authentication failed or key mismatch');
+            throw new \RuntimeException('Failed to decrypt secret: integrity check failed');
+        }
+
+        return $plain;
     }
 
     /**
@@ -536,14 +583,26 @@ final class SecurityService
     }
 
     /**
-     * 批量解密规则列表。
+     * 批量解密规则列表。若单条损坏则安全忽略并报警，绝不回退密文。
      *
      * @param string[] $list
      * @return string[]
      */
     public static function decryptRulesList(array $list): array
     {
-        return array_values(array_unique(array_map(fn($item) => self::decryptSecret((string) $item), $list)));
+        $result = [];
+        foreach ($list as $item) {
+            $item = (string) $item;
+            try {
+                $decrypted = self::decryptSecret($item);
+                if ($decrypted !== '') {
+                    $result[] = $decrypted;
+                }
+            } catch (\Throwable $e) {
+                \App\Syslog::error('SecurityService', "Skipping corrupt encrypted rule item: " . $e->getMessage());
+            }
+        }
+        return array_values(array_unique($result));
     }
 
     /**

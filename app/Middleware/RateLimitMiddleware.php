@@ -53,7 +53,8 @@ class RateLimitMiddleware implements MiddlewareInterface
         [$limit, $window] = self::limitsFor($request->getMethod(), $path, $config);
 
         $server = $request->getServerParams();
-        $ip = self::clientIp($server, $config);
+        $headers = $request->getHeaders();
+        $ip = self::clientIp($server, $headers, $config);
         $key = "rl:{$request->getMethod()}:{$path}:{$ip}";
 
         try {
@@ -88,9 +89,19 @@ class RateLimitMiddleware implements MiddlewareInterface
         return $defaults;
     }
 
-    private static function clientIp(array $server, array $config): string
+    /**
+     * @param array<string, mixed> $server
+     * @param array<string, mixed>|array<string, array<int, string>> $headersOrConfig
+     * @param array<string, mixed> $config
+     */
+    private static function clientIp(array $server, array $headersOrConfig = [], array $config = []): string
     {
-        return \App\System\SecurityService::resolveClientIp($server);
+        if (isset($headersOrConfig['trustedProxies']) || isset($headersOrConfig['limit'])) {
+            return \App\System\SecurityService::resolveClientIp($server, []);
+        }
+
+        $headers = $headersOrConfig;
+        return \App\System\SecurityService::resolveClientIp($server, $headers);
     }
 
     /**

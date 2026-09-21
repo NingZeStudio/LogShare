@@ -13,6 +13,8 @@ class AIController extends AbstractController
     #[GetMapping(path: 'ai/{id}')]
     public function ai(string $id): ResponseInterface
     {
+        $this->checkIpBan();
+
         if (!$this->isAIEnabled()) {
             throw new ApiError(404, "AI analysis is disabled.");
         }

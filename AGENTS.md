@@ -120,7 +120,13 @@ php bin/hyperf.php start
 ## Implementation rules that are easy to miss
 
 - Controllers must use injected PSR-7 requests, `ContentParser`, storage abstractions, and `AbstractController` helpers; do not read `$_SERVER`, `$_GET`, or `$_POST`, and do not issue raw SQL from controllers. Architecture tests enforce this.
+- Controllers receiving JSON or structured input must parse requests via `$this->getParsedBody()` provided by `AbstractController`: it prioritizes the framework's `$request->getParsedBody()` and automatically falls back to raw stream JSON deserialization if the upstream client sends non-JSON Content-Type (e.g. `text/plain` from default `fetch`).
 - Throw `App\ApiError` for expected API failures; `ApiExceptionHandler` renders the API error response.
+- Client IP resolution (`SecurityService::resolveClientIp`): strictly adheres to configured `trustedProxies` (overriding implicit trust); traverses `X-Forwarded-For` from right to left to peel off trusted proxies and extract the outermost untrusted IP, completely eliminating header spoofing; `RateLimitMiddleware` passes full request headers to `resolveClientIp` ensuring proxy clients are not coalesced into loopback.
+- AES-256-GCM rules encryption: key generation enforces 0600 permissions at temporary creation with atomic rename and collision resolution; decryption failure throws RuntimeException instead of silently falling back to ciphertext, preventing malformed ciphertext from polluting runtime keyword filtering chains.
+- EventQueue & DLQ: retry counts are tracked and persisted in Redis (`events:attempts:{$id}`) with TTL protection; when retries exhaust, `DeadLetterQueue::push` return is strictly verified before `xAck` and `xDel`, preventing silent event drops.
+- `RedisClient`: explicitly configures `OPT_READ_TIMEOUT` (10s default) exceeding consumer blocking wait times (2s/5s) to eliminate periodic socket disconnection storm.
+- Container startup: `docker/hyperf.Dockerfile` entrypoint explicitly wipes stale mounted annotation container cache (`rm -rf /app/runtime/container;`) before scanning and booting, preventing route 404 and proxy discrepancy.
 - Apply configured pre-filters before storage. Deletion tokens are stored hashed; plaintext tokens are returned only by the upload response.
 - Use `App\Syslog::error()` for diagnostics, not raw `error_log()`.
 - SSE output must go through `App\Sse\AnalysisEmitter` (`SseEmitter` inline / `StreamEmitter` queued), which writes via `App\Sse\SseWriter`; request-scoped stream state (including the active emitter) belongs in Hyperf context rather than a plain static.

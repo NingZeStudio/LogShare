@@ -103,11 +103,18 @@ class RedisClient
         $host = (string) ($redisConfig['host'] ?? 'mclogs-redis');
         $port = (int) ($redisConfig['port'] ?? 6379);
         $timeout = (float) ($redisConfig['timeout'] ?? self::CONNECT_TIMEOUT);
+        $readTimeout = (float) ($redisConfig['read_timeout'] ?? 10.0);
 
         $conn = new \Redis();
         if (!$conn->connect($host, $port, $timeout)) {
             throw new \Exception('Redis connection failed: ' . $host . ':' . $port);
         }
+
+        // 显式设置读取超时（默认 10 秒，远大于消费者 2s/5s 阻塞等待），杜绝周期性超时断连
+        if (defined('Redis::OPT_READ_TIMEOUT')) {
+            $conn->setOption(\Redis::OPT_READ_TIMEOUT, $readTimeout);
+        }
+
         $password = $redisConfig['password'] ?? null;
         if (is_string($password) && $password !== '') {
             $conn->auth($password);
