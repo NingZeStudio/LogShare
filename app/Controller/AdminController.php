@@ -1021,10 +1021,54 @@ class AdminController extends AbstractController
         return $this->respondSuccess(['cleared' => $count], 'Audit logs cleared');
     }
 
+    #[GetMapping(path: 'event-queue/stats')]
+    public function getEventQueueStats(): ResponseInterface
+    {
+        $stats = \App\Queue\EventQueue::getStats();
+        return $this->respondSuccess($stats, 'Event queue stats retrieved successfully');
+    }
+
+    #[GetMapping(path: 'event-queue/dead')]
+    public function getDeadLetters(): ResponseInterface
+    {
+        $params = $this->request->getQueryParams();
+        $limit = isset($params['limit']) && is_numeric($params['limit']) ? min(100, max(1, (int) $params['limit'])) : 50;
+        $items = \App\Queue\DeadLetterQueue::list($limit);
+        return $this->respondSuccess([
+            'total' => \App\Queue\DeadLetterQueue::count(),
+            'items' => $items,
+        ], 'Dead letters retrieved successfully');
+    }
+
+    #[PostMapping(path: 'event-queue/dead/retry')]
+    public function retryDeadLetter(): ResponseInterface
+    {
+        $body = $this->request->getParsedBody();
+        $streamId = isset($body['streamId']) && is_string($body['streamId']) ? trim($body['streamId']) : null;
+        if (empty($streamId)) {
+            throw new ApiError(400, 'Parameter streamId is required');
+        }
+
+        $retried = \App\Queue\DeadLetterQueue::retry($streamId);
+        if (!$retried) {
+            throw new ApiError(404, 'Failed to retry dead letter: item not found or invalid');
+        }
+
+        AuditLogManager::record('event_queue.dead_retry', $streamId, [], true, 'admin', $this->getClientIp());
+        return $this->respondSuccess(['streamId' => $streamId, 'retried' => true], 'Dead letter retried successfully');
+    }
+
+    #[DeleteMapping(path: 'event-queue/dead')]
+    public function clearDeadLetters(): ResponseInterface
+    {
+        $cleared = \App\Queue\DeadLetterQueue::clear();
+        AuditLogManager::record('event_queue.dead_clear', 'dead_letters', [], $cleared, 'admin', $this->getClientIp());
+        return $this->respondSuccess(['cleared' => $cleared], 'Dead letters cleared');
+    }
+
     private function getClientIp(): string
     {
-        $serverParams = $this->request->getServerParams();
-        return (string) ($serverParams['remote_addr'] ?? '127.0.0.1');
+        return $this->getClientRealIp();
     }
 }
 

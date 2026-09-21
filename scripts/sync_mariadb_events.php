@@ -11,6 +11,19 @@ if (!is_file($configPath)) {
 }
 
 $config = require $configPath;
+
+// 支持动态配置优先覆盖
+$dynamicConfigPath = dirname(__DIR__) . '/runtime/dynamic_config.json';
+if (is_file($dynamicConfigPath)) {
+    $dynamicRaw = @file_get_contents($dynamicConfigPath);
+    if ($dynamicRaw !== false && $dynamicRaw !== '') {
+        $dynamicDecoded = json_decode($dynamicRaw, true);
+        if (is_array($dynamicDecoded) && isset($dynamicDecoded['storage']['storageTime'])) {
+            $config['storage']['storageTime'] = $dynamicDecoded['storage']['storageTime'];
+        }
+    }
+}
+
 $storageTime = $config['storage']['storageTime'] ?? null;
 
 if (!is_int($storageTime) && !is_float($storageTime) && !is_string($storageTime)) {

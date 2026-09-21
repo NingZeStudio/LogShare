@@ -257,6 +257,42 @@ class Log
     }
 
     /**
+     * 执行反混淆并更新持久化存储与缓存（供异步队列调用）。
+     *
+     * @return bool 是否成功反混淆并更新内容
+     */
+    public function deobfuscateAndPersist(): bool
+    {
+        if (!$this->exists || empty($this->data)) {
+            return false;
+        }
+
+        $detected = (new Detective())->setLogFile(new StringLogFile($this->data))->detect();
+        if (!$detected instanceof \Aternos\Codex\Minecraft\Log\Minecraft\MinecraftLog) {
+            return false;
+        }
+        $this->log = $detected;
+        $this->log->parse();
+
+        $mappingType = $this->getMappingType();
+        if ($mappingType === null) {
+            return false;
+        }
+
+        $version = $detected->getVersion();
+        if ($version === null) {
+            return false;
+        }
+
+        $content = \App\Client\SpinYarnClient::deobfuscate($this->data, $version, $mappingType);
+        if ($content === null || $content === $this->data) {
+            return false;
+        }
+
+        return $this->updateContent($content);
+    }
+
+    /**
      * Checks if the log exists
      *
      * @return bool
@@ -342,7 +378,12 @@ class Log
         $this->data = $data;
         $this->lineCount = null;
         $this->preFilter();
-        $this->deobfuscateForStorage();
+        // 上传日志之后只进行 codex 分析，反混淆由统一队列异步处理
+        try {
+            $this->analyse();
+        } catch (\Throwable $e) {
+            \App\Syslog::error('Log', 'Codex analysis during put failed: ' . $e->getMessage());
+        }
         $plainToken = $token ?? new Token();
         // 存储层（MariaDB / 文件系统 / Redis 缓存）只落 SHA-256 哈希；
         // 上传响应通过调用方持有的 $token 原对象返回原文。
@@ -401,6 +442,62 @@ class Log
         }
 
         return $this->id;
+    }
+
+    /**
+     * Update log content (and optional files) in storage and redis cache.
+     *
+     * @param string $newData
+     * @param array|null $newFiles
+     * @return bool
+     */
+    public function updateContent(string $newData, ?array $newFiles = null): bool
+    {
+        if (!$this->id || !$this->exists) {
+            return false;
+        }
+
+        $config = Config::Get('storage');
+        $storageId = $this->id->getStorage();
+        if (!isset($config['storages'][$storageId]) || !$config['storages'][$storageId]['enabled']) {
+            return false;
+        }
+
+        /** @var \App\Storage\StorageInterface $storage */
+        $storage = $config['storages'][$storageId]['class'];
+        $success = $storage::Update($this->id, $newData, $newFiles);
+        if (!$success) {
+            return false;
+        }
+
+        $this->data = $newData;
+        $this->lineCount = null;
+        $this->log = null;
+        $this->analysis = null;
+        if ($newFiles !== null) {
+            $this->files = $newFiles;
+        }
+
+        // 同步刷新 Redis 缓存
+        if ($this->isCacheEnabled() && !$this->isDeletedTombstoned()) {
+            $filesBytes = array_sum(array_map(fn($file) => strlen($file['data'] ?? ''), $this->files));
+            if ($this->shouldCacheToRedis($this->data, $filesBytes)) {
+                try {
+                    $this->saveToRedisCache([
+                        'data' => $this->data,
+                        'token' => $this->token?->get(),
+                        'metadata' => array_map(fn($entry) => $entry->jsonSerialize(), $this->metadata),
+                        'source' => $this->source,
+                        'created' => time(),
+                        'files' => $this->files,
+                    ]);
+                } catch (\Throwable $e) {
+                    \App\Syslog::error('Redis', '缓存更新失败: ' . $e->getMessage());
+                }
+            }
+        }
+
+        return true;
     }
 
     /**
@@ -563,6 +660,16 @@ class Log
     public function getSource(): ?string
     {
         return $this->source !== null && $this->source !== '' ? $this->source : '未指定';
+    }
+
+    /**
+     * Get the list of raw files stored under this log id (including content data).
+     *
+     * @return array<int, array{name: string, data: string, size?: int}>
+     */
+    public function getRawFiles(): array
+    {
+        return $this->files;
     }
 
     /**

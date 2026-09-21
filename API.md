@@ -97,6 +97,7 @@ POST /v1/log
 - 展开后每个文件独立经过脱敏过滤链
 - 上限：文件数 ≤ 200，解压后累计 ≤ 12MB（`storage.uploadFiles`）
 - ZIP 条目名会做路径遍历防护（拒绝 `../`、绝对路径）
+- **极速解耦与异步事件流**：上传时系统仅执行轻量级 Codex 特征探测并即刻持久化入库，毫秒级直接响应结果；随后派发 `log.uploaded` 事件，由后台常驻队列 Worker 异步执行内容敏感规则审核与 SpinYarn 堆栈反混淆。若异步审核命中违规规则，该日志将被物理清除并自动封禁非私网来源 IP。
 
 **响应：**
 
@@ -1125,6 +1126,115 @@ DELETE /v1/admin/audit/logs
 ```
 
 清空 Redis 环形缓冲区及本地审计日志文件。返回清空条数 `{"cleared": N}`。
+
+### 44. 获取统一事件队列状态与监控指标
+
+```
+GET /v1/admin/event-queue/stats
+```
+
+查看统一日志异步事件队列（EventQueue）的流状态、当前注册的所有监听器列表、排队积压深度（Lag + Pending）、累计吞吐指标与死信条目数。
+
+**响应示例：**
+
+```json
+{
+    "success": true,
+    "message": "Event queue stats retrieved successfully",
+    "enabled": true,
+    "stream": "events:log:stream",
+    "group": "log-event-workers",
+    "maxAttempts": 3,
+    "backlog": 0,
+    "pending": 0,
+    "streamLength": 12,
+    "deadLetters": 0,
+    "counters": {
+        "dispatched": 1420,
+        "processed_success": 1419,
+        "processed_failed": 1
+    },
+    "registeredEvents": {
+        "log.uploaded": [
+            { "name": "security_audit", "priority": 100 },
+            { "name": "deobfuscate", "priority": 50 }
+        ],
+        "log.security_audit": [
+            { "name": "security_audit", "priority": 100 }
+        ],
+        "log.deobfuscate": [
+            { "name": "deobfuscate", "priority": 100 }
+        ]
+    }
+}
+```
+
+### 45. 分页获取死信任务列表
+
+```
+GET /v1/admin/event-queue/dead?limit=50
+```
+
+查看重试上限耗尽或遇到不可恢复异常的死信任务列表，包含原始事件、负载、重试次数及失败异常原因。
+
+**响应示例：**
+
+```json
+{
+    "success": true,
+    "message": "Dead letters retrieved successfully",
+    "total": 1,
+    "items": [
+        {
+            "streamId": "1726912345678-0",
+            "id": "evt_66edfe123456",
+            "event": "log.uploaded",
+            "payload": {
+                "logId": "sAbCdEf",
+                "clientIp": "198.51.100.2"
+            },
+            "attempts": 3,
+            "error": "Connection timed out after 3 retries",
+            "failedAt": 1726912345.678
+        }
+    ]
+}
+```
+
+### 46. 重放死信任务
+
+```
+POST /v1/admin/event-queue/dead/retry
+```
+
+将特定死信任务重置尝试次数后重新推入主事件流 `events:log:stream` 进行消费，并从死信流中清除。
+
+**请求参数（JSON）：**
+
+```json
+{
+    "streamId": "1726912345678-0"
+}
+```
+
+**响应示例：**
+
+```json
+{
+    "success": true,
+    "message": "Dead letter retried successfully",
+    "streamId": "1726912345678-0",
+    "retried": true
+}
+```
+
+### 47. 清空死信队列
+
+```
+DELETE /v1/admin/event-queue/dead
+```
+
+物理清空死信流 `events:log:dead`。返回 `{"cleared": true}`。
 
 ---
 

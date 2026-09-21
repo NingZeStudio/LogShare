@@ -16,7 +16,7 @@
 
 GL4ES 实现（旧版本）。介绍：主要采用OpenGL 2.1。优点：在原版下拥有极高稳定性、老设备（ES2.0）兼容性最好。缺点：无法良好支持MC 1.17和新版 Forge / Fabric。官方已明确：未来会移除 / 不建议使用。使用场景：老设备、运行在MC 1.12.x版本及以下。状态更新（2026）：Holy GL4ES 已有两年未更新；在 Minecraft 25w16a–25w19a 快照版本中已确认完全崩溃，无法正常游玩；与 Sodium 等现代优化模组存在兼容性冲突；官方 Issue 确认问题根源在于“未适配新版 OpenGL 规范”；结论：该渲染器已事实上进入废弃状态，仅建议 MC 1.12.x 及以下老版本使用。兼容性详情：支持所有原版 Minecraft 版本，但在高版本（1.17+）上表现不佳，在 25w16a–25w19a 快照中已确认完全崩溃。与原版兼容性极高，但与 Sodium 等现代优化模组冲突。不支持现代光影方案。对老旧设备（ES 2.0）兼容性最好。已知限制是仅支持 OpenGL 2.1，已进入废弃状态，Holy 在 1.19.4 上可运行但整体不建议。
 
-### 3. MobileGlues（MG）
+### 3. MobileGlues（MG）最推荐的
 
 基于 OpenGL ES 3.x 的原生实现（不是 GL4ES）、接近“真正现代 OpenGL 子集”，没有内置在启动器中。介绍：MG采用OpenGL 3.x图形API、支持现代渲染管线、在Android端是当前唯一“接近原生现代 OpenGL 行为”的方案。优点：Sodium/Iris/Create 支持优秀、光影支持强（Iris / OptiFine /Oculus）、模组兼容性强、性能-画质平衡最好（中高端设备）。缺点：需要 ES 3.0+（老设备不可用）、安装复杂、部分光影仍有限制。使用场景：Fabric+Sodium+Iris、光影玩家、中高端手机。状态更新（2026）：已发布 MobileGlues V2.0.0 正式版；V2.0.0 主要改进：性能优化（特定场景提升显著）、内存占用优化（尤其是长时间运行）、修复 Xaero's World Map 等模组的渲染问题；插件 UI 完全重构，支持 Material/Miuix 双主题切换、横竖屏适配；新增从启动器（FCL/Zalith）借用 ANGLE 库的支持；在高通骁龙8系列芯片上表现尤为出色；已成为 Zalith Launcher 光影/高性能场景的首选渲染器。兼容性详情：运行于 OpenGL ES 3.x 之上（最佳 3.2，最低 3.0），已支持 Minecraft 26.2 以上版本。明确支持 Sodium、JourneyMap、Create、Xaero's World Map 等含自定义渲染管线的模组。光影支持 Iris 和 OptiFine，可加载多种高清光影包，官方维护完整的光影兼容列表（CompatibleShaders.md）和模组兼容列表（CompatibleMods.md）。GPU 方面在高通骁龙 8 系列上表现尤为出色，需要 ES 3.0+，老设备无法使用。V2.0.0 新增从启动器借用 ANGLE 库的能力，但在 Adreno 730/740 上会禁用 ANGLE，或当 Vulkan 1.2+ 不可用时也会禁用。
 

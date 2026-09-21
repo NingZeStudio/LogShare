@@ -13,11 +13,14 @@ class AIAnalyseController extends AbstractController
     #[PostMapping(path: 'ai/analyse')]
     public function analyse(): ResponseInterface
     {
+        $this->checkIpBan();
+
         if (!$this->isAIEnabled()) {
             throw new ApiError(404, "AI analysis is disabled.");
         }
 
         $contentResult = $this->validateContentExists($this->parseContent());
+        $this->checkContentSecurity($contentResult);
 
         $content = is_array($contentResult) ? $contentResult['content'] : $contentResult;
         $logId = is_array($contentResult) ? ($contentResult['id'] ?? null) : null;

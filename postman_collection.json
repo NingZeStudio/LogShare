@@ -5857,6 +5857,152 @@
                         ],
                         "method": "DELETE"
                     }
+                },
+                {
+                    "name": "Get event queue stats (Admin)",
+                    "request": {
+                        "name": "Get event queue stats (Admin)",
+                        "description": {
+                            "content": "Get unified event queue status, metrics, and registered listeners",
+                            "type": "text/plain"
+                        },
+                        "url": {
+                            "path": [
+                                "v1",
+                                "admin",
+                                "event-queue",
+                                "stats"
+                            ],
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "query": []
+                        },
+                        "header": [
+                            {
+                                "key": "Authorization",
+                                "value": "Bearer {{adminToken}}"
+                            },
+                            {
+                                "key": "Accept",
+                                "value": "application/json"
+                            }
+                        ],
+                        "method": "GET"
+                    }
+                },
+                {
+                    "name": "List dead letters (Admin)",
+                    "request": {
+                        "name": "List dead letters (Admin)",
+                        "description": {
+                            "content": "List dead letter events with error details",
+                            "type": "text/plain"
+                        },
+                        "url": {
+                            "path": [
+                                "v1",
+                                "admin",
+                                "event-queue",
+                                "dead"
+                            ],
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "query": [
+                                {
+                                    "key": "limit",
+                                    "value": "50"
+                                }
+                            ]
+                        },
+                        "header": [
+                            {
+                                "key": "Authorization",
+                                "value": "Bearer {{adminToken}}"
+                            },
+                            {
+                                "key": "Accept",
+                                "value": "application/json"
+                            }
+                        ],
+                        "method": "GET"
+                    }
+                },
+                {
+                    "name": "Retry dead letter (Admin)",
+                    "request": {
+                        "name": "Retry dead letter (Admin)",
+                        "description": {
+                            "content": "Replay a dead letter event back to main stream",
+                            "type": "text/plain"
+                        },
+                        "url": {
+                            "path": [
+                                "v1",
+                                "admin",
+                                "event-queue",
+                                "dead",
+                                "retry"
+                            ],
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "query": []
+                        },
+                        "header": [
+                            {
+                                "key": "Authorization",
+                                "value": "Bearer {{adminToken}}"
+                            },
+                            {
+                                "key": "Content-Type",
+                                "value": "application/json"
+                            },
+                            {
+                                "key": "Accept",
+                                "value": "application/json"
+                            }
+                        ],
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n  \"streamId\": \"1726912345678-0\"\n}"
+                        },
+                        "method": "POST"
+                    }
+                },
+                {
+                    "name": "Clear dead letters (Admin)",
+                    "request": {
+                        "name": "Clear dead letters (Admin)",
+                        "description": {
+                            "content": "Clear all dead letters from dead stream",
+                            "type": "text/plain"
+                        },
+                        "url": {
+                            "path": [
+                                "v1",
+                                "admin",
+                                "event-queue",
+                                "dead"
+                            ],
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "query": []
+                        },
+                        "header": [
+                            {
+                                "key": "Authorization",
+                                "value": "Bearer {{adminToken}}"
+                            },
+                            {
+                                "key": "Accept",
+                                "value": "application/json"
+                            }
+                        ],
+                        "method": "DELETE"
+                    }
                 }
             ]
         }

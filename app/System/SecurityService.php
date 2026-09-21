@@ -19,6 +19,113 @@ final class SecurityService
     private const RULES_FILE = '/runtime/content_reject_rules.json';
     private const BANS_FILE = '/runtime/security_bans.json';
     private const BAN_PREFIX = 'security:ban:';
+    private const CIPHER_PREFIX = 'enc:v1:';
+    private const SECRET_FILE = '/runtime/.security_secret';
+
+    /**
+     * 根据反向代理可信策略，解析外部客户端真实访问 IP。
+     *
+     * @param array<string, mixed> $serverParams
+     * @param array<string, mixed>|object $headers
+     * @return string
+     */
+    public static function resolveClientIp(array $serverParams, array|object $headers = []): string
+    {
+        $remote = (string) ($serverParams['remote_addr'] ?? '127.0.0.1');
+
+        $security = Config::Get('security');
+        $rateLimit = Config::Get('rateLimit');
+        $trustedProxies = array_merge(
+            (array) ($security['trustedProxies'] ?? ['127.0.0.1', '::1', '10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16']),
+            (array) ($rateLimit['trustedProxies'] ?? [])
+        );
+
+        $isTrusted = false;
+        foreach ($trustedProxies as $proxy) {
+            $proxy = trim((string) $proxy);
+            if ($proxy === '') {
+                continue;
+            }
+            if ($proxy === $remote) {
+                $isTrusted = true;
+                break;
+            }
+            if (str_contains($proxy, '/') && self::ipInCidr($remote, $proxy)) {
+                $isTrusted = true;
+                break;
+            }
+        }
+
+        if (!$isTrusted && (self::isPrivateIp($remote) || $remote === '127.0.0.1' || $remote === '::1')) {
+            $isTrusted = true;
+        }
+
+        if ($isTrusted) {
+            // 1. 优先提取 X-Real-IP
+            $realIp = $serverParams['http_x_real_ip'] ?? null;
+            if (empty($realIp) && is_array($headers) && !empty($headers['x-real-ip'][0])) {
+                $realIp = $headers['x-real-ip'][0];
+            }
+            if (is_string($realIp) && filter_var(trim($realIp), FILTER_VALIDATE_IP)) {
+                return trim($realIp);
+            }
+
+            // 2. 提取 X-Forwarded-For
+            $forwardedFor = $serverParams['http_x_forwarded_for'] ?? null;
+            if (empty($forwardedFor) && is_array($headers) && !empty($headers['x-forwarded-for'][0])) {
+                $forwardedFor = $headers['x-forwarded-for'][0];
+            }
+            if (is_string($forwardedFor) && $forwardedFor !== '') {
+                $parts = explode(',', $forwardedFor);
+                foreach ($parts as $p) {
+                    $p = trim($p);
+                    if (filter_var($p, FILTER_VALIDATE_IP)) {
+                        return $p;
+                    }
+                }
+            }
+        }
+
+        return $remote;
+    }
+
+    /**
+     * 判断指定 IP 是否属于私网或回环地址。
+     */
+    public static function isPrivateIp(string $ip): bool
+    {
+        return filter_var(
+            $ip,
+            FILTER_VALIDATE_IP,
+            FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE
+        ) === false;
+    }
+
+    /**
+     * 判断 IPv4 地址是否属于指定 CIDR 网段。
+     */
+    public static function ipInCidr(string $ip, string $cidr): bool
+    {
+        if (!str_contains($cidr, '/')) {
+            return $ip === $cidr;
+        }
+
+        [$subnet, $bits] = explode('/', $cidr, 2);
+        $bits = (int) $bits;
+
+        if (filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4) && filter_var($subnet, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4)) {
+            $ipLong = ip2long($ip);
+            $subnetLong = ip2long($subnet);
+            if ($ipLong === false || $subnetLong === false || $bits < 0 || $bits > 32) {
+                return false;
+            }
+            $mask = -1 << (32 - $bits);
+            $subnetLong &= $mask;
+            return ($ipLong & $mask) === $subnetLong;
+        }
+
+        return false;
+    }
 
     /**
      * 查询当前被封禁的 IP 列表。
@@ -119,6 +226,9 @@ final class SecurityService
         // 2. 双写本地持久化文件作为韧性降级
         self::writeFileBan($ip, $record);
 
+        // 3. 联动 OpenLiteWaf 快照
+        self::syncBanToWaf($ip, $expiresAt);
+
         return [
             'ip' => $ip,
             'reason' => $reason,
@@ -150,6 +260,7 @@ final class SecurityService
         }
 
         self::removeFileBan($ip);
+        self::syncUnbanToWaf($ip);
 
         return true;
     }
@@ -167,6 +278,24 @@ final class SecurityService
             return false;
         }
 
+        // 0. 检查 Config 预设封禁配置（支持单个 IP 及 CIDR 网段）
+        $security = Config::Get('security');
+        if (($security['enabled'] ?? true) === false) {
+            return false;
+        }
+        $configBans = (array) ($security['ipBans'] ?? []);
+        foreach ($configBans as $bKey => $bVal) {
+            $candidate = is_string($bVal) ? $bVal : (string) $bKey;
+            $candidate = trim($candidate);
+            if ($candidate === $ip) {
+                return true;
+            }
+            if (str_contains($candidate, '/') && self::ipInCidr($ip, $candidate)) {
+                return true;
+            }
+        }
+
+        // 1. 检查 Redis
         $redis = RedisClient::getRedis();
         if ($redis !== null) {
             try {
@@ -178,9 +307,18 @@ final class SecurityService
             }
         }
 
+        // 2. 检查本地持久化文件
         $fileBans = self::readFileBans();
         if (isset($fileBans[$ip])) {
             return (int) ($fileBans[$ip]['expiresAt'] ?? 0) > time();
+        }
+
+        // 3. 检查 OpenLiteWaf 快照
+        $wafBans = self::readWafSnapshotBans();
+        foreach ($wafBans as $item) {
+            if (($item['ip'] ?? '') === $ip && (int) ($item['expiresAt'] ?? 0) > time()) {
+                return true;
+            }
         }
 
         return false;
@@ -301,36 +439,180 @@ final class SecurityService
     }
 
     /**
-     * 获取动态内容拒绝规则。
+     * 获取对称加密密钥（32 字节二进制）。
+     */
+    public static function getEncryptionKey(): string
+    {
+        static $cachedKey = null;
+        if ($cachedKey !== null) {
+            return $cachedKey;
+        }
+
+        $envKey = getenv('SECURITY_KEY') ?: getenv('SECURITY_ENCRYPTION_KEY');
+        if (is_string($envKey) && $envKey !== '') {
+            $cachedKey = hash('sha256', $envKey, true);
+            return $cachedKey;
+        }
+
+        $cfg = Config::Get('security');
+        if (isset($cfg['encryptionKey']) && is_string($cfg['encryptionKey']) && $cfg['encryptionKey'] !== '') {
+            $cachedKey = hash('sha256', $cfg['encryptionKey'], true);
+            return $cachedKey;
+        }
+
+        $secretPath = CORE_PATH . self::SECRET_FILE;
+        if (is_file($secretPath)) {
+            $raw = @file_get_contents($secretPath);
+            if (is_string($raw) && strlen(trim($raw)) >= 32) {
+                $cachedKey = hash('sha256', trim($raw), true);
+                return $cachedKey;
+            }
+        }
+
+        $generated = bin2hex(random_bytes(32));
+        $dir = dirname($secretPath);
+        if (!is_dir($dir)) {
+            @mkdir($dir, 0700, true);
+        }
+        @file_put_contents($secretPath, $generated);
+        @chmod($secretPath, 0600);
+
+        $cachedKey = hash('sha256', $generated, true);
+        return $cachedKey;
+    }
+
+    /**
+     * 加密单个敏感字符串（如屏蔽关键词或正则），生成 enc:v1:<base64>。
+     */
+    public static function encryptSecret(string $plaintext): string
+    {
+        if ($plaintext === '' || str_starts_with($plaintext, self::CIPHER_PREFIX)) {
+            return $plaintext;
+        }
+
+        $key = self::getEncryptionKey();
+        $iv = random_bytes(12);
+        $tag = '';
+        $cipher = openssl_encrypt($plaintext, 'aes-256-gcm', $key, OPENSSL_RAW_DATA, $iv, $tag);
+        if ($cipher === false || strlen($tag) !== 16) {
+            return $plaintext;
+        }
+
+        return self::CIPHER_PREFIX . base64_encode($iv . $tag . $cipher);
+    }
+
+    /**
+     * 解密单个密文字符串。
+     */
+    public static function decryptSecret(string $ciphertext): string
+    {
+        if (!str_starts_with($ciphertext, self::CIPHER_PREFIX)) {
+            return $ciphertext;
+        }
+
+        $raw = base64_decode(substr($ciphertext, strlen(self::CIPHER_PREFIX)), true);
+        if ($raw === false || strlen($raw) < 28) {
+            return $ciphertext;
+        }
+
+        $iv = substr($raw, 0, 12);
+        $tag = substr($raw, 12, 16);
+        $cipher = substr($raw, 28);
+
+        $key = self::getEncryptionKey();
+        $plain = openssl_decrypt($cipher, 'aes-256-gcm', $key, OPENSSL_RAW_DATA, $iv, $tag);
+        return $plain !== false ? $plain : $ciphertext;
+    }
+
+    /**
+     * 批量加密规则列表。
      *
+     * @param string[] $list
+     * @return string[]
+     */
+    public static function encryptRulesList(array $list): array
+    {
+        return array_values(array_unique(array_map(fn($item) => self::encryptSecret(trim((string) $item)), $list)));
+    }
+
+    /**
+     * 批量解密规则列表。
+     *
+     * @param string[] $list
+     * @return string[]
+     */
+    public static function decryptRulesList(array $list): array
+    {
+        return array_values(array_unique(array_map(fn($item) => self::decryptSecret((string) $item), $list)));
+    }
+
+    /**
+     * 获取动态内容拒绝规则（支持解密返回明文或原样密文）。
+     *
+     * @param bool $decrypt 是否自动解密加密的关键词与正则表达式
      * @return array{enabled: bool, keywords: string[], patterns: string[]}
      */
-    public static function getContentRules(): array
+    public static function getContentRules(bool $decrypt = true): array
     {
-        $path = CORE_PATH . self::RULES_FILE;
-        if (is_file($path)) {
-            $content = @file_get_contents($path);
-            if ($content) {
-                $data = json_decode($content, true);
-                if (is_array($data)) {
-                    return [
-                        'enabled' => (bool) ($data['enabled'] ?? true),
-                        'keywords' => array_values(array_filter(array_map('trim', (array) ($data['keywords'] ?? [])))),
-                        'patterns' => array_values(array_filter(array_map('trim', (array) ($data['patterns'] ?? [])))),
-                    ];
+        $rawRules = null;
+
+        // 1. 优先读取 Config 动态配置作为唯一真相来源（支持跨 Worker 毫秒热生效）
+        $configRules = Config::Get('security')['contentRules'] ?? null;
+        if (is_array($configRules) && (!empty($configRules['keywords']) || !empty($configRules['patterns']))) {
+            $rawRules = [
+                'enabled' => (bool) ($configRules['enabled'] ?? true),
+                'keywords' => array_values(array_filter(array_map('trim', (array) ($configRules['keywords'] ?? [])))),
+                'patterns' => array_values(array_filter(array_map('trim', (array) ($configRules['patterns'] ?? [])))),
+            ];
+        }
+
+        // 2. 回退读取 runtime/content_reject_rules.json 持久化镜像
+        if ($rawRules === null) {
+            $path = CORE_PATH . self::RULES_FILE;
+            if (is_file($path)) {
+                $content = @file_get_contents($path);
+                if ($content) {
+                    $data = json_decode($content, true);
+                    if (is_array($data) && (!empty($data['keywords']) || !empty($data['patterns']) || isset($data['enabled']))) {
+                        $rawRules = [
+                            'enabled' => (bool) ($data['enabled'] ?? true),
+                            'keywords' => array_values(array_filter(array_map('trim', (array) ($data['keywords'] ?? [])))),
+                            'patterns' => array_values(array_filter(array_map('trim', (array) ($data['patterns'] ?? [])))),
+                        ];
+                    }
                 }
             }
         }
 
-        return [
-            'enabled' => false,
-            'keywords' => [],
-            'patterns' => [],
-        ];
+        if ($rawRules === null && is_array($configRules)) {
+            $rawRules = [
+                'enabled' => (bool) ($configRules['enabled'] ?? false),
+                'keywords' => (array) ($configRules['keywords'] ?? []),
+                'patterns' => (array) ($configRules['patterns'] ?? []),
+            ];
+        }
+
+        if ($rawRules === null) {
+            return [
+                'enabled' => false,
+                'keywords' => [],
+                'patterns' => [],
+            ];
+        }
+
+        if ($decrypt) {
+            return [
+                'enabled' => $rawRules['enabled'],
+                'keywords' => self::decryptRulesList($rawRules['keywords']),
+                'patterns' => self::decryptRulesList($rawRules['patterns']),
+            ];
+        }
+
+        return $rawRules;
     }
 
     /**
-     * 保存动态内容拒绝规则。
+     * 保存动态内容拒绝规则（自动加密持久化关键词与正则）。
      *
      * @param array<string, mixed> $payload
      * @return array{enabled: bool, keywords: string[], patterns: string[]}
@@ -343,7 +625,11 @@ final class SecurityService
             foreach ($payload['keywords'] as $kw) {
                 $kw = trim((string) $kw);
                 if ($kw !== '') {
-                    $keywords[] = $kw;
+                    // 若传入是密文先解密校验，确保明文有效
+                    $plainKw = self::decryptSecret($kw);
+                    if ($plainKw !== '') {
+                        $keywords[] = $plainKw;
+                    }
                 }
             }
         }
@@ -353,34 +639,58 @@ final class SecurityService
             foreach ($payload['patterns'] as $pt) {
                 $pt = trim((string) $pt);
                 if ($pt !== '') {
+                    $plainPt = self::decryptSecret($pt);
                     // 校验正则表达式合法性
-                    if (@preg_match($pt, '') === false) {
-                        throw new ApiError(400, "Invalid regular expression pattern: {$pt}");
+                    if (@preg_match($plainPt, '') === false) {
+                        throw new ApiError(400, "Invalid regular expression pattern: {$plainPt}");
                     }
-                    $patterns[] = $pt;
+                    $patterns[] = $plainPt;
                 }
             }
         }
 
-        $data = [
+        $plainKeywords = array_values(array_unique($keywords));
+        $plainPatterns = array_values(array_unique($patterns));
+
+        // 存盘与动态配置中进行对称加密存储，杜绝明文敏感词物理暴露
+        $encryptedKeywords = self::encryptRulesList($plainKeywords);
+        $encryptedPatterns = self::encryptRulesList($plainPatterns);
+
+        $diskData = [
             'enabled' => $enabled,
-            'keywords' => array_values(array_unique($keywords)),
-            'patterns' => array_values(array_unique($patterns)),
+            'keywords' => $encryptedKeywords,
+            'patterns' => $encryptedPatterns,
             'updatedAt' => time(),
         ];
 
+        // 1. 持久化密文到 runtime/content_reject_rules.json
         $path = CORE_PATH . self::RULES_FILE;
         $dir = dirname($path);
         if (!is_dir($dir)) {
             @mkdir($dir, 0777, true);
         }
 
-        file_put_contents($path, json_encode($data, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE));
+        file_put_contents($path, json_encode($diskData, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE));
+
+        // 2. 双写密文同步到 Config 动态配置，确保跨进程多 Worker 立即生效且重启不丢失
+        try {
+            Config::saveDynamic([
+                'security' => [
+                    'contentRules' => [
+                        'enabled' => $enabled,
+                        'keywords' => $encryptedKeywords,
+                        'patterns' => $encryptedPatterns,
+                    ],
+                ],
+            ]);
+        } catch (\Throwable $e) {
+            \App\Syslog::error('SecurityService', 'Sync content rules to dynamic config failed: ' . $e->getMessage());
+        }
 
         return [
-            'enabled' => $data['enabled'],
-            'keywords' => $data['keywords'],
-            'patterns' => $data['patterns'],
+            'enabled' => $enabled,
+            'keywords' => $plainKeywords,
+            'patterns' => $plainPatterns,
         ];
     }
 
@@ -402,13 +712,13 @@ final class SecurityService
         }
 
         foreach ($rules['keywords'] as $keyword) {
-            if (stripos($content, $keyword) !== false) {
+            if ($keyword !== '' && stripos($content, $keyword) !== false) {
                 throw new ApiError(400, "Content rejected: contains prohibited keyword '{$keyword}'");
             }
         }
 
         foreach ($rules['patterns'] as $pattern) {
-            if (@preg_match($pattern, $content) === 1) {
+            if ($pattern !== '' && @preg_match($pattern, $content) === 1) {
                 throw new ApiError(400, "Content rejected: matches prohibited security pattern");
             }
         }
@@ -505,6 +815,88 @@ final class SecurityService
             $ch = null;
         }
 
+        return null;
+    }
+
+    /**
+     * 联动同步封禁至 OpenLiteWaf 快照（若可写）。
+     */
+    private static function syncBanToWaf(string $ip, int $expiresAt): void
+    {
+        $path = self::getWritableWafSnapshotPath();
+        if ($path === null) {
+            return;
+        }
+        $raw = @file_get_contents($path);
+        if ($raw === false || $raw === '') {
+            return;
+        }
+        $data = json_decode($raw, true);
+        if (!is_array($data)) {
+            return;
+        }
+        if (!isset($data['bans']) || !is_array($data['bans'])) {
+            $data['bans'] = [];
+        }
+        $found = false;
+        foreach ($data['bans'] as &$b) {
+            if (is_array($b) && ($b['ip'] ?? '') === $ip) {
+                $b['exp'] = $expiresAt;
+                $found = true;
+                break;
+            }
+        }
+        unset($b);
+        if (!$found) {
+            $data['bans'][] = [
+                'slot' => count($data['bans']) % 1024,
+                'exp' => $expiresAt,
+                'ip' => $ip,
+            ];
+        }
+        @file_put_contents($path, json_encode($data, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
+    }
+
+    /**
+     * 联动从 OpenLiteWaf 快照中解除封禁（若可写）。
+     */
+    private static function syncUnbanToWaf(string $ip): void
+    {
+        $path = self::getWritableWafSnapshotPath();
+        if ($path === null) {
+            return;
+        }
+        $raw = @file_get_contents($path);
+        if ($raw === false || $raw === '') {
+            return;
+        }
+        $data = json_decode($raw, true);
+        if (!is_array($data) || !isset($data['bans']) || !is_array($data['bans'])) {
+            return;
+        }
+        $filtered = [];
+        foreach ($data['bans'] as $key => $b) {
+            $bIp = is_array($b) ? ($b['ip'] ?? '') : (is_string($key) ? $key : '');
+            if ($bIp !== $ip) {
+                $filtered[] = $b;
+            }
+        }
+        $data['bans'] = $filtered;
+        @file_put_contents($path, json_encode($data, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
+    }
+
+    private static function getWritableWafSnapshotPath(): ?string
+    {
+        $candidates = [
+            (string) (getenv('WAF_SNAPSHOT_PATH') ?: ''),
+            CORE_PATH . '/OpenLiteWaf/data/snapshot.json',
+            '/data/openlitewaf/snapshot.json',
+        ];
+        foreach ($candidates as $p) {
+            if ($p !== '' && is_file($p) && is_writable($p)) {
+                return $p;
+            }
+        }
         return null;
     }
 }

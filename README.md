@@ -1,19 +1,19 @@
 # LogShare
 
-我正在构建一个垂直领域的 AI Agent 应用，且目前项目已经上线，目前仅线上日 Tokens 消耗接近 1 亿，更别提开发时人机协作+超 4 亿 Tokens 日消耗的开发成本，我实在难以承担 AI 费用，了解到 StepFun 长期支持个人开发者、初创企业或仅仅只是有想法的普通人。项目目前日活跃 IP 约 1.2~1.5k 左右，日活用户约 1.4w 上下，我目前同时申请了 StepFun 的 Builder Program、Startup Program 和 繁星计划，希望其中至少一个通过了吧...
+LogShare 是一个面向 Minecraft 与 Hytale 等沙盒游戏的高性能日志智能分析与安全分享云平台。使用者通过 HTTP 接口上传服务端、客户端日志或崩溃转储包，即可获得高可用分享链接；系统采用**极速上传解耦**设计，上传时仅执行轻量 Codex 特征检测并毫秒级响应，将高耗时的 SpinYarn 混淆堆栈反解与全量敏感内容审核交由**统一异步事件队列（EventQueue）**排队调度处理。
 
-LogShare 是一个 Minecraft / Hytale 日志分析与分享平台。使用者通过 HTTP 接口上传服务端或客户端日志，获得一个可分享的短链接；系统在上传时自动识别日志类型与服务端版本，执行敏感信息脱敏，并借助 Aternos Codex 解析引擎与 SpinYarn 混淆映射反解，输出结构化的诊断结果。在此之上，平台提供可选的 AI 分析能力：LogAgent 智能体由大模型驱动工具循环，可自主调用网络搜索、内置知识库检索（RAG）与日志文件读取工具，并以 SSE 流式输出思维链与结论。
+在此之上，平台搭载基于大语言模型的 LogAgent 智能排障诊断引擎，支持自主调用多源网络搜索、内置本地向量与全文检索（RAG）、日志精确定位检索及 GitHub 启动器排障工具链，以 SSE 流式协议输出深度思维链与根因修复建议。
 
-服务端为 Hyperf 3.2 常驻进程，运行于 Swoole 6.2 协程运行时，要求 PHP 8.4 及以上。存储后端支持 MariaDB 与文件系统二选一，Redis 作为可选的缓存与限流层。当前版本 v1.7.8，更新记录见 [`CHANGELOG.md`](CHANGELOG.md)。
+服务端基于 Hyperf 3.2 框架与 Swoole 6.2 高性能协程常驻进程引擎，原生要求 PHP 8.4 及以上。存储后端支持 MariaDB 与文件系统二选一，Redis 作为缓存、限流与事件流消息总线。当前版本 `v1.7.8`，更新记录见 [`CHANGELOG.md`](CHANGELOG.md)。
 
 ## 环境要求
 
 - PHP 8.4+，扩展 ext-json、ext-zlib、ext-mbstring、ext-pdo_mysql、ext-pdo_sqlite
 - Swoole 6.2（常驻进程运行时）
 - MariaDB 或文件系统（主要存储，二选一）
-- Redis（可选，用于缓存与限流；缺少 ext-redis 时以内置 mock 降级）
+- Redis（可选，用于缓存、限流与统一异步事件队列；缺少 ext-redis 时以内置 mock 优雅降级）
 - SQLite（RAG 知识库检索）
-- SpinYarn 扩展（可选，用于混淆堆栈反解；缺失时日志原样透传）
+- SpinYarn 扩展（可选，原生 Rust 编写，用于混淆堆栈反解；缺失时日志原样透传）
 
 ## 安装与启动
 
@@ -31,13 +31,17 @@ php bin/hyperf.php start
 
 | 配置段 | 说明 |
 |---|---|
-| `storage` | 存储后端（MariaDB 与文件系统二选一）、日志保留时间（TTL）、上传限制（`uploadFiles`） |
+| `storage` | 存储后端（MariaDB 与文件系统二选一）、日志保留时间（TTL）、多文件与 ZIP 上传限制（`uploadFiles`） |
 | `cache` | Redis 缓存：开关、TTL、大小限制与连接信息 |
 | `filter` | 上传前的预处理过滤链（脱敏规则），按配置顺序执行 |
 | `id` | 日志 ID 的字符集与长度（修改会破坏已有 ID） |
-| `ai` | AI 相关：API Key 列表、接口地址、模型名称、`agent`（LogAgent 开关）、`queue`（Redis Streams 分析微队列：并发数、排队上限、fail-open）、`mcp`（webSearch / rag 端点） |
+| `security` | 动态合规防护：AES-256-GCM 密文存储违规关键词与正则、IP 黑名单与反向代理真实 IP 判定 |
+| `eventQueue` | 统一日志事件队列：Redis Stream 键名与消费组、最大重试次数、异步反混淆与异步安全审核开关 |
+| `ai` | AI 分析核心：API Key 轮询列表、模型、`agent`（LogAgent 开关）、`queue`（Redis Streams 分析微队列）、`rag`（bge-m3 语义向量增强与故障转移） |
+| `github` | 启动器/渲染器排障工具：多 Personal Access Token 轮询、速率限制感知、403/429 自动冷却故障切换 |
 | `rateLimit` | 应用层限流（limit / window，Redis INCR 实现） |
 | `spinyarn` | 反混淆扩展：映射目录与缓存水位 |
+| `admin` | 管理后台开关与安全 Token（`/{version}/admin/*` 控制台鉴权） |
 | `urls` | 前端与 API 的基础 URL |
 
 ## Docker 部署
@@ -100,20 +104,22 @@ location / {
 同时提供 `/1/`（已弃用）与 `/v1/` 两组路径，响应格式统一为 JSON（`/raw` 端点返回纯文本），建议新集成使用 `/v1/`。完整规范见 [`API.md`](API.md)、[`openapi.yaml`](openapi.yaml) 与 [`postman_collection.json`](postman_collection.json)。
 
 ```
-POST   /1/log | /v1/log                          上传日志（支持多文件与 ZIP）
+POST   /1/log | /v1/log                          上传日志（极速解耦，支持多文件与 ZIP）
 DELETE /1/log/{id} | /v1/log/{id}                删除日志（Bearer Token 鉴权）
 GET    /1/raw/{id} | /v1/raw/{id}                获取原始日志（主文件）
 GET    /v1/raw/{id}/{filename}                   获取指定子文件（支持子路径）
 GET    /1/log/{id} | /v1/log/{id}                获取日志元信息与文件列表
-GET    /1/insights/{id} | /v1/insights/{id}      获取结构化分析结果
+GET    /1/insights/{id} | /v1/insights/{id}      获取 Codex 结构化分析结果
 POST   /1/analyse | /v1/analyse                  直接分析日志内容（不存储）
-GET    /1/ai/{id} | /v1/ai/{id}                  AI 分析（SSE 流式）
+GET    /1/ai/{id} | /v1/ai/{id}                  AI 智能诊断（SSE 流式）
 POST   /1/ai/analyse | /v1/ai/analyse           提交内容直接分析（不落盘，SSE）
+POST   /v1/telemetry/report                      上报客户端与启动器遥测指标
 GET    /1/limits | /v1/limits                    获取速率限制信息
 GET    /1/filters | /v1/filters                  获取当前启用的过滤器列表
+/*     /v1/admin/*                               管理后台控制台（需 Admin Token 鉴权）
 ```
 
-上传接口接受 `application/x-www-form-urlencoded` 与 `application/json`，支持 gzip / deflate 压缩请求体；`files` 数组可附加多个文件，`.zip` 压缩包自动展开并保留内部相对路径，展开后每个文件独立经过脱敏过滤链。客户端接入时遵循最佳实践规范：**尽可能同时上传「游戏主日志 + 崩溃报告 + 启动器日志」并注明 `source` 来源标识**，便于 AI 诊断引擎与社区准确定位启动器及渲染器环境引发的深层异常。上传响应中的 `token` 是删除该日志的唯一凭证。AI 分析使用 SSE 流式输出，LogAgent 模式下模型可自主调用网络搜索（Exa MCP）、RAG 检索与当前日志的文件读取工具；AI 关闭时相关端点统一返回 404。
+上传接口接受 `application/x-www-form-urlencoded` 与 `application/json`，支持 gzip / deflate / brotli 压缩请求体；`files` 数组可附加多个文件，`.zip` 压缩包自动展开并保留内部相对路径，展开后每个文件独立经过脱敏过滤链。客户端接入时遵循最佳实践规范：**尽可能同时上传「游戏主日志 + 崩溃报告 + 启动器日志」并注明 `source` 来源标识**，便于 AI 诊断引擎与社区准确定位启动器及渲染器环境引发的深层异常。上传响应中的 `token` 是删除该日志的唯一凭证。AI 分析使用 SSE 流式输出，LogAgent 模式下模型可自主调用网络搜索（Exa MCP）、RAG 检索、日志检索工具与 GitHub 排障工具；AI 关闭时相关端点统一返回 404。
 
 ## 架构
 
@@ -123,44 +129,51 @@ GET    /1/filters | /v1/filters                  获取当前启用的过滤器�
 bin/hyperf.php            入口文件（Hyperf Application）
 core.php                  引导文件（定义 CORE_PATH 并加载 Config）
 app/                      核心类库（App\ 命名空间）
-├── Agent/                LogAgent（模型驱动工具循环）
-├── Cache/                Redis 缓存实现
-├── Client/               AI、MCP、Redis、SpinYarn 客户端
-├── Command/              Hyperf 命令（rag:build）
-├── Controller/           HTTP 控制器（注解路由）
+├── Agent/                LogAgent（模型驱动工具循环）与排障工具链
+├── Cache/                Redis 缓存实现与协程连接池
+├── Client/               AI、MCP、GitHub、Redis、SpinYarn 客户端
+├── Command/              Hyperf 命令（rag:build 等）
+├── Controller/           HTTP 控制器（注解路由，含 Log、AI、Admin 控制台等）
 ├── Data/                 数据模型（Token、MetadataEntry）
-├── Filter/               预处理过滤链
-├── Middleware/           CORS、限流中间件
-├── Rag/                  RAG 检索（SQLite FTS5）
-├── Sse/                  SSE 输出（SseWriter）
-├── Storage/              存储后端（MariaDbStorage、FilesystemStorage）
-├── ApiError.php          API 错误异常（ApiExceptionHandler 渲染）
-├── ApiResponse.php       统一响应结构
-├── Config.php            配置加载器与环境变量覆盖
-├── ContentParser.php     请求体解析（含 files 数组）
-├── Detective.php         日志类型与服务端版本检测
-├── UploadParser.php      多文件校验与 zip 展开
-├── Log.php               日志核心模型
-└── Id.php                ID 生成与编解码
+├── Filter/               预处理过滤链（敏感信息脱敏）
+├── Middleware/           CORS、AdminAuth、限流中间件
+├── Parser/               请求体解码（Brotli / Gzip / Deflate 自动解压与炸弹防护）
+├── Process/              常驻消费者进程（AiQueueConsumer、EventQueueConsumer）
+├── Queue/                统一日志异步事件队列（EventQueue、QueueEvent、DeadLetterQueue、Handler/）
+├── Rag/                  本地 RAG 检索引擎（SQLite FTS5 + 语义向量召回）
+├── Response/             统一响应结构封装（ApiResponse）
+├── Sse/                  SSE 流式输出封装（SseWriter、AnalysisEmitter）
+├── Storage/              持久化存储后端（MariaDbStorage、FilesystemStorage）
+├── System/               系统核心服务（SecurityService、AuditLogManager、TelemetryService、SpinYarnManager）
+├── ApiError.php          API 业务异常（ApiExceptionHandler 统一渲染）
+├── Config.php            配置加载器、环境变量覆盖与动态热重载引擎
+├── ContentParser.php     请求正文与启动器特征识别
+├── Detective.php         日志类型与服务端版本探测
+├── UploadParser.php      多文件安全校验与 ZIP 展开引擎
+├── Log.php               日志核心模型与反混淆持久化
+└── Id.php                ID 生成与存储后端编解码
 config/autoload/          Hyperf 框架配置（server、databases、middlewares 等）
 rag/                      内置 RAG：knowledge/ 静态知识库，index.db 索引（构建生成，勿提交）
 docker/                   Compose 编排、nginx 站点配置、镜像构建
-OpenLiteWaf/                  边缘 WAF（OpenResty Lua，含独立文档与测试）
+OpenLiteWaf/              边缘 WAF 独立子模块（OpenResty Lua，CC 防御与攻击特征拦截）
+OpenLiteStats/            边缘站点访问统计独立子模块（无锁位图 UV、流量统计与日志分析）
 Config.inc.php            全部配置（gitignored）
 Config.inc.example.php    配置模板
-AGENTS.md                 项目上下文文档（架构约定与协作规范）
+.env.example              环境变量模板（数据库、Redis、AI、Admin 秘钥覆盖）
+AGENTS.md                 项目核心架构约定与上下文文档
 API.md                    完整 API 文档
 CHANGELOG.md              更新日志
-docs/                     历史过程文档（迁移计划、审查报告、排障记录）
+docs/                     历史过程文档与设计规划
 ```
 
 ### 请求处理流程
 
-1. **上传**：`POST /v1/log` → ContentParser 解析请求体（`content` / `files`）→ UploadParser 校验并展开 zip → 过滤链脱敏 → SpinYarn 反混淆 → 写入 MariaDB / 文件系统 → 可选写入 Redis 缓存。
-2. **读取**：`GET /v1/raw/{id}`（或子文件路径）→ Redis 缓存查询（如启用）→ 未命中时回源存储 → TTL 续期。
-3. **分析**：`GET /v1/insights/{id}` → 加载日志 → Detective 检测服务端类型与版本 → Codex 引擎解析 → 格式化输出。
-4. **AI 分析**：`GET /v1/ai/{id}` → LogAgent 工具循环 → LLM 流式输出 → 按需调用 Exa 搜索、RAG 检索、日志文件工具 → SSE 输出思维链与结论。
-5. **删除**：`DELETE /v1/log/{id}` → Bearer Token 鉴权（token 哈希比对）→ 删除存储与缓存。
+1. **上传**：`POST /v1/log` → RequestParser 解压请求体 → UploadParser 校验并展开 ZIP → 过滤链快速脱敏 → 执行轻量 Codex 特征分析 → 写入 MariaDB / 文件系统与 Redis 缓存 → **即刻派发 `EVENT_LOG_UPLOADED` 事件** → 毫秒级向客户端返回 200 响应。
+2. **异步流水线处理**：常驻进程 `EventQueueConsumer` 拉取事件 → 执行 `SecurityAuditHandler`（主正文与全部附件敏感规则检测，若违规即刻物理清除日志、记录审计日志并封禁恶意 IP，阻断后续流转）→ 执行 `DeobfuscateHandler`（调用 SpinYarn 原生反混淆并原子回写存储与刷新缓存）→ 异常自动重试，耗尽转入死信流 `events:log:dead`。
+3. **读取**：`GET /v1/raw/{id}`（或子文件路径）→ Redis 缓存查询（如启用）→ 未命中时回源存储 → TTL 续期。
+4. **分析**：`GET /v1/insights/{id}` → 加载日志 → Detective 检测服务端类型与版本 → Codex 引擎解析 → 格式化输出。
+5. **AI 分析**：`GET /v1/ai/{id}` → AI 微队列入队与中继 → LogAgent 工具循环 → LLM 流式推理 → 自主调度 Exa 搜索、RAG 知识检索、日志定位与 GitHub 排障 → SSE 推送思维链与结论。
+6. **删除**：`DELETE /v1/log/{id}` → Bearer Token 鉴权（SHA-256 哈希比对）→ 删除存储与缓存。
 
 ### ID 编码
 

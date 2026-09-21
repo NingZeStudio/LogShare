@@ -20,6 +20,16 @@ interface StorageInterface
     public static function Put(string $data, ?Token $token = null, array $metadata = [], ?string $source = null, ?array $files = null): ?\App\Id;
 
     /**
+     * Update existing log data and optional files by id
+     *
+     * @param \App\Id $id
+     * @param string $data
+     * @param array|null $files
+     * @return bool
+     */
+    public static function Update(\App\Id $id, string $data, ?array $files = null): bool;
+
+    /**
      * Get some data from the storage by id
      *
      * @param \App\Id $id

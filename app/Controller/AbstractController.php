@@ -18,6 +18,48 @@ abstract class AbstractController
     #[Inject]
     protected Response $response;
 
+    public function getClientRealIp(): string
+    {
+        return \App\System\SecurityService::resolveClientIp(
+            $this->request->getServerParams(),
+            $this->request->getHeaders()
+        );
+    }
+
+    protected function checkIpBan(): void
+    {
+        $ip = $this->getClientRealIp();
+        if (\App\System\SecurityService::isIpBanned($ip)) {
+            throw new ApiError(403, 'Your IP has been blocked from accessing this service.');
+        }
+    }
+
+    protected function checkContentSecurity(string|array|null $content, ?array $files = null): void
+    {
+        if (is_string($content)) {
+            \App\System\SecurityService::validateContent($content);
+        } elseif (is_array($content)) {
+            if (isset($content['content']) && is_string($content['content'])) {
+                \App\System\SecurityService::validateContent($content['content']);
+            }
+            if (!empty($content['files']) && is_array($content['files'])) {
+                foreach ($content['files'] as $f) {
+                    if (is_array($f) && isset($f['data']) && is_string($f['data'])) {
+                        \App\System\SecurityService::validateContent($f['data']);
+                    }
+                }
+            }
+        }
+
+        if (!empty($files)) {
+            foreach ($files as $f) {
+                if (is_array($f) && isset($f['data']) && is_string($f['data'])) {
+                    \App\System\SecurityService::validateContent($f['data']);
+                }
+            }
+        }
+    }
+
     protected function parseContent(): string|ApiError|array
     {
         return (new ContentParser($this->request))->getContent();
