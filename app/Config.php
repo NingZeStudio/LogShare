@@ -10,6 +10,7 @@ class Config
     private static int $dynamicSize = -1;
     private static string $dynamicVersion = '';
     private static string $baseConfigPath = '';
+    private static bool $checkingFresh = false;
 
     public static function load(string $path): void
     {
@@ -247,6 +248,10 @@ class Config
      */
     public static function ensureFresh(): void
     {
+        if (self::$checkingFresh) {
+            return;
+        }
+
         $basePath = self::$baseConfigPath !== '' ? self::$baseConfigPath : (CORE_PATH . '/Config.inc.php');
         if (!self::$loaded) {
             self::load($basePath);
@@ -265,6 +270,7 @@ class Config
         }
 
         if ($exists && extension_loaded('redis')) {
+            self::$checkingFresh = true;
             try {
                 $redis = \App\Client\RedisClient::getRedis();
                 if ($redis !== null) {
@@ -274,6 +280,8 @@ class Config
                     }
                 }
             } catch (\Throwable) {
+            } finally {
+                self::$checkingFresh = false;
             }
         }
     }
@@ -677,10 +685,13 @@ class Config
         self::$data = $candidate;
 
         if (extension_loaded('redis')) {
+            self::$checkingFresh = true;
             try {
                 $redis = \App\Client\RedisClient::getRedis();
                 $redis?->set('config:dynamic:version', $version);
             } catch (\Throwable) {
+            } finally {
+                self::$checkingFresh = false;
             }
         }
     }
@@ -699,10 +710,13 @@ class Config
         self::$dynamicSize = -1;
         self::$dynamicVersion = '';
         if (extension_loaded('redis')) {
+            self::$checkingFresh = true;
             try {
                 $redis = \App\Client\RedisClient::getRedis();
                 $redis?->del('config:dynamic:version');
             } catch (\Throwable) {
+            } finally {
+                self::$checkingFresh = false;
             }
         }
         self::load(self::$baseConfigPath !== '' ? self::$baseConfigPath : (CORE_PATH . '/Config.inc.php'));

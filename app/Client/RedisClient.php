@@ -122,8 +122,10 @@ class RedisClient
 
     /**
      * 获取当前上下文可用的 Redis 实例（在 ext-redis 未安装或连接失败时安全返回 null）。
+     *
+     * @return object|null
      */
-    public static function getRedis(): ?\Redis
+    public static function getRedis(): ?object
     {
         try {
             return self::connection();

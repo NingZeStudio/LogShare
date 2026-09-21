@@ -259,3 +259,20 @@ test('AdminController RAG endpoints work properly', function () {
 
     expect(fn() => $ctrl->searchRag())->toThrow(ApiError::class);
 });
+
+test('Config ensureFresh prevents recursive loop and works safely with Redis client', function () {
+    $redisMock = new \Tests\Mocks\RedisMock();
+    \App\Client\RedisClient::setTestConnection($redisMock);
+
+    try {
+        Config::saveDynamic(['general' => ['name' => 'Sync Test V1']]);
+        expect(Config::Get('general')['name'])->toBe('Sync Test V1');
+
+        // Verify recursion safety: multiple ensureFresh and Get calls succeed without stack overflow
+        Config::ensureFresh();
+        expect(Config::Get('general')['name'])->toBe('Sync Test V1');
+    } finally {
+        \App\Client\RedisClient::setTestConnection(null);
+    }
+});
+
