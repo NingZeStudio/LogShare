@@ -418,6 +418,16 @@ if ($testWaf) {
         }
     });
 
+    runCheck('OpenLiteWaf 白名单豁免验证 (带报错异常的日志 POST 放行)', function () use ($baseUrl) {
+        $payload = json_encode([
+            'content' => "[12:00:00] [ERROR]: org.sqlite.SQLiteException: [SQLITE_ERROR] syntax error near 'SELECT * FROM'\n",
+        ]);
+        $res = httpRequest('POST', "{$baseUrl}/v1/log", ['Content-Type' => 'application/json'], $payload);
+        if ($res['status'] !== 200) {
+            throw new RuntimeException("OpenLiteWaf 误拦截正常日志上传，状态: {$res['status']}: {$res['body']}");
+        }
+    });
+
     runCheck('OpenLiteWaf 真实恶意攻击拦截 (SQL 注入 / 路径遍历)', function () use ($baseUrl) {
         // 尝试发送典型路径遍历请求
         $attackRes = httpRequest('GET', "{$baseUrl}/v1/log?id=../../../../etc/passwd");
@@ -429,16 +439,6 @@ if ($testWaf) {
         $sqliRes = httpRequest('GET', "{$baseUrl}/v1/limits?union=SELECT%201,version()");
         if ($sqliRes['status'] !== 403) {
             throw new RuntimeException("OpenLiteWaf 未拦截 SQL 注入攻击，状态: {$sqliRes['status']}");
-        }
-    });
-
-    runCheck('OpenLiteWaf 白名单豁免验证 (带报错异常的日志 POST 放行)', function () use ($baseUrl) {
-        $payload = json_encode([
-            'content' => "[12:00:00] [ERROR]: org.sqlite.SQLiteException: [SQLITE_ERROR] syntax error near 'SELECT * FROM'\n",
-        ]);
-        $res = httpRequest('POST', "{$baseUrl}/v1/log", ['Content-Type' => 'application/json'], $payload);
-        if ($res['status'] !== 200) {
-            throw new RuntimeException("OpenLiteWaf 误拦截正常日志上传，状态: {$res['status']}: {$res['body']}");
         }
     });
 }
