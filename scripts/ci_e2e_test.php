@@ -400,7 +400,9 @@ if ($testWaf) {
             throw new RuntimeException("安全统计页不可达: {$res['status']}");
         }
         $json = json_decode($res['body'], true);
-        if (!isset($json['attacks_blocked'], $json['banned_ips_count'])) {
+        $hasBlocked = isset($json['blocked_total']) || isset($json['attacks_blocked']);
+        $hasBanned = isset($json['banned_active']) || isset($json['banned_ips_count']);
+        if (!$hasBlocked || !$hasBanned) {
             throw new RuntimeException("安全统计数据缺少必要字段: {$res['body']}");
         }
     });
