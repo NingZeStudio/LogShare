@@ -145,15 +145,11 @@ services:
   mariadb-events:
     image: mariadb:11.8
     container_name: logshare-mariadb-events
-    entrypoint: ["/bin/sh", "-c"]
-    command: >-
-      export MYSQL_PWD="$$MARIADB_ROOT_PASSWORD";
-      until mariadb-admin ping -hmariadb -uroot --silent;
-      do sleep 2; done;
-      until mariadb -hmariadb -uroot logshare < /mariadb-events.sql;
-      do sleep 2; done;
+    entrypoint: /bin/sh
+    command: -c 'until mariadb-admin ping -hmariadb -uroot --silent; do sleep 2; done; until mariadb -hmariadb -uroot logshare < /mariadb-events.sql; do sleep 2; done; echo "MariaDB events initialized successfully."'
     environment:
       MARIADB_ROOT_PASSWORD: ${MARIADB_ROOT_PASSWORD:?MARIADB_ROOT_PASSWORD must be set}
+      MYSQL_PWD: ${MARIADB_ROOT_PASSWORD:?MARIADB_ROOT_PASSWORD must be set}
     volumes:
       - ./mariadb-events.sql:/mariadb-events.sql:ro
     depends_on:
