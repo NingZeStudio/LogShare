@@ -173,7 +173,11 @@ abstract class AbstractController
         }
 
         try {
-            $raw = (string) $this->request->getBody()->getContents();
+            $stream = $this->request->getBody();
+            if ($stream->isSeekable()) {
+                $stream->rewind();
+            }
+            $raw = (string) $stream;
             if ($raw !== '') {
                 $decoded = json_decode($raw, true);
                 if (is_array($decoded)) {
