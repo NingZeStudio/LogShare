@@ -262,6 +262,8 @@ jobs:
       MARIADB_PASSWORD: ci-placeholder
       MARIADB_ROOT_PASSWORD: ci-placeholder
       REDIS_PASSWORD: ci-placeholder
+      ADMIN_TOKEN: ci-placeholder
+      AI_MCP_RAG_AUTH_TOKEN: ci-placeholder
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -281,6 +283,7 @@ jobs:
           echo "ADMIN_ENABLED=true" >> .env
           echo "ADMIN_TOKEN=ci-placeholder" >> .env
           echo "AI_MCP_RAG_AUTH_TOKEN=ci-placeholder" >> .env
+          cp .env docker/.env
           php scripts/sync_mariadb_events.php
 
       - name: Generate Self-Signed Certificate for Smoke Test
@@ -301,10 +304,10 @@ jobs:
 
       - name: Test Image Starts & Run E2E Suite
         run: |
-          docker compose -f docker/compose.yaml up -d || {
+          docker compose --env-file .env -f docker/compose.yaml up -d || {
             echo "=== docker compose up -d 失败，输出全部容器日志 ==="
-            docker compose -f docker/compose.yaml logs
-            docker compose -f docker/compose.yaml down
+            docker compose --env-file .env -f docker/compose.yaml logs
+            docker compose --env-file .env -f docker/compose.yaml down
             exit 1
           }
           ready=0
@@ -317,16 +320,16 @@ jobs:
           done
           if [ "$ready" != "1" ]; then
             echo "=== 服务启动超时，输出容器日志 ==="
-            docker compose -f docker/compose.yaml logs
-            docker compose -f docker/compose.yaml down
+            docker compose --env-file .env -f docker/compose.yaml logs
+            docker compose --env-file .env -f docker/compose.yaml down
             exit 1
           fi
           # 执行涵盖 Nginx 反代、HTTPS、OpenLiteWaf 防护与 OpenLiteStats 的全量真实环境测试
           php scripts/ci_e2e_test.php --base-url=https://localhost --admin-token=ci-placeholder --rag-token=ci-placeholder --waf-test || {
             echo '=== 测试失败，输出容器日志 ==='
-            docker compose -f docker/compose.yaml logs
-            docker compose -f docker/compose.yaml down
+            docker compose --env-file .env -f docker/compose.yaml logs
+            docker compose --env-file .env -f docker/compose.yaml down
             exit 1
           }
           echo "Docker 真实生产环境全量 E2E 测试全部通过"
-          docker compose -f docker/compose.yaml down
+          docker compose --env-file .env -f docker/compose.yaml down
