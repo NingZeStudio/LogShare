@@ -43,7 +43,7 @@ class AIAnalyseController extends AbstractController
                 $content = $log->getContent();
             }
 
-            return $this->runAiAnalysis($content, "ai:analysis:" . $id->getRaw());
+            return $this->runAiAnalysis($content, "ai:analysis:" . $id->getRaw(), $id->get());
         }
 
         if (empty($content)) {

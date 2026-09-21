@@ -79,6 +79,12 @@ class QueueEvent
         return $this->attempts;
     }
 
+    public function setAttempts(int $attempts): self
+    {
+        $this->attempts = max(1, $attempts);
+        return $this;
+    }
+
     public function incrementAttempts(): void
     {
         $this->attempts++;

@@ -159,6 +159,34 @@ abstract class AbstractController
         }
     }
 
+    /**
+     * 获取请求体解析数据。优先获取框架解析的 ParsedBody，
+     * 若为空则安全回退尝试从原始请求体反序列化 JSON。
+     *
+     * @return array<mixed>
+     */
+    protected function getParsedBody(): array
+    {
+        $parsed = $this->request->getParsedBody();
+        if (is_array($parsed) && !empty($parsed)) {
+            return $parsed;
+        }
+
+        try {
+            $raw = (string) $this->request->getBody()->getContents();
+            if ($raw !== '') {
+                $decoded = json_decode($raw, true);
+                if (is_array($decoded)) {
+                    return $decoded;
+                }
+            }
+        } catch (\Throwable) {
+            // ignore
+        }
+
+        return is_array($parsed) ? $parsed : [];
+    }
+
     protected function respondSuccess(mixed $data, string $message = 'OK'): PsrResponseInterface
     {
         return ApiResponse::success($data, $message);
