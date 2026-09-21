@@ -133,7 +133,8 @@ if created_id:
 print("\n=== 深度验证: 修改 LogAgent 工具调用轮次配置 ===")
 # 读取当前配置
 status, res_body = request("GET", "/v1/admin/config")
-current_cfg = json.loads(res_body).get("data", {})
+raw_json = json.loads(res_body)
+current_cfg = raw_json.get("data") if isinstance(raw_json.get("data"), dict) else raw_json
 current_rounds = current_cfg.get("ai", {}).get("agent", {}).get("maxToolRounds")
 print(f"当前配置中的 maxToolRounds: {current_rounds}")
 
@@ -156,7 +157,8 @@ print(f"PUT /v1/admin/config (NO Content-Type) -> {status_no_ct} | body: {res_bo
 
 # 重新读取验证
 status, res_body = request("GET", "/v1/admin/config")
-updated_cfg = json.loads(res_body).get("data", {})
+raw_json = json.loads(res_body)
+updated_cfg = raw_json.get("data") if isinstance(raw_json.get("data"), dict) else raw_json
 updated_rounds = updated_cfg.get("ai", {}).get("agent", {}).get("maxToolRounds")
 print(f"修改后配置中的 maxToolRounds: {updated_rounds}")
 
