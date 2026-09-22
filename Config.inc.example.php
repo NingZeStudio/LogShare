@@ -156,6 +156,9 @@ return [
             'enabled' => false,
             'timeout' => 30,
             'providers' => [],
+            // 分块策略：heading（默认，与旧版索引逐字节一致）/ sliding / token / hybrid。
+            // 切换后需重跑 rag:build；hybrid 保留父块并对超长块二次切分。
+            'chunker' => 'heading',
         ],
         'mcp' => [
             'webSearch' => [

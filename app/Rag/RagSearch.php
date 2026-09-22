@@ -132,6 +132,31 @@ class RagSearch
                 vec BLOB NOT NULL
             )"
         );
+        // chunk 元数据侧表（docs 是 FTS5 虚表不能 ADD COLUMN）：rowid 与 docs
+        // 一一对应。token_count 供 HYBRID 审计，parent_rowid 表达父子层级，
+        // source_mtime 支撑增量索引（Step 5）的文件变更比对。
+        $pdo->exec(
+            "CREATE TABLE IF NOT EXISTS chunk_meta(
+                rowid INTEGER PRIMARY KEY,
+                token_count INTEGER NOT NULL DEFAULT 0,
+                parent_rowid INTEGER,
+                start_offset INTEGER NOT NULL DEFAULT 0,
+                end_offset INTEGER NOT NULL DEFAULT 0,
+                source_mtime INTEGER NOT NULL DEFAULT 0
+            )"
+        );
+    }
+
+    /**
+     * 读取 ai.rag.chunker 配置；任何异常回退默认策略（heading = 旧行为）。
+     */
+    public static function chunkStrategyFromConfig(): ChunkStrategy
+    {
+        try {
+            return ChunkStrategy::fromConfig(\App\Config::Get('ai')['rag']['chunker'] ?? null);
+        } catch (\Throwable) {
+            return ChunkStrategy::HEADING_ONLY;
+        }
     }
 
     /**
@@ -160,6 +185,8 @@ class RagSearch
         self::configurePdo($tmpPdo);
         self::ensureSchema($tmpPdo);
 
+        $strategy = self::chunkStrategyFromConfig();
+
         try {
             $tmpPdo->beginTransaction();
 
@@ -168,6 +195,10 @@ class RagSearch
             $chunkRowids = [];
             $chunkBodies = [];
             $insert = $tmpPdo->prepare("INSERT INTO docs(title, body, source) VALUES (?, ?, ?)");
+            $metaInsert = $tmpPdo->prepare(
+                "INSERT INTO chunk_meta(rowid, token_count, parent_rowid, start_offset, end_offset, source_mtime)
+                 VALUES (?, ?, ?, ?, ?, ?)"
+            );
 
             $iterator = new \RecursiveIteratorIterator(new \RecursiveDirectoryIterator($knowledgeDir, \FilesystemIterator::SKIP_DOTS));
             foreach ($iterator as $fileInfo) {
@@ -177,11 +208,26 @@ class RagSearch
 
                 $content = (string) file_get_contents($fileInfo->getPathname());
                 $relative = ltrim(substr($fileInfo->getPathname(), strlen(rtrim($knowledgeDir, '/'))), '/');
+                $fileMtime = (int) $fileInfo->getMTime();
 
-                foreach (self::chunkMarkdown($relative, $content) as $chunk) {
-                    $insert->execute([$chunk['title'], $chunk['body'], $relative]);
-                    $chunkRowids[] = (int) $tmpPdo->lastInsertId();
-                    $chunkBodies[] = $chunk['title'] . "\n" . $chunk['body'];
+                // 分块 → 逐个插入，parentId（文件内 chunk 下标）在插入后
+                // 解析为真实 rowid，供 parent-child 检索与增量重建使用
+                $fileChunks = Chunker::chunk($relative, $content, $strategy);
+                $rowidByIndex = [];
+                foreach ($fileChunks as $i => $chunk) {
+                    $insert->execute([$chunk->title, $chunk->body, $relative]);
+                    $rowid = (int) $tmpPdo->lastInsertId();
+                    $rowidByIndex[$i] = $rowid;
+                    $metaInsert->execute([
+                        $rowid,
+                        $chunk->tokenCount,
+                        $chunk->parentId === null ? null : ($rowidByIndex[$chunk->parentId] ?? null),
+                        $chunk->startOffset,
+                        $chunk->endOffset,
+                        $fileMtime,
+                    ]);
+                    $chunkRowids[] = $rowid;
+                    $chunkBodies[] = $chunk->title . "\n" . $chunk->body;
                     $chunks++;
                 }
                 $files++;
@@ -261,8 +307,8 @@ class RagSearch
     /**
      * Split a markdown file into chunks on `## ` headings.
      *
-     * The `# ` page title is preserved and prefixed to each chunk title, so the
-     * document's main heading remains searchable.
+     * 委托 Chunker::byHeading（HEADING_ONLY 策略，即当前默认行为），返回
+     * 旧版数组形态保持兼容；新代码请直接使用 Chunker::chunk()。
      *
      * @param string $source
      * @param string $content
@@ -270,51 +316,10 @@ class RagSearch
      */
     public static function chunkMarkdown(string $source, string $content): array
     {
-        $content = trim($content);
-        if ($content === '') {
-            return [];
-        }
-
-        // Preserve the `# ` page title (H1) for searchability
-        $docTitle = null;
-        if (preg_match('/^#\s+(.+)$/m', $content, $matches)) {
-            $docTitle = trim($matches[1]);
-        }
-
-        $sections = preg_split('/^##\s+(.+)$/m', $content, -1, PREG_SPLIT_DELIM_CAPTURE);
-        if ($sections === false || count($sections) <= 1) {
-            return [[
-                'title' => $docTitle ?? basename($source),
-                'body' => $content,
-            ]];
-        }
-
-        $chunks = [];
-        $heading = null;
-        // $sections alternates: [preamble, heading1, body1, heading2, body2, ...]
-        for ($i = 0; $i < count($sections); $i += 2) {
-            $body = $sections[$i];
-
-            if ($heading === null) {
-                // Preamble before the first H2: drop the H1 line, keep the intro text
-                $preamble = preg_replace('/^#\s+[^\n]*\n?/m', '', $body);
-                if (trim($preamble) !== '') {
-                    $chunks[] = [
-                        'title' => $docTitle ?? basename($source),
-                        'body' => trim($preamble),
-                    ];
-                }
-            } elseif (trim($body) !== '') {
-                $chunks[] = [
-                    'title' => $docTitle !== null ? $docTitle . ' > ' . $heading : $heading,
-                    'body' => trim($body),
-                ];
-            }
-
-            $heading = $sections[$i + 1] ?? null;
-        }
-
-        return $chunks;
+        return array_map(
+            static fn(Chunk $chunk): array => $chunk->toLegacyArray(),
+            Chunker::byHeading($source, $content)
+        );
     }
 
     /**
