@@ -4,6 +4,10 @@ declare(strict_types=1);
 
 namespace App\Controller;
 
+use App\Agent\AnalysisMode;
+use App\Agent\AnalysisRecordManager;
+use App\Agent\PromptManager;
+use App\Agent\ToolManager;
 use App\ApiError;
 use App\Config;
 use App\Id;
@@ -208,6 +212,7 @@ class AdminController extends AbstractController
         $params = $this->request->getQueryParams();
         $days = isset($params['days']) ? (int) $params['days'] : 7;
         $data = \App\System\AiMetricsService::getMetrics($days);
+        $data['scoreboard'] = AnalysisRecordManager::getScoreboard($days);
         return $this->respondSuccess($data, 'AI metrics retrieved successfully');
     }
 
@@ -339,6 +344,290 @@ class AdminController extends AbstractController
 
         AuditLogManager::record('ai.domain_knowledge.delete', $id, [], true, 'admin', $this->getClientIp());
         return $this->respondSuccess(['deleted' => true, 'id' => $id], '删除已知领域知识条目成功');
+    }
+
+    // ── LogAgent 分析记录管理（Analyses Management） ──
+
+    #[GetMapping(path: 'ai/analyses')]
+    public function listAnalyses(): ResponseInterface
+    {
+        $params = $this->request->getQueryParams();
+        $page = isset($params['page']) ? (int) $params['page'] : 1;
+        $pageSize = isset($params['pageSize']) ? (int) $params['pageSize'] : (isset($params['limit']) ? (int) $params['limit'] : 20);
+
+        $filters = [];
+        if (isset($params['mode']) && $params['mode'] !== '') {
+            $filters['mode'] = (string) $params['mode'];
+        }
+        if (isset($params['promptVersion']) && $params['promptVersion'] !== '') {
+            $filters['promptVersion'] = (string) $params['promptVersion'];
+        }
+        if (isset($params['keyword']) && trim((string) $params['keyword']) !== '') {
+            $filters['keyword'] = trim((string) $params['keyword']);
+        }
+        if (isset($params['minScore']) && is_numeric($params['minScore'])) {
+            $filters['minScore'] = (float) $params['minScore'];
+        }
+        if (isset($params['maxScore']) && is_numeric($params['maxScore'])) {
+            $filters['maxScore'] = (float) $params['maxScore'];
+        }
+        if (isset($params['success']) && $params['success'] !== '') {
+            $filters['success'] = $params['success'];
+        }
+        if (isset($params['since']) && is_numeric($params['since'])) {
+            $filters['since'] = (int) $params['since'];
+        }
+        if (isset($params['until']) && is_numeric($params['until'])) {
+            $filters['until'] = (int) $params['until'];
+        }
+
+        $res = AnalysisRecordManager::list($filters, $page, $pageSize);
+        return $this->respondSuccess($res, 'AI analysis records retrieved successfully');
+    }
+
+    #[GetMapping(path: 'ai/analyses/{cacheKey}')]
+    public function getAnalysis(string $cacheKey): ResponseInterface
+    {
+        $record = AnalysisRecordManager::get($cacheKey);
+        if ($record === null) {
+            throw new ApiError(404, "Analysis record not found for key: {$cacheKey}");
+        }
+
+        return $this->respondSuccess($record, 'Analysis detail retrieved successfully');
+    }
+
+    #[GetMapping(path: 'ai/analyses/{cacheKey}/trace')]
+    public function getAnalysisTrace(string $cacheKey): ResponseInterface
+    {
+        $trace = AnalysisRecordManager::getTrace($cacheKey);
+        if ($trace === null) {
+            throw new ApiError(404, "Analysis trace not found for key: {$cacheKey}");
+        }
+
+        return $this->respondSuccess($trace, 'Analysis trace retrieved successfully');
+    }
+
+    #[DeleteMapping(path: 'ai/analyses/{cacheKey}')]
+    public function deleteAnalysis(string $cacheKey): ResponseInterface
+    {
+        $deleted = AnalysisRecordManager::delete($cacheKey);
+        AuditLogManager::record('ai.analyses.delete', $cacheKey, [], $deleted, 'admin', $this->getClientIp());
+        return $this->respondSuccess(['deleted' => $deleted, 'cacheKey' => $cacheKey], 'Analysis record deleted successfully');
+    }
+
+    // ── LogAgent 质量评分看板（Scoreboard） ──
+
+    #[GetMapping(path: 'ai/scoreboard')]
+    public function getScoreboard(): ResponseInterface
+    {
+        $params = $this->request->getQueryParams();
+        $days = isset($params['days']) && is_numeric($params['days']) ? (int) $params['days'] : 7;
+        $scoreboard = AnalysisRecordManager::getScoreboard($days);
+        return $this->respondSuccess($scoreboard, 'AI scoreboard retrieved successfully');
+    }
+
+    #[GetMapping(path: 'ai/scoreboard/slow')]
+    public function getSlowAnalyses(): ResponseInterface
+    {
+        $params = $this->request->getQueryParams();
+        $thresholdSec = isset($params['thresholdSec']) && is_numeric($params['thresholdSec']) ? (float) $params['thresholdSec'] : 15.0;
+        $limit = isset($params['limit']) && is_numeric($params['limit']) ? min(100, max(1, (int) $params['limit'])) : 20;
+
+        $items = AnalysisRecordManager::getSlowAnalyses($limit, $thresholdSec * 1000.0);
+        return $this->respondSuccess([
+            'thresholdSec' => $thresholdSec,
+            'limit' => $limit,
+            'total' => count($items),
+            'items' => $items,
+        ], 'Slow analysis records retrieved successfully');
+    }
+
+    #[GetMapping(path: 'ai/scoreboard/low-score')]
+    public function getLowScoreAnalyses(): ResponseInterface
+    {
+        $params = $this->request->getQueryParams();
+        $maxScore = isset($params['maxScore']) && is_numeric($params['maxScore']) ? (float) $params['maxScore'] : 60.0;
+        $limit = isset($params['limit']) && is_numeric($params['limit']) ? min(100, max(1, (int) $params['limit'])) : 20;
+
+        $items = AnalysisRecordManager::getLowScoreAnalyses($limit, $maxScore);
+        return $this->respondSuccess([
+            'maxScore' => $maxScore,
+            'limit' => $limit,
+            'total' => count($items),
+            'items' => $items,
+        ], 'Low-score analysis records retrieved successfully');
+    }
+
+    // ── Prompt 版本管理（Prompt Versioning） ──
+
+    #[GetMapping(path: 'ai/prompts')]
+    public function listPrompts(): ResponseInterface
+    {
+        $prompts = PromptManager::listPrompts();
+        return $this->respondSuccess([
+            'items' => $prompts,
+            'total' => count($prompts),
+        ], 'Prompt versions retrieved successfully');
+    }
+
+    #[GetMapping(path: 'ai/prompts/{promptVersion}')]
+    public function getPrompt(string $promptVersion): ResponseInterface
+    {
+        $prompt = PromptManager::getPrompt($promptVersion);
+        return $this->respondSuccess($prompt, 'Prompt version retrieved successfully');
+    }
+
+    #[PostMapping(path: 'ai/prompts')]
+    public function createPrompt(): ResponseInterface
+    {
+        $body = $this->getParsedBody();
+        $version = isset($body['version']) ? trim((string) $body['version']) : '';
+        $content = isset($body['systemPrompt']) ? (string) $body['systemPrompt'] : (isset($body['content']) ? (string) $body['content'] : '');
+        $forkFrom = isset($body['forkFrom']) && is_string($body['forkFrom']) ? trim($body['forkFrom']) : null;
+
+        PromptManager::savePrompt($version, $content, true, $forkFrom);
+        AuditLogManager::record('ai.prompts.create', $version, ['forkFrom' => $forkFrom], true, 'admin', $this->getClientIp());
+
+        return $this->respondSuccess(PromptManager::getPrompt($version), 'Prompt version created successfully');
+    }
+
+    #[PutMapping(path: 'ai/prompts/{promptVersion}')]
+    public function updatePrompt(string $promptVersion): ResponseInterface
+    {
+        $body = $this->getParsedBody();
+        $content = isset($body['systemPrompt']) ? (string) $body['systemPrompt'] : (isset($body['content']) ? (string) $body['content'] : '');
+
+        PromptManager::savePrompt($promptVersion, $content, false);
+        AuditLogManager::record('ai.prompts.update', $promptVersion, ['length' => mb_strlen($content)], true, 'admin', $this->getClientIp());
+
+        return $this->respondSuccess(PromptManager::getPrompt($promptVersion), 'Prompt version updated successfully');
+    }
+
+    #[DeleteMapping(path: 'ai/prompts/{promptVersion}')]
+    public function deletePrompt(string $promptVersion): ResponseInterface
+    {
+        PromptManager::deletePrompt($promptVersion);
+        AuditLogManager::record('ai.prompts.delete', $promptVersion, [], true, 'admin', $this->getClientIp());
+        return $this->respondSuccess(['deleted' => true, 'version' => $promptVersion], 'Prompt version deleted successfully');
+    }
+
+    #[PostMapping(path: 'ai/prompts/{promptVersion}/activate')]
+    public function activatePrompt(string $promptVersion): ResponseInterface
+    {
+        PromptManager::activatePrompt($promptVersion);
+        AuditLogManager::record('ai.prompts.activate', $promptVersion, [], true, 'admin', $this->getClientIp());
+        return $this->respondSuccess(['activated' => true, 'version' => $promptVersion], 'Prompt version activated successfully');
+    }
+
+    // ── 工具管理（Tool Management） ──
+
+    #[GetMapping(path: 'ai/tools')]
+    public function listAiTools(): ResponseInterface
+    {
+        $tools = ToolManager::listTools();
+        return $this->respondSuccess([
+            'items' => $tools,
+            'total' => count($tools),
+        ], 'Tools retrieved successfully');
+    }
+
+    #[PutMapping(path: 'ai/tools/{name}/enable')]
+    public function setAiToolEnabled(string $name): ResponseInterface
+    {
+        $body = $this->getParsedBody();
+        $enabled = isset($body['enabled']) ? (bool) $body['enabled'] : true;
+
+        ToolManager::setToolEnabled($name, $enabled);
+        AuditLogManager::record('ai.tools.enable', $name, ['enabled' => $enabled], true, 'admin', $this->getClientIp());
+
+        return $this->respondSuccess([
+            'name' => $name,
+            'enabled' => $enabled,
+        ], 'Tool status updated successfully');
+    }
+
+    #[PutMapping(path: 'ai/tools/{name}/config')]
+    public function updateAiToolConfig(string $name): ResponseInterface
+    {
+        $body = $this->getParsedBody();
+        ToolManager::updateToolConfig($name, $body);
+        AuditLogManager::record('ai.tools.config', $name, $body, true, 'admin', $this->getClientIp());
+
+        return $this->respondSuccess([
+            'name' => $name,
+            'updated' => true,
+        ], 'Tool configuration updated successfully');
+    }
+
+    // ── 分析模式配置（Mode Limits Management） ──
+
+    #[GetMapping(path: 'ai/modes')]
+    public function listAiModes(): ResponseInterface
+    {
+        return $this->respondSuccess(AnalysisMode::allModes(), 'Analysis modes retrieved successfully');
+    }
+
+    #[PutMapping(path: 'ai/modes/{mode}')]
+    public function updateAiMode(string $mode): ResponseInterface
+    {
+        $validModes = [AnalysisMode::QUICK, AnalysisMode::DEEP, AnalysisMode::LAUNCHER];
+        if (!in_array($mode, $validModes, true)) {
+            throw new ApiError(400, "Invalid analysis mode: {$mode}");
+        }
+
+        $body = $this->getParsedBody();
+        $rawDynamic = Config::getDynamicConfigRaw();
+        $modes = $rawDynamic['ai']['agent']['modes'] ?? (Config::Get('ai')['agent']['modes'] ?? []);
+        if (!is_array($modes)) {
+            $modes = [];
+        }
+
+        $currentLimits = AnalysisMode::limits($mode);
+        $fields = [
+            'maxRounds' => 'int',
+            'maxWebSearch' => 'int',
+            'maxTotalRetrieval' => 'int',
+            'maxFileReads' => 'int',
+            'maxLlmCalls' => 'int',
+            'allowWebSearch' => 'bool',
+            'allowRag' => 'bool',
+            'allowGithub' => 'bool',
+            'allowLogFiles' => 'bool',
+        ];
+
+        $updatedMode = $modes[$mode] ?? $currentLimits;
+        foreach ($fields as $field => $type) {
+            if (isset($body[$field])) {
+                if ($type === 'int') {
+                    $updatedMode[$field] = max(0, min(100, (int) $body[$field]));
+                } else {
+                    $updatedMode[$field] = (bool) $body[$field];
+                }
+            }
+        }
+
+        $modes[$mode] = $updatedMode;
+        $agent = $rawDynamic['ai']['agent'] ?? (Config::Get('ai')['agent'] ?? []);
+        if (!is_array($agent)) {
+            $agent = [];
+        }
+        $agent['modes'] = $modes;
+
+        $update = [
+            'ai' => [
+                'agent' => $agent,
+            ],
+        ];
+
+        Config::saveDynamic($update);
+        Config::touchDynamicConfig();
+
+        AuditLogManager::record('ai.modes.update', $mode, $updatedMode, true, 'admin', $this->getClientIp());
+
+        return $this->respondSuccess([
+            'mode' => $mode,
+            'limits' => AnalysisMode::limits($mode),
+        ], 'Analysis mode limits updated successfully');
     }
 
     #[GetMapping(path: 'system/stats')]

@@ -38,7 +38,7 @@ final class PromptBuilder
         $tools = [];
         $mcp = $config['mcp'] ?? [];
 
-        if (!empty($mcp['webSearch']['url']) && $mode !== AnalysisMode::QUICK) {
+        if (!empty($mcp['webSearch']['url']) && $mode !== AnalysisMode::QUICK && ToolManager::isToolEnabled('web_search_exa', $config)) {
             $tools[] = [
                 'type' => 'function',
                 'function' => [
@@ -57,168 +57,184 @@ final class PromptBuilder
         }
 
         if (!empty($mcp['rag']['url']) && $mode !== AnalysisMode::QUICK) {
-            $tools[] = [
-                'type' => 'function',
-                'function' => [
-                    'name' => 'rag_search',
-                    'description' => '在内置知识库中检索已验证的实战资料。知识库覆盖：常见崩溃与故障模式（mixin 注入失败、内存不足、Java 版本错误等）、'
-                        . '移动端启动器生态实战案例蒸馏（FCL/Zalith/Amethyst/PGW/MobileGlues，含排障决策树）、三大日志文件格式解读、'
-                        . 'Fabric/Forge/NeoForge 与 PaperMC/Purpur/Geyser 等开发文档。日志中出现异常类名、崩溃特征或启动器相关问题时优先使用；'
-                        . '纯常识问题不必使用。返回带来源路径的文档片段，多数条目按「签名-含义-解决方案」组织。',
-                    'parameters' => [
-                        'type' => 'object',
-                        'properties' => [
-                            'query' => ['type' => 'string', 'description' => '检索词。直接使用日志中的原文信号：英文异常类名或错误串（如 MixinApplyError、SIGSEGV、OutOfMemoryError），或中文症状关键词（如 内存不足、启动闪退）。不要翻译或改写异常类名。'],
-                            'topic' => ['type' => 'string', 'description' => '可选。限定在某个主题目录内检索（目录名来自 list_topics 的主题地图），如 "patterns"、"日志分析"。省略则全库检索。'],
-                            'k' => ['type' => 'number', 'description' => '返回片段数量，默认 5'],
+            if (ToolManager::isToolEnabled('rag_search', $config)) {
+                $tools[] = [
+                    'type' => 'function',
+                    'function' => [
+                        'name' => 'rag_search',
+                        'description' => '在内置知识库中检索已验证的实战资料。知识库覆盖：常见崩溃与故障模式（mixin 注入失败、内存不足、Java 版本错误等）、'
+                            . '移动端启动器生态实战案例蒸馏（FCL/Zalith/Amethyst/PGW/MobileGlues，含排障决策树）、三大日志文件格式解读、'
+                            . 'Fabric/Forge/NeoForge 与 PaperMC/Purpur/Geyser 等开发文档。日志中出现异常类名、崩溃特征或启动器相关问题时优先使用；'
+                            . '纯常识问题不必使用。返回带来源路径的文档片段，多数条目按「签名-含义-解决方案」组织。',
+                        'parameters' => [
+                            'type' => 'object',
+                            'properties' => [
+                                'query' => ['type' => 'string', 'description' => '检索词。直接使用日志中的原文信号：英文异常类名或错误串（如 MixinApplyError、SIGSEGV、OutOfMemoryError），或中文症状关键词（如 内存不足、启动闪退）。不要翻译或改写异常类名。'],
+                                'topic' => ['type' => 'string', 'description' => '可选。限定在某个主题目录内检索（目录名来自 list_topics 的主题地图），如 "patterns"、"日志分析"。省略则全库检索。'],
+                                'k' => ['type' => 'number', 'description' => '返回片段数量，默认 5'],
+                            ],
+                            'required' => ['query'],
                         ],
-                        'required' => ['query'],
                     ],
-                ],
-            ];
-            $tools[] = [
-                'type' => 'function',
-                'function' => [
-                    'name' => 'list_topics',
-                    'description' => '列出内置知识库的主题地图（目录、说明与内容样本）。不确定检索方向、或 rag_search 连续无结果时调用；'
-                        . '看完地图后应带着明确目标词去 rag_search（可配合 topic 参数定向），不要看完地图就停止分析。',
-                    'parameters' => [
-                        'type' => 'object',
-                        'properties' => new \stdClass(),
+                ];
+            }
+            if (ToolManager::isToolEnabled('list_topics', $config)) {
+                $tools[] = [
+                    'type' => 'function',
+                    'function' => [
+                        'name' => 'list_topics',
+                        'description' => '列出内置知识库的主题地图（目录、说明与内容样本）。不确定检索方向、或 rag_search 连续无结果时调用；'
+                            . '看完地图后应带着明确目标词去 rag_search（可配合 topic 参数定向），不要看完地图就停止分析。',
+                        'parameters' => [
+                            'type' => 'object',
+                            'properties' => new \stdClass(),
+                        ],
                     ],
-                ],
-            ];
+                ];
+            }
         }
 
         $githubConfig = $config['github'] ?? \App\Config::Get('github');
         $githubAllowed = !empty($githubConfig['enabled']) && $mode !== AnalysisMode::QUICK;
         if ($githubAllowed) {
-            $tools[] = [
-                'type' => 'function',
-                'function' => [
-                    'name' => 'github_list_repos',
-                    'description' => '列出官方支持与推荐排障的 Minecraft 启动器与渲染器仓库列表（含官方全名、别名、owner/repo 与适用场景）。'
-                        . '不确定启动器仓库名或检索方向时优先调用。',
-                    'parameters' => [
-                        'type' => 'object',
-                        'properties' => new \stdClass(),
-                    ],
-                ],
-            ];
-            $tools[] = [
-                'type' => 'function',
-                'function' => [
-                    'name' => 'github_search',
-                    'description' => '在指定开源启动器或渲染器的 GitHub 仓库中，按关键词联合检索相关的 Issues、Pull Requests（很多崩溃修复记录在 PR 解决说明中）与 Discussions。'
-                        . '日志中出现启动器名称（如 FoldCraftLauncher、PojavLauncher 等）或渲染器（MobileGlues、gl4es 等）报错时使用。',
-                    'parameters' => [
-                        'type' => 'object',
-                        'properties' => [
-                            'repo' => [
-                                'type' => 'string',
-                                'description' => '启动器或渲染器名称：支持官方全名（如 FoldCraftLauncher、PojavLauncher、MobileGlues）、常用别名（如 fcl、pojav、mg、hmcl）或规范的 owner/repo（可先用 github_list_repos 查看）',
-                            ],
-                            'query' => [
-                                'type' => 'string',
-                                'description' => '检索关键词或报错原文信号（如异常类名、SIGSEGV、崩溃特征短语、中文症状）',
-                            ],
-                            'type' => [
-                                'type' => 'string',
-                                'enum' => ['all', 'issue', 'pr', 'discussion'],
-                                'description' => '检索范围：all（默认，综合检索）、issue（仅工单）、pr（仅合并请求/代码修复）、discussion（仅问答讨论）',
-                            ],
-                            'state' => [
-                                'type' => 'string',
-                                'enum' => ['all', 'closed', 'open'],
-                                'description' => '状态：all（默认）、closed（已解决/已合并，排障优先）、open（开放中）',
-                            ],
-                            'max_results' => [
-                                'type' => 'integer',
-                                'description' => '最大返回条目数（1-10，默认 5）',
-                            ],
+            if (ToolManager::isToolEnabled('github_list_repos', $config)) {
+                $tools[] = [
+                    'type' => 'function',
+                    'function' => [
+                        'name' => 'github_list_repos',
+                        'description' => '列出官方支持与推荐排障的 Minecraft 启动器与渲染器仓库列表（含官方全名、别名、owner/repo 与适用场景）。'
+                            . '不确定启动器仓库名或检索方向时优先调用。',
+                        'parameters' => [
+                            'type' => 'object',
+                            'properties' => new \stdClass(),
                         ],
-                        'required' => ['repo', 'query'],
                     ],
-                ],
-            ];
-            $tools[] = [
-                'type' => 'function',
-                'function' => [
-                    'name' => 'github_get_content',
-                    'description' => '获取指定 Issue、PR 或 Discussion 的详细描述、PR 修复说明与维护者采纳的高质量解答。在通过 github_search 定位到高相关条目后调用。',
-                    'parameters' => [
-                        'type' => 'object',
-                        'properties' => [
-                            'repo' => [
-                                'type' => 'string',
-                                'description' => '启动器全名、别名或 owner/repo',
+                ];
+            }
+            if (ToolManager::isToolEnabled('github_search', $config)) {
+                $tools[] = [
+                    'type' => 'function',
+                    'function' => [
+                        'name' => 'github_search',
+                        'description' => '在指定开源启动器或渲染器的 GitHub 仓库中，按关键词联合检索相关的 Issues、Pull Requests（很多崩溃修复记录在 PR 解决说明中）与 Discussions。'
+                            . '日志中出现启动器名称（如 FoldCraftLauncher、PojavLauncher 等）或渲染器（MobileGlues、gl4es 等）报错时使用。',
+                        'parameters' => [
+                            'type' => 'object',
+                            'properties' => [
+                                'repo' => [
+                                    'type' => 'string',
+                                    'description' => '启动器或渲染器名称：支持官方全名（如 FoldCraftLauncher、PojavLauncher、MobileGlues）、常用别名（如 fcl、pojav、mg、hmcl）或规范的 owner/repo（可先用 github_list_repos 查看）',
+                                ],
+                                'query' => [
+                                    'type' => 'string',
+                                    'description' => '检索关键词或报错原文信号（如异常类名、SIGSEGV、崩溃特征短语、中文症状）',
+                                ],
+                                'type' => [
+                                    'type' => 'string',
+                                    'enum' => ['all', 'issue', 'pr', 'discussion'],
+                                    'description' => '检索范围：all（默认，综合检索）、issue（仅工单）、pr（仅合并请求/代码修复）、discussion（仅问答讨论）',
+                                ],
+                                'state' => [
+                                    'type' => 'string',
+                                    'enum' => ['all', 'closed', 'open'],
+                                    'description' => '状态：all（默认）、closed（已解决/已合并，排障优先）、open（开放中）',
+                                ],
+                                'max_results' => [
+                                    'type' => 'integer',
+                                    'description' => '最大返回条目数（1-10，默认 5）',
+                                ],
                             ],
-                            'number' => [
-                                'type' => 'integer',
-                                'description' => 'Issue/PR/Discussion 编号',
-                            ],
-                            'type' => [
-                                'type' => 'string',
-                                'enum' => ['auto', 'issue', 'pr', 'discussion'],
-                                'description' => '条目类型：auto（默认自动识别）、issue、pr、discussion',
-                            ],
+                            'required' => ['repo', 'query'],
                         ],
-                        'required' => ['repo', 'number'],
                     ],
-                ],
-            ];
+                ];
+            }
+            if (ToolManager::isToolEnabled('github_get_content', $config)) {
+                $tools[] = [
+                    'type' => 'function',
+                    'function' => [
+                        'name' => 'github_get_content',
+                        'description' => '获取指定 Issue、PR 或 Discussion 的详细描述、PR 修复说明与维护者采纳的高质量解答。在通过 github_search 定位到高相关条目后调用。',
+                        'parameters' => [
+                            'type' => 'object',
+                            'properties' => [
+                                'repo' => [
+                                    'type' => 'string',
+                                    'description' => '启动器全名、别名或 owner/repo',
+                                ],
+                                'number' => [
+                                    'type' => 'integer',
+                                    'description' => 'Issue/PR/Discussion 编号',
+                                ],
+                                'type' => [
+                                    'type' => 'string',
+                                    'enum' => ['auto', 'issue', 'pr', 'discussion'],
+                                    'description' => '条目类型：auto（默认自动识别）、issue、pr、discussion',
+                                ],
+                            ],
+                            'required' => ['repo', 'number'],
+                        ],
+                    ],
+                ];
+            }
         }
 
         $fileTools = $logId !== null && $mode !== AnalysisMode::QUICK;
         if ($fileTools) {
-            $tools[] = [
-                'type' => 'function',
-                'function' => [
-                    'name' => 'list_log_files',
-                    'description' => '列出当前日志 ID 下的所有文件（含主文件与附加文件）。',
-                    'parameters' => [
-                        'type' => 'object',
-                        'properties' => new \stdClass(),
-                    ],
-                ],
-            ];
-            $tools[] = [
-                'type' => 'function',
-                'function' => [
-                    'name' => 'read_log_file',
-                    'description' => '读取当前日志下指定文件的内容。默认返回完整文件；需要控制范围时可使用 line_start/line_end 指定行区间，或使用 offset/max_bytes 指定字节区间。主文件名为 main。',
-                    'parameters' => [
-                        'type' => 'object',
-                        'properties' => [
-                            'filename' => ['type' => 'string', 'description' => '文件名（主文件为 main，或使用 list_log_files 列出的名称）'],
-                            'line_start' => ['type' => 'integer', 'description' => '起始行号，从 1 开始；省略则从第 1 行开始'],
-                            'line_end' => ['type' => 'integer', 'description' => '结束行号，包含该行；省略则读取到文件末尾'],
-                            'offset' => ['type' => 'integer', 'description' => '字节起始位置；使用行区间时不要设置'],
-                            'max_bytes' => ['type' => 'integer', 'description' => '字节读取模式下的最大字节数；使用行区间时不要设置'],
+            if (ToolManager::isToolEnabled('list_log_files', $config)) {
+                $tools[] = [
+                    'type' => 'function',
+                    'function' => [
+                        'name' => 'list_log_files',
+                        'description' => '列出当前日志 ID 下的所有文件（含主文件与附加文件）。',
+                        'parameters' => [
+                            'type' => 'object',
+                            'properties' => new \stdClass(),
                         ],
-                        'required' => ['filename'],
                     ],
-                ],
-            ];
-            $tools[] = [
-                'type' => 'function',
-                'function' => [
-                    'name' => 'grep_log_file',
-                    'description' => '在当前日志的指定文件中按关键词逐行检索（类似 grep），返回匹配行号、行内容与前后上下文。'
-                        . '适合定位特定异常、报错关键字、mod ID 或崩溃特征，避免通读超大文件；获取行号后可按需配合 read_log_file 精确读取。',
-                    'parameters' => [
-                        'type' => 'object',
-                        'properties' => [
-                            'query' => ['type' => 'string', 'description' => '检索关键词或文本短语（如异常类名、模组名、错误关键字）'],
-                            'filename' => ['type' => 'string', 'description' => '文件名（主文件为 main，或使用 list_log_files 列出的名称；省略则默认 main）'],
-                            'case_sensitive' => ['type' => 'boolean', 'description' => '是否区分大小写，默认 false（忽略大小写）'],
-                            'context_lines' => ['type' => 'integer', 'description' => '命中行前后各显示的上下文行数（0-5，默认 1）'],
-                            'max_matches' => ['type' => 'integer', 'description' => '最大返回匹配项数（1-30，默认 10）'],
+                ];
+            }
+            if (ToolManager::isToolEnabled('read_log_file', $config)) {
+                $tools[] = [
+                    'type' => 'function',
+                    'function' => [
+                        'name' => 'read_log_file',
+                        'description' => '读取当前日志下指定文件的内容。默认返回完整文件；需要控制范围时可使用 line_start/line_end 指定行区间，或使用 offset/max_bytes 指定字节区间。主文件名为 main。',
+                        'parameters' => [
+                            'type' => 'object',
+                            'properties' => [
+                                'filename' => ['type' => 'string', 'description' => '文件名（主文件为 main，或使用 list_log_files 列出的名称）'],
+                                'line_start' => ['type' => 'integer', 'description' => '起始行号，从 1 开始；省略则从第 1 行开始'],
+                                'line_end' => ['type' => 'integer', 'description' => '结束行号，包含该行；省略则读取到文件末尾'],
+                                'offset' => ['type' => 'integer', 'description' => '字节起始位置；使用行区间时不要设置'],
+                                'max_bytes' => ['type' => 'integer', 'description' => '字节读取模式下的最大字节数；使用行区间时不要设置'],
+                            ],
+                            'required' => ['filename'],
                         ],
-                        'required' => ['query'],
                     ],
-                ],
-            ];
+                ];
+            }
+            if (ToolManager::isToolEnabled('grep_log_file', $config)) {
+                $tools[] = [
+                    'type' => 'function',
+                    'function' => [
+                        'name' => 'grep_log_file',
+                        'description' => '在当前日志的指定文件中按关键词逐行检索（类似 grep），返回匹配行号、行内容与前后上下文。'
+                            . '适合定位特定异常、报错关键字、mod ID 或崩溃特征，避免通读超大文件；获取行号后可按需配合 read_log_file 精确读取。',
+                        'parameters' => [
+                            'type' => 'object',
+                            'properties' => [
+                                'query' => ['type' => 'string', 'description' => '检索关键词或文本短语（如异常类名、模组名、错误关键字）'],
+                                'filename' => ['type' => 'string', 'description' => '文件名（主文件为 main，或使用 list_log_files 列出的名称；省略则默认 main）'],
+                                'case_sensitive' => ['type' => 'boolean', 'description' => '是否区分大小写，默认 false（忽略大小写）'],
+                                'context_lines' => ['type' => 'integer', 'description' => '命中行前后各显示的上下文行数（0-5，默认 1）'],
+                                'max_matches' => ['type' => 'integer', 'description' => '最大返回匹配项数（1-30，默认 10）'],
+                            ],
+                            'required' => ['query'],
+                        ],
+                    ],
+                ];
+            }
         }
 
         return $tools;

@@ -2,9 +2,9 @@
 
 LogShare 是一个面向 Minecraft 与 Hytale 等沙盒游戏的高性能日志智能分析与安全分享云平台。使用者通过 HTTP 接口上传服务端、客户端日志或崩溃转储包，即可获得高可用分享链接；系统采用**极速上传解耦**设计，上传时仅执行轻量 Codex 特征检测并毫秒级响应，将高耗时的 SpinYarn 混淆堆栈反解与全量敏感内容审核交由**统一异步事件队列（EventQueue）**排队调度处理。
 
-在此之上，平台搭载基于大语言模型的 LogAgent 智能排障诊断引擎，支持自主调用多源网络搜索、内置本地向量与全文检索（RAG）、日志精确定位检索及 GitHub 启动器排障工具链，以 SSE 流式协议输出深度思维链与根因修复建议。
+在此之上，平台搭载工业级解耦重构的 LogAgent 智能排障诊断引擎，内建 `deep`（深度推理排障）、`launcher`（启动器崩溃优先）与 `quick`（极速直答）三种分析模式。支持自主调度 Exa 多源网络搜索、内置本地向量与全文检索（RAG）、日志精确定位检索及 GitHub 启动器排障工具链，结合动态日志窗口（LogWindowManager）聚焦真实崩溃上下文，以 SSE 流式输出思维链、排障建议及严格结构化 JSON 诊断块，并由四维评估引擎（AnalysisScorer）与链路追踪系统（AnalysisTracer）保障诊断质量。
 
-服务端基于 Hyperf 3.2 框架与 Swoole 6.2 高性能协程常驻进程引擎，原生要求 PHP 8.4 及以上。存储后端支持 MariaDB 与文件系统二选一，Redis 作为缓存、限流与事件流消息总线。当前版本 `v1.7.8`，更新记录见 [`CHANGELOG.md`](CHANGELOG.md)。
+服务端基于 Hyperf 3.2 框架与 Swoole 6.2 高性能协程常驻进程引擎，原生要求 PHP 8.4 及以上。存储后端支持 MariaDB 与文件系统二选一，Redis 作为缓存、限流与事件流消息总线。当前版本 `v1.8.2-beta.2`，更新记录见 [`CHANGELOG.md`](CHANGELOG.md)。
 
 ## 环境要求
 
@@ -111,15 +111,15 @@ GET    /v1/raw/{id}/{filename}                   获取指定子文件（支持�
 GET    /1/log/{id} | /v1/log/{id}                获取日志元信息与文件列表
 GET    /1/insights/{id} | /v1/insights/{id}      获取 Codex 结构化分析结果
 POST   /1/analyse | /v1/analyse                  直接分析日志内容（不存储）
-GET    /1/ai/{id} | /v1/ai/{id}                  AI 智能诊断（SSE 流式）
+GET    /1/ai/{id} | /v1/ai/{id}                  AI 智能诊断（SSE 流式，支持 mode 与 promptVersion 参数）
 POST   /1/ai/analyse | /v1/ai/analyse           提交内容直接分析（不落盘，SSE）
 POST   /v1/telemetry/report                      上报客户端与启动器遥测指标
 GET    /1/limits | /v1/limits                    获取速率限制信息
 GET    /1/filters | /v1/filters                  获取当前启用的过滤器列表
-/*     /v1/admin/*                               管理后台控制台（需 Admin Token 鉴权）
+/*     /v1/admin/*                               管理后台控制台（含全套 LogAgent 追踪与治理，需 Admin Token）
 ```
 
-上传接口接受 `application/x-www-form-urlencoded` 与 `application/json`，支持 gzip / deflate / brotli 压缩请求体；`files` 数组可附加多个文件，`.zip` 压缩包自动展开并保留内部相对路径，展开后每个文件独立经过脱敏过滤链。客户端接入时遵循最佳实践规范：**尽可能同时上传「游戏主日志 + 崩溃报告 + 启动器日志」并注明 `source` 来源标识**，便于 AI 诊断引擎与社区准确定位启动器及渲染器环境引发的深层异常。上传响应中的 `token` 是删除该日志的唯一凭证。AI 分析使用 SSE 流式输出，LogAgent 模式下模型可自主调用网络搜索（Exa MCP）、RAG 检索、日志检索工具与 GitHub 排障工具；AI 关闭时相关端点统一返回 404。
+上传接口接受 `application/x-www-form-urlencoded` 与 `application/json`，支持 gzip / deflate / brotli 压缩请求体；`files` 数组可附加多个文件，`.zip` 压缩包自动展开并保留内部相对路径，展开后每个文件独立经过脱敏过滤链。客户端接入时遵循最佳实践规范：**尽可能同时上传「游戏主日志 + 崩溃报告 + 启动器日志」并注明 `source` 来源标识**，便于 AI 诊断引擎与社区准确定位启动器及渲染器环境引发的深层异常。上传响应中的 `token` 是删除该日志的唯一凭证。AI 分析使用 SSE 流式输出，LogAgent 支持 `deep`（深度排障）、`launcher`（启动器崩溃优先）和 `quick`（极速直答）三种模式，可自主调度 Exa 搜索、RAG 检索、日志精准定位检索及 GitHub 启动器排障工具，诊断结论附带结构化 JSON 卡片；Admin 端提供完整的分析追踪（Trace 归档/导出）、质量评分看板（Scoreboard）、Prompt 版本热更新及工具链门控。AI 关闭时相关端点统一返回 404。
 
 ## 架构
 
@@ -129,7 +129,19 @@ GET    /1/filters | /v1/filters                  获取当前启用的过滤器�
 bin/hyperf.php            入口文件（Hyperf Application）
 core.php                  引导文件（定义 CORE_PATH 并加载 Config）
 app/                      核心类库（App\ 命名空间）
-├── Agent/                LogAgent（模型驱动工具循环）与排障工具链
+├── Agent/                LogAgent（多轮排障引擎、提示词版本化、工具链管理与质量追踪）
+│   ├── Context/          AgentContext / ToolSession（会话上下文与工具状态链）
+│   ├── Gateway/          AIClientGateway / LlmGateway / LlmStreamHandler（LLM 调用网关与故障转移）
+│   ├── Quality/          AnalysisScorer / ResultValidator（四维质量评分与结构化结果验证）
+│   ├── Tool/             ToolRegistry / ToolFactory / ToolInterface（9 大排障工具注册表与降级网关）
+│   ├── Window/           LogWindowManager（自适应动态日志窗口与报错锚点聚焦）
+│   ├── AgentRuntime.php  多轮工具循环引擎与分层停止条件控制
+│   ├── AnalysisMode.php  排障模式（deep / launcher / quick）与动态预算控制
+│   ├── AnalysisRecordManager.php 分析记录与 Trace 归档持久化（Redis ZSET 索引）
+│   ├── AnalysisTracer.php 全链路执行追踪器（逐轮工具耗时、报错与指标）
+│   ├── PromptBuilder.php 提示词模板构建与动态知识注入
+│   ├── PromptManager.php 提示词版本库热管理与在线激活
+│   └── ToolManager.php   排障工具链在线门控与 Fallback 降级配置
 ├── Cache/                Redis 缓存实现与协程连接池
 ├── Client/               AI、MCP、GitHub、Redis、SpinYarn 客户端
 ├── Command/              Hyperf 命令（rag:build 等）

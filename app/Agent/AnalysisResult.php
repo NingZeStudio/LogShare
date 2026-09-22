@@ -26,6 +26,7 @@ final class AnalysisResult
         public readonly array $metrics = [],
         public readonly ?array $validation = null,
         public readonly ?array $score = null,
+        public readonly array $trace = [],
     ) {
     }
 

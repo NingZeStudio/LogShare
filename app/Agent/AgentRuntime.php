@@ -145,6 +145,7 @@ final class AgentRuntime
         $score = (new AnalysisScorer())->score($fullAnswer, $session, $validation);
 
         $metrics = $this->tracer->finish($success, $validation, $score);
+        $trace = $this->tracer->export();
 
         return new AnalysisResult(
             fullAnswer: $fullAnswer,
@@ -155,6 +156,7 @@ final class AgentRuntime
             metrics: $metrics,
             validation: $validation->toArray(),
             score: $score->toArray(),
+            trace: $trace,
         );
     }
 

@@ -610,6 +610,7 @@ class Config
             ['github', 'tokens'],
             ['github', 'repos'],
             ['filter', 'pre'],
+            ['ai', 'agent'],
         ];
 
         $candidate = self::deepMerge(self::$data, $updates);
@@ -727,5 +728,37 @@ class Config
         }
         self::load(self::$baseConfigPath !== '' ? self::$baseConfigPath : (CORE_PATH . '/Config.inc.php'));
     }
+
+    /**
+     * Get raw dynamic configuration array without _meta.
+     *
+     * @return array<string, mixed>
+     */
+    public static function getDynamicConfigRaw(): array
+    {
+        $path = self::getDynamicConfigPath();
+        if (!is_file($path)) {
+            return [];
+        }
+        $raw = @file_get_contents($path);
+        if ($raw === false || $raw === '') {
+            return [];
+        }
+        $decoded = json_decode($raw, true);
+        if (!is_array($decoded)) {
+            return [];
+        }
+        unset($decoded['_meta']);
+        return $decoded;
+    }
+
+    /**
+     * Touch dynamic config checking to ensure freshness across worker coroutines.
+     */
+    public static function touchDynamicConfig(): void
+    {
+        self::ensureFresh();
+    }
 }
+
 
