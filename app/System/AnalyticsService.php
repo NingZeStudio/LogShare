@@ -14,6 +14,12 @@ use Hyperf\DbConnection\Db;
  */
 final class AnalyticsService
 {
+    /** 估算平均单篇体积时的取样条数 */
+    private const int AVG_SIZE_SAMPLE_LIMIT = 300;
+
+    /** 窗口内无数据时使用的平均体积兜底值 */
+    private const int AVG_SIZE_FALLBACK = 300_000;
+
     /**
      * 获取指定天数内的客户端来源/生态分布统计。
      *
@@ -65,7 +71,9 @@ final class AnalyticsService
     public static function getTrends(int $days = 7): array
     {
         $days = max(1, min(90, $days));
-        $since = time() - ($days * 86400);
+        // 起点对齐到首个统计日的本地零点：SQL 分组窗口与预填充日期映射严格重合，
+        // 否则窗口首日那半天数据会落在映射之外（MariaDB 追加到序列末尾、文件系统直接丢弃）
+        $since = (int) strtotime(date('Y-m-d', time() - (($days - 1) * 86400)) . ' 00:00:00');
 
         $storageConfig = Config::Get('storage');
         $storageId = $storageConfig['storageId'] ?? 's';
@@ -167,12 +175,14 @@ final class AnalyticsService
                 $loaders[] = ['name' => (string) $r->ldr, 'count' => $c, 'percentage' => 0.0];
             }
 
-            // 若元数据中缺失版本或加载器，启动启发式采样识别（扫描近 100 条日志头部与模组列表）
+            // 若元数据中缺失版本或加载器，启动启发式采样识别（扫描时间窗内最近 100 条日志头部与模组列表）
+            // 取样必须按 created 倒序走 idx_created：logs.id 是随机短 ID，按其倒序既不代表
+            // 「最近日志」，又要回表逐行过滤 created，代价随窗口占比不可控
             if (empty($versions) || empty($loaders)) {
                 $sampleLogs = Db::table('logs')
                     ->select([Db::raw('SUBSTRING(data, 1, 2048) as header')])
                     ->where('created', '>=', $since)
-                    ->orderByDesc('id')
+                    ->orderByDesc('created')
                     ->limit(100)
                     ->get();
 
@@ -187,13 +197,17 @@ final class AnalyticsService
                     }
 
                     if (count($vCounts) < 3) {
-                        $mods = Db::table('log_metadata')
-                            ->where('key', 'matched_mods')
-                            ->whereNotNull('value')
-                            ->where('value', '!=', '')
-                            ->orderByDesc('id')
+                        // 关联 logs 并带上时间窗：matched_mods 是历史累积的元数据表，
+                        // 不带窗口取样会把已过期周期的版本算进当前图表
+                        $mods = Db::table('log_metadata as m')
+                            ->join('logs as l', 'm.log_id', '=', 'l.id')
+                            ->where('m.key', 'matched_mods')
+                            ->where('l.created', '>=', $since)
+                            ->whereNotNull('m.value')
+                            ->where('m.value', '!=', '')
+                            ->orderByDesc('l.created')
                             ->limit(50)
-                            ->pluck('value');
+                            ->pluck('m.value');
                         foreach ($mods as $modStr) {
                             if (is_string($modStr) && preg_match_all('/(?:mc)?(1\.\d+(?:\.\d+)?)/i', $modStr, $matches)) {
                                 foreach ($matches[1] as $mv) {
@@ -285,14 +299,21 @@ final class AnalyticsService
                 ->orderBy('dt', 'asc')
                 ->get();
 
-            // 预估单篇日志平均体积，彻底杜绝全表扫描大字段 SUM(LENGTH(data)) 导致的慢查询卡死
-            $avgSizeRow = Db::table('log_metadata')
-                ->where('key', 'size')
-                ->selectRaw('AVG(CAST(value AS UNSIGNED)) as avg_sz')
+            // 预估单篇日志平均体积，彻底杜绝全表扫描大字段 SUM(LENGTH(data)) 导致的慢查询卡死。
+            // 取样限定在当前时间窗内：log_metadata 的 size 键由客户端自报、覆盖率极低且与
+            // 主日志体积无关，用它估算会系统性偏离真实数据量。
+            $sample = Db::table('logs')
+                ->select('id')
+                ->where('created', '>=', $since)
+                ->orderByDesc('created')
+                ->limit(self::AVG_SIZE_SAMPLE_LIMIT);
+            $avgSizeRow = Db::table('logs as l')
+                ->joinSub($sample, 's', 'l.id', '=', 's.id')
+                ->selectRaw('AVG(LENGTH(l.data)) as avg_sz')
                 ->first();
-            $avgSize = (int) (($avgSizeRow->avg_sz ?? 0) ?: 300_000);
+            $avgSize = (int) ($avgSizeRow->avg_sz ?? 0);
             if ($avgSize <= 0) {
-                $avgSize = 300_000;
+                $avgSize = self::AVG_SIZE_FALLBACK;
             }
 
             $totalLogs = 0;
@@ -319,6 +340,9 @@ final class AnalyticsService
                 }
             }
 
+            // 日期为 Y-m-d 定宽格式，字典序即时序；映射键可能含窗口外日期（数据库时区与
+            // PHP 时区不一致时），排序保证序列始终按时间递增
+            ksort($dateMap);
             $trends = array_values($dateMap);
 
             return [

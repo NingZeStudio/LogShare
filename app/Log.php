@@ -4,6 +4,7 @@ namespace App;
 
 use Aternos\Codex\Analysis\Analysis;
 use Aternos\Codex\Log\File\StringLogFile;
+use Aternos\Codex\Minecraft\Log\Minecraft\MinecraftLog;
 use Aternos\Codex\Minecraft\Log\Minecraft\Vanilla\Fabric\FabricLog;
 use Aternos\Codex\Minecraft\Log\Minecraft\Vanilla\VanillaClientLog;
 use Aternos\Codex\Minecraft\Log\Minecraft\Vanilla\VanillaCrashReportLog;
@@ -129,6 +130,52 @@ class Log
         $this->log->parse();
         $this->analysis = $this->log->analyse();
         return $this->analysis;
+    }
+
+    /**
+     * 用 Codex 已识别出的 Minecraft 版本与 Mod Loader 补全生态统计所需的元数据。
+     *
+     * 后台 analytics/versions 的主查询按 log_metadata 的 version / loader 键聚合，
+     * 而这两个键历史上只来自客户端自行提交，绝大多数客户端并不提交，导致版本矩阵
+     * 长期只能落到启发式兜底。put() 在落库前已同步执行 analyse()，Codex 的
+     * analyse() 自带结果缓存，故此处取值不触发二次解析。
+     *
+     * 客户端已显式提交同名键时一律以客户端值为准，不覆盖、不重复写入。
+     *
+     * @param MetadataEntry[] $metadata
+     * @return MetadataEntry[]
+     */
+    private function deriveEcosystemMetadata(array $metadata): array
+    {
+        if (! $this->log instanceof MinecraftLog || count($metadata) >= MetadataEntry::MAX_ENTRIES) {
+            return $metadata;
+        }
+
+        $derived = [];
+
+        $version = $this->log->getVersion();
+        if (is_string($version) && $version !== '') {
+            $derived['version'] = $version;
+        }
+
+        // getNameId() 给出稳定小写标识（fabric / neoforge / vanilla），避免同名不同写法拉散分组
+        $loader = $this->log->getNameId();
+        if (is_string($loader) && $loader !== '') {
+            $derived['loader'] = $loader;
+        }
+
+        foreach ($metadata as $entry) {
+            unset($derived[$entry->getKey()]);
+        }
+
+        foreach ($derived as $key => $value) {
+            $entry = (new MetadataEntry())->setKey($key)->setValue($value)->setLabel($key);
+            if ($entry->isValid()) {
+                $metadata[] = $entry;
+            }
+        }
+
+        return $metadata;
     }
 
     /**
@@ -388,7 +435,7 @@ class Log
         // 存储层（MariaDB / 文件系统 / Redis 缓存）只落 SHA-256 哈希；
         // 上传响应通过调用方持有的 $token 原对象返回原文。
         $this->token = new Token(hash('sha256', (string) $plainToken->get()));
-        $this->metadata = $metadata;
+        $this->metadata = $this->deriveEcosystemMetadata($metadata);
         $this->source = ($source !== null && trim($source) !== '') ? trim($source) : '未指定';
         $this->files = [];
 
