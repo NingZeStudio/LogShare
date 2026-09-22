@@ -2,33 +2,30 @@
 
 namespace App\Agent;
 
-use App\Client\AIClient;
-use App\Client\MCPClient;
+use App\Agent\Llm\AIClientGateway;
+use App\Agent\Support\McpClientFactory;
+use App\Agent\Tool\ResultTruncator;
+use App\Agent\Tool\StatusSummarizer;
+use App\Agent\Tool\ToolFactory;
 use App\Sse\AnalysisEmitter;
 use App\Sse\SseEmitter;
 use Hyperf\HttpServer\Response;
 
 /**
- * LogAgent: model-driven tool loop for log analysis.
+ * LogAgent: 面向外的静态入口 + 逐帧一致的兼容薄壳。
  *
- * Orchestrates an LLM chat completion loop where the model can call tools
- * (web search, RAG search, log file access). The whole flow is streamed
- * back to the client as SSE, including thinking traces and tool events.
+ * 主体循环、提示词装配、工具分发、窗口聚焦、截断与摘要均已下沉到
+ * AgentRuntime / PromptBuilder / ToolRegistry / LogWindowManager /
+ * ResultTruncator / StatusSummarizer 等单一来源组件（对齐 plan.md §三）。
+ * 本类仅保留三件事：
+ *   1. analyze()：绑定 emitter、缓存与锁、组装上下文并驱动 AgentRuntime；
+ *   2. 一组私有/公开薄委托，维持既有反射测试与外部调用点的行为逐字不变；
+ *   3. SSE 收尾帧（缓存命中直答、错误帧）与进程级 topics 缓存。
  */
 class LogAgent
 {
     public const DEFAULT_MAX_TOOL_ROUNDS = 50;
     private const MAX_TOOL_RESULT_BYTES = 12000;
-    private const MAX_RETRIEVAL_RESULT_BYTES = 32000;
-    private const STATUS_SUMMARY_BYTES = 400;
-
-    /**
-     * 检索预算的代码兜底（与提示词「检索策略」段的数字保持一致）：
-     * web_search_exa 是外部网络调用成本最高，超限硬拦截；
-     * rag_search 本地 FTS 成本低，合计达阈值只注入收敛提示（软）。
-     */
-    private const MAX_WEB_SEARCH_CALLS = 5;
-    private const MAX_TOTAL_RETRIEVAL_CALLS = 6;
 
     /** SSE 帧统一 JSON 编码 flags：非法 UTF-8 时替换为 U+FFFD，避免 json_encode 返回 false 产生空帧 */
     private const SSE_JSON_FLAGS = JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE;
@@ -49,7 +46,6 @@ class LogAgent
      *                       - cacheTTL: int
      *                       - logId: string|null (bound log id enabling file tools)
      *                       - emitter: AnalysisEmitter|null (default: SseEmitter, direct SSE write)
-     * @return void
      */
     public static function analyze(string $content, array $options = [], ?Response $response = null): void
     {
@@ -89,92 +85,41 @@ class LogAgent
 
             $config = \App\Config::Get('ai');
             $agentConfig = $config['agent'] ?? [];
-            $maxRounds = (int) ($agentConfig['maxToolRounds'] ?? self::DEFAULT_MAX_TOOL_ROUNDS);
+            $mode = (string) ($agentConfig['mode'] ?? AnalysisMode::DEEP);
+            $promptVersion = (string) ($agentConfig['promptVersion'] ?? 'v1');
+
+            // 提示词版本开关（对齐 plan.md §3.1 / 验收「配置切换」）：
+            // ai.agent.prompts.<version> 命中时作为 systemPrompt 覆盖注入
+            // buildMessages（其已有的 config['systemPrompt'] 覆盖通道）；
+            // 未配置则保持内置默认（v1），deep 输出逐字不变。A/B 或回滚只改配置。
+            $versionedPrompt = $agentConfig['prompts'][$promptVersion] ?? null;
+            if (is_string($versionedPrompt) && $versionedPrompt !== '') {
+                $config['systemPrompt'] = $versionedPrompt;
+            }
 
             // 会话级可变状态：MCP 客户端复用 + 已读文件记录（防重复读取循环）
             $session = new ToolSession();
-            $tools = self::buildTools($config, $logId);
-            $messages = self::buildMessages($content, $logId, $config, self::fetchTopics($config, $session));
 
-            $fullAnswer = '';
-            $success = false;
-
-            for ($round = 0; $round < $maxRounds; $round++) {
-                $roundToolCalls = [];
-                $roundReasoning = '';
-                $roundContent = '';
-
-                AIClient::streamChat(
-                    $messages,
-                    $tools,
-                    function (string $delta) use (&$roundContent) {
-                        $roundContent .= $delta;
-                        self::emitContent($delta);
-                    },
-                    function (string $reasoning) {
-                        self::emitThinking($reasoning);
-                    },
-                    function (array $toolCalls, string $reasoning) use (&$roundToolCalls, &$roundReasoning) {
-                        $roundToolCalls = $toolCalls;
-                        $roundReasoning = $reasoning;
-                    },
-                    function (string $fullContent) use (&$roundContent) {
-                        $roundContent = $fullContent;
-                    }
-                );
-
-                $fullAnswer .= $roundContent;
-
-                if (empty($roundToolCalls)) {
-                    $success = true;
-                    break;
-                }
-
-                // 双保险：空 name 的调用回传上游会被 400 拒绝；全部无效则视为本轮完成
-                $roundToolCalls = array_values(
-                    array_filter($roundToolCalls, fn($call) => !empty($call['name']))
-                );
-                if (empty($roundToolCalls)) {
-                    $success = true;
-                    break;
-                }
-
-                $messages[] = self::assistantMessageWithToolCalls($roundToolCalls, $roundReasoning);
-
-                foreach ($roundToolCalls as $call) {
-                    $name = $call['name'] ?? '';
-                    $arguments = json_decode($call['arguments'] ?? '', true);
-                    if (!is_array($arguments)) {
-                        $arguments = [];
-                    }
-
-                    self::emitTool($name, $arguments);
-
-                    $result = self::executeTool($name, $arguments, $config, $logId, $session);
-                    self::emitToolResult($name, $result);
-
-                    // 检索类工具（rag_search/web_search_exa/github_*）是分析的核心证据，放宽到 32KB；
-                    // 其余工具保留 12000 字节上限，超限时附带可见标记。
-                    $toolContent = match ($name) {
-                        'read_log_file' => $result,
-                        'rag_search', 'web_search_exa', 'grep_log_file', 'github_search', 'github_get_content' => self::truncateForModel($result, self::MAX_RETRIEVAL_RESULT_BYTES),
-                        default => self::truncateForModel($result),
-                    };
-
-                    $messages[] = [
-                        'role' => 'tool',
-                        'tool_call_id' => $call['id'] ?? '',
-                        'content' => $toolContent,
-                    ];
-                }
-            }
-
-            if (!$success) {
-                self::emitLimit($maxRounds);
-            }
-
-            if ($cacheKey !== null && $fullAnswer !== '') {
-                self::writeCache($cacheKey, $fullAnswer, $cacheTTL);
+            $runtime = new AgentRuntime(
+                new AIClientGateway(),
+                ToolFactory::build($config, $logId, $mode),
+                (new PromptBuilder())->withVersion($promptVersion),
+                new LogWindowManager(),
+                new AnalysisTracer()
+            );
+            $ctx = new AgentContext(
+                content: $content,
+                cacheKey: $cacheKey,
+                logId: $logId,
+                emitter: $emitter,
+                mode: $mode,
+                promptVersion: $promptVersion,
+                cacheTTL: $cacheTTL,
+                topics: self::fetchTopics($config, $session),
+            );
+            $result = $runtime->run($ctx, $session, $config);
+            if ($result->cacheable() && $cacheKey !== null) {
+                self::writeCache($cacheKey, $result->fullAnswer, $cacheTTL);
             }
 
             self::emitDone();
@@ -192,534 +137,35 @@ class LogAgent
         }
     }
 
+    /* ─── 兼容薄委托：保持既有反射测试与外部调用点的行为逐字不变 ─────── */
+
     private static function buildTools(array $config, ?string $logId): array
     {
-        $tools = [];
-        $mcp = $config['mcp'] ?? [];
-
-        if (!empty($mcp['webSearch']['url'])) {
-            $tools[] = [
-                'type' => 'function',
-                'function' => [
-                    'name' => 'web_search_exa',
-                    'description' => '搜索互联网，查找知识库未覆盖的公开问题：新版本 mod/服务端兼容性、小众报错、官方公告等。'
-                        . '知识库检索无果后再使用；查询词与 rag_search 相同，使用错误类名或报错关键词原文。',
-                    'parameters' => [
-                        'type' => 'object',
-                        'properties' => [
-                            'query' => ['type' => 'string', 'description' => '搜索关键词，使用错误类名或报错关键词原文'],
-                        ],
-                        'required' => ['query'],
-                    ],
-                ],
-            ];
-        }
-
-        if (!empty($mcp['rag']['url'])) {
-            $tools[] = [
-                'type' => 'function',
-                'function' => [
-                    'name' => 'rag_search',
-                    'description' => '在内置知识库中检索已验证的实战资料。知识库覆盖：常见崩溃与故障模式（mixin 注入失败、内存不足、Java 版本错误等）、'
-                        . '移动端启动器生态实战案例蒸馏（FCL/Zalith/Amethyst/PGW/MobileGlues，含排障决策树）、三大日志文件格式解读、'
-                        . 'Fabric/Forge/NeoForge 与 PaperMC/Purpur/Geyser 等开发文档。日志中出现异常类名、崩溃特征或启动器相关问题时优先使用；'
-                        . '纯常识问题不必使用。返回带来源路径的文档片段，多数条目按「签名-含义-解决方案」组织。',
-                    'parameters' => [
-                        'type' => 'object',
-                        'properties' => [
-                            'query' => ['type' => 'string', 'description' => '检索词。直接使用日志中的原文信号：英文异常类名或错误串（如 MixinApplyError、SIGSEGV、OutOfMemoryError），或中文症状关键词（如 内存不足、启动闪退）。不要翻译或改写异常类名。'],
-                            'topic' => ['type' => 'string', 'description' => '可选。限定在某个主题目录内检索（目录名来自 list_topics 的主题地图），如 "patterns"、"日志分析"。省略则全库检索。'],
-                            'k' => ['type' => 'number', 'description' => '返回片段数量，默认 5'],
-                        ],
-                        'required' => ['query'],
-                    ],
-                ],
-            ];
-            $tools[] = [
-                'type' => 'function',
-                'function' => [
-                    'name' => 'list_topics',
-                    'description' => '列出内置知识库的主题地图（目录、说明与内容样本）。不确定检索方向、或 rag_search 连续无结果时调用；'
-                        . '看完地图后应带着明确目标词去 rag_search（可配合 topic 参数定向），不要看完地图就停止分析。',
-                    'parameters' => [
-                        'type' => 'object',
-                        'properties' => new \stdClass(),
-                    ],
-                ],
-            ];
-        }
-
-        $githubConfig = $config['github'] ?? \App\Config::Get('github');
-        if (!empty($githubConfig['enabled'])) {
-            $tools[] = [
-                'type' => 'function',
-                'function' => [
-                    'name' => 'github_list_repos',
-                    'description' => '列出官方支持与推荐排障的 Minecraft 启动器与渲染器仓库列表（含官方全名、别名、owner/repo 与适用场景）。'
-                        . '不确定启动器仓库名或检索方向时优先调用。',
-                    'parameters' => [
-                        'type' => 'object',
-                        'properties' => new \stdClass(),
-                    ],
-                ],
-            ];
-            $tools[] = [
-                'type' => 'function',
-                'function' => [
-                    'name' => 'github_search',
-                    'description' => '在指定开源启动器或渲染器的 GitHub 仓库中，按关键词联合检索相关的 Issues、Pull Requests（很多崩溃修复记录在 PR 解决说明中）与 Discussions。'
-                        . '日志中出现启动器名称（如 FoldCraftLauncher、PojavLauncher 等）或渲染器（MobileGlues、gl4es 等）报错时使用。',
-                    'parameters' => [
-                        'type' => 'object',
-                        'properties' => [
-                            'repo' => [
-                                'type' => 'string',
-                                'description' => '启动器或渲染器名称：支持官方全名（如 FoldCraftLauncher、PojavLauncher、MobileGlues）、常用别名（如 fcl、pojav、mg、hmcl）或规范的 owner/repo（可先用 github_list_repos 查看）',
-                            ],
-                            'query' => [
-                                'type' => 'string',
-                                'description' => '检索关键词或报错原文信号（如异常类名、SIGSEGV、崩溃特征短语、中文症状）',
-                            ],
-                            'type' => [
-                                'type' => 'string',
-                                'enum' => ['all', 'issue', 'pr', 'discussion'],
-                                'description' => '检索范围：all（默认，综合检索）、issue（仅工单）、pr（仅合并请求/代码修复）、discussion（仅问答讨论）',
-                            ],
-                            'state' => [
-                                'type' => 'string',
-                                'enum' => ['all', 'closed', 'open'],
-                                'description' => '状态：all（默认）、closed（已解决/已合并，排障优先）、open（开放中）',
-                            ],
-                            'max_results' => [
-                                'type' => 'integer',
-                                'description' => '最大返回条目数（1-10，默认 5）',
-                            ],
-                        ],
-                        'required' => ['repo', 'query'],
-                    ],
-                ],
-            ];
-            $tools[] = [
-                'type' => 'function',
-                'function' => [
-                    'name' => 'github_get_content',
-                    'description' => '获取指定 Issue、PR 或 Discussion 的详细描述、PR 修复说明与维护者采纳的高质量解答。在通过 github_search 定位到高相关条目后调用。',
-                    'parameters' => [
-                        'type' => 'object',
-                        'properties' => [
-                            'repo' => [
-                                'type' => 'string',
-                                'description' => '启动器全名、别名或 owner/repo',
-                            ],
-                            'number' => [
-                                'type' => 'integer',
-                                'description' => 'Issue/PR/Discussion 编号',
-                            ],
-                            'type' => [
-                                'type' => 'string',
-                                'enum' => ['auto', 'issue', 'pr', 'discussion'],
-                                'description' => '条目类型：auto（默认自动识别）、issue、pr、discussion',
-                            ],
-                        ],
-                        'required' => ['repo', 'number'],
-                    ],
-                ],
-            ];
-        }
-
-        if ($logId !== null) {
-            $tools[] = [
-                'type' => 'function',
-                'function' => [
-                    'name' => 'list_log_files',
-                    'description' => '列出当前日志 ID 下的所有文件（含主文件与附加文件）。',
-                    'parameters' => [
-                        'type' => 'object',
-                        'properties' => new \stdClass(),
-                    ],
-                ],
-            ];
-            $tools[] = [
-                'type' => 'function',
-                'function' => [
-                    'name' => 'read_log_file',
-                    'description' => '读取当前日志下指定文件的内容。默认返回完整文件；需要控制范围时可使用 line_start/line_end 指定行区间，或使用 offset/max_bytes 指定字节区间。主文件名为 main。',
-                    'parameters' => [
-                        'type' => 'object',
-                        'properties' => [
-                            'filename' => ['type' => 'string', 'description' => '文件名（主文件为 main，或使用 list_log_files 列出的名称）'],
-                            'line_start' => ['type' => 'integer', 'description' => '起始行号，从 1 开始；省略则从第 1 行开始'],
-                            'line_end' => ['type' => 'integer', 'description' => '结束行号，包含该行；省略则读取到文件末尾'],
-                            'offset' => ['type' => 'integer', 'description' => '字节起始位置；使用行区间时不要设置'],
-                            'max_bytes' => ['type' => 'integer', 'description' => '字节读取模式下的最大字节数；使用行区间时不要设置'],
-                        ],
-                        'required' => ['filename'],
-                    ],
-                ],
-            ];
-            $tools[] = [
-                'type' => 'function',
-                'function' => [
-                    'name' => 'grep_log_file',
-                    'description' => '在当前日志的指定文件中按关键词逐行检索（类似 grep），返回匹配行号、行内容与前后上下文。'
-                        . '适合定位特定异常、报错关键字、mod ID 或崩溃特征，避免通读超大文件；获取行号后可按需配合 read_log_file 精确读取。',
-                    'parameters' => [
-                        'type' => 'object',
-                        'properties' => [
-                            'query' => ['type' => 'string', 'description' => '检索关键词或文本短语（如异常类名、模组名、错误关键字）'],
-                            'filename' => ['type' => 'string', 'description' => '文件名（主文件为 main，或使用 list_log_files 列出的名称；省略则默认 main）'],
-                            'case_sensitive' => ['type' => 'boolean', 'description' => '是否区分大小写，默认 false（忽略大小写）'],
-                            'context_lines' => ['type' => 'integer', 'description' => '命中行前后各显示的上下文行数（0-5，默认 1）'],
-                            'max_matches' => ['type' => 'integer', 'description' => '最大返回匹配项数（1-30，默认 10）'],
-                        ],
-                        'required' => ['query'],
-                    ],
-                ],
-            ];
-        }
-
-        return $tools;
+        return (new PromptBuilder())->buildTools($config, $logId);
     }
 
     private static function buildMessages(string $content, ?string $logId, array $config, string $topicsText = ''): array
     {
-        $system = $config['systemPrompt'] ?? self::defaultSystemPrompt($logId);
-
-        // 注入由管理员统一维护的“已知领域知识”（LLM 无权自行修改，直接拼接进系统提示词）
-        $domainKnowledge = \App\System\DomainKnowledgeManager::formatForPrompt();
-        if ($domainKnowledge !== '') {
-            $system .= "\n\n" . $domainKnowledge;
-        }
-
-        $system .= "\n\n检索与探查策略（深度因果驱动与合理工具调用）：\n"
-            . "- 深入探查与线索原则：复杂日志绝非仅看表象错误。除非报错原因极其明确孤立无需上下文，否则必须至少进行一次日志上下文线索查找（如 read_log_file 读取报错发生前后上下文区间、读取相关 crash-reports 附件、或 grep_log_file 检索前置异常与模组加载信息）；切忌仅凭初始截取的单点错误切片草率下结论。\n"
-            . "- 报错检索策略（大分类无实际检索价值，直搜 Java Error 报错摘要）：知识库的大分类层级对实际检索没有太大作用，切勿纠结分类或强行匹配目录。日志报错时直接提取日志里的 Java Error 直接报错摘要（如 Caused by 后的异常类名、报错消息文本、关键错误特征等）作为 query 进行检索；常见报错参考 patterns 与 日志分析，手机启动器常识与版本列表参考 mobile_launcher，不确定或未包含时直接全库检索，不要硬套目录。\n"
-            . "- 启动器与渲染器问题（动态实时排障）：当日志中出现启动器名称（如 FoldCraftLauncher、PojavLauncher、Amethyst-Launcher、PojavLauncher-Glow-Worm 等）或渲染器（MobileGlues、gl4es 等）报错时，优先调用 `github_list_repos` 确认官方全名与仓库，使用 `github_search` 在 GitHub 官方仓库的 Issues、PRs（很多疑难崩溃与修复记录在 PR 解决说明中）及 Discussions 中检索最新线索，并调用 `github_get_content` 获取最吻合条目的解决方案。\n"
-            . "- 检索词提取规则：直接从日志中摘取 Java Error 原文报错摘要（如 Caused by: 后的异常全名或类名，如 NullPointerException、MixinApplyError 等），英文异常类名/错误串原样保留，中文症状直接用中文，可配合 topic 参数或直接全库检索。\n"
-            . "- 检索结果必须与日志中的异常真正对应才可采用；无关结果不进入分析。\n"
-            . "- 无结果时换词重试最多一次，按以下方向改写（选一，不要叠加）：① 长类名去包路径取简短类名（org.spongepowered...MixinApplyError → MixinApplyError）；② 英文异常类名与中文症状词互译（OutOfMemoryError → 内存不足）；③ 叠加限定词（模组名/启动器全名）；④ 改用其他目录或放大全库。仍无结果说明未覆盖，改用 web_search_exa。\n"
-            . "- 预算按信息缺口计数：每个独立待核实的信号或问题，检索类调用不超过 2 次；全对话 rag_search 与 web_search_exa 合计约 6 次时代码会注入收敛提示，github_search 与 github_get_content 严格各限 2 次，超额直接拦截。此后应立即基于已有证据输出并标注未核实项。web_search_exa 全对话最多 5 次。\n"
-            . "- 引用来源：知识库结论标注条目来源路径；GitHub 结论注明具体仓库、条目类型与编号（如 FoldCraftLauncher PR #852）；网络结论标注 URL。\n"
-            . "- 知识库/社区结论与日志证据矛盾时，以日志为准；结论中注明哪些方面未能核实，不要臆测。\n"
-            . "- 附件中存在 crash-reports 类文件时，优先用 read_log_file 读取它：崩溃报告含完整堆栈、系统状态与 mod 列表，信息密度高于 latest.log 尾部；主日志仅用于补充崩溃报告未覆盖的时间线。\n"
-            . "- 大日志与多附件定位：排查特定异常类名、报错文本、mod ID 或配置行时，优先使用 grep_log_file 检索行号与上下文，避免通读无用段落；确认具体行号后再使用 read_log_file(filename, line_start, line_end) 定向扩展。\n"
-            . "- 适可而止的边界：已探明上下文且掌握充分因果证据时应及时收敛给出清晰结论；或长日志初始未匹配显式错误且按常用词探测 1~2 次确实无异常后客观告知用户未发现明显错误，避免无目的循环试错；但绝不能在尚未探查上下文前就过早放弃调用工具。\n"
-            . "- read_log_file 返回的主日志和附加日志均已经过与上传主日志相同的脱敏过滤；不得声称附加日志未脱敏，也不得要求用户重新提供其中的敏感信息。\n\n"
-            . "示例（正确的检索路径）：\n"
-            . "1. 日志片段「Caused by: org.spongepowered.asm.mixin.transformer.MixinApplyError: ...」\n"
-            . "   → 提取 Java Error 报错摘要 \"MixinApplyError\" → 调用 rag_search(query: \"MixinApplyError\") → 命中 patterns/mixin-apply-failed.md，条目含签名与修复步骤，直接给出结论。\n"
-            . "2. 日志出现 FoldCraftLauncher 启动时渲染崩溃并提示 SIGSEGV：\n"
-            . "   → 调用 github_search(repo: \"FoldCraftLauncher\", query: \"SIGSEGV\", type: \"all\") → 命中 PR 修复或采纳回答\n"
-            . "   → 调用 github_get_content(repo: \"FoldCraftLauncher\", number: ...) 获取具体解决方案并给出建议。";
-
-        if ($topicsText !== '') {
-            $system .= "\n\n以下是内部知识库目录概览（大分类无需硬套，仅供参考）：\n" . $topicsText;
-        }
-
-        // 初始日志内容：长度 < 12KB 时不触发定位并直接塞入；>= 12KB 时统一触发定位，定位到塞聚焦窗口，未定位到不塞日志正文
-        $initialWindow = self::buildInitialLogWindow($content, self::MAX_TOOL_RESULT_BYTES);
-
-        if ($initialWindow !== null) {
-            $userContent = "需要分析的日志内容：\n\n" . $initialWindow;
-        } else {
-            $totalLines = substr_count($content, "\n") + 1;
-            $totalBytes = strlen($content);
-            $userContent = "待分析日志概况：\n"
-                . "- 日志总大小：{$totalBytes} 字节，共 {$totalLines} 行。\n"
-                . "- 预扫描结果：日志总长度超出单次上下文预算，且系统预扫描未在日志中匹配到显式崩溃或致命错误标记（如 Caused by / Traceback / FATAL / Exception 等）。为防止开服期正常启动日志产生误导，初始未截取前置日志正文。\n\n"
-                . "排查指引与常用 grep 关键词（遵循适可而止思维链）：\n"
-                . "1. 推荐优先使用 `grep_log_file` 工具进行 1 至 2 次定向检索，基础常用关键词包括：\n"
-                . "   - 异常与报错级别：`ERROR`、`FATAL`、`Exception`、`Throwable`\n"
-                . "   - 根本原因与堆栈：`Caused by`、`Stacktrace`、`Traceback`\n"
-                . "   - 停机与崩溃谓词：`Failed to`、`Shutting down`、`Stopping server`、`crash`\n"
-                . "   - 常见故障特征：`MixinApplyError`、`OutOfMemory`、`NoSuchMethod`、`ClassNotFound`\n"
-                . "2. 适可而止思维链：\n"
-                . "   - 结合可能的问题线索，从中选择最具针对性的 1~2 个关键词检索即可；\n"
-                . "   - 若通过 `grep_log_file` 定位到明确报错且上下文足够，立即输出分析结论；需要局部扩展时再使用 `read_log_file` 指定行区间读取；\n"
-                . "   - 若经基础关键词排查后仍未发现致命错误或崩溃迹象，应适可而止，直接向用户客观说明“在当前日志中未检索到明显致命错误”，并给出常规排障或配置检查建议，切勿盲目反复试词或通读无用段落。";
-        }
-
-        return [
-            ['role' => 'system', 'content' => $system],
-            ['role' => 'user', 'content' => $userContent],
-        ];
-    }
-
-    /**
-     * 将长日志智能聚焦到首个关键错误/异常的上下文窗口（预留前置因果与完整后置堆栈）。
-     * 规则与前端 logParser.worker.ts 错误检测算法严格对齐。
-     *
-     * 当日志总长度 < $maxBytes 时不触发定位算法，原样返回完整内容；
-     * 其他时候（总长度 >= $maxBytes）统一触发定位正则：
-     * - 若定位到错误锚点，以其为核心截取聚焦上下文窗口（整行对齐，至多约 $maxBytes）；
-     * - 若未定位到任何显式错误，返回 null，不再盲目截取前缀日志塞入 user message。
-     *
-     * @param string $content
-     * @param int $maxBytes
-     * @return string|null 聚焦窗口文本；若超出预算且未匹配到错误特征则返回 null
-     */
-    public static function buildInitialLogWindow(string $content, int $maxBytes = self::MAX_TOOL_RESULT_BYTES): ?string
-    {
-        if (strlen($content) < $maxBytes) {
-            return $content;
-        }
-
-        $lines = explode("\n", $content);
-        $totalLines = count($lines);
-
-        // 寻找首个关键错误锚点行
-        $anchorIndex = self::findErrorAnchorLine($lines);
-
-        // 未定位到任何显式错误特征：返回 null，交由上层生成指引与常用 grep 词
-        if ($anchorIndex === null) {
-            return null;
-        }
-
-        // 找到错误锚点行：以该行为核心构建约 $maxBytes 的窗口
-        // 为错误发生前保留前置因果上下文（预留约 2500 字节）
-        $preContextBytesLimit = (int) min(2500, $maxBytes * 0.25);
-        $anchorLineBytes = strlen($lines[$anchorIndex]) + 1;
-        $totalBytes = $anchorLineBytes;
-
-        // 1. 向前扫描确定起始行
-        $startIndex = $anchorIndex;
-        while ($startIndex > 0) {
-            $prevLineBytes = strlen($lines[$startIndex - 1]) + 1;
-            if ($totalBytes + $prevLineBytes > $preContextBytesLimit + $anchorLineBytes) {
-                break;
-            }
-            $startIndex--;
-            $totalBytes += $prevLineBytes;
-        }
-
-        // 2. 向后扩展至预算上限或文件末尾
-        $endIndex = $anchorIndex;
-        while ($endIndex + 1 < $totalLines) {
-            $nextLineBytes = strlen($lines[$endIndex + 1]) + 1;
-            if ($totalBytes + $nextLineBytes > $maxBytes) {
-                break;
-            }
-            $endIndex++;
-            $totalBytes += $nextLineBytes;
-        }
-
-        // 3. 若后置已到底但预算仍有结余，继续向前吸收前置行
-        while ($startIndex > 0) {
-            $prevLineBytes = strlen($lines[$startIndex - 1]) + 1;
-            if ($totalBytes + $prevLineBytes > $maxBytes) {
-                break;
-            }
-            $startIndex--;
-            $totalBytes += $prevLineBytes;
-        }
-
-        $windowLines = array_slice($lines, $startIndex, $endIndex - $startIndex + 1);
-        $windowText = implode("\n", $windowLines);
-
-        $startLineNum = $startIndex + 1;
-        $endLineNum = $endIndex + 1;
-        $anchorLineNum = $anchorIndex + 1;
-
-        $headerNotice = '';
-        if ($startIndex > 0) {
-            $headerNotice = "[前文已省略第 1 - " . ($startLineNum - 1) . " 行 ...]\n\n";
-        }
-
-        $footerNotice = '';
-        if ($endIndex < $totalLines - 1) {
-            $footerNotice = "\n\n[后文已省略第 " . ($endLineNum + 1) . " - {$totalLines} 行。当前已自动定位到第 {$anchorLineNum} 行错误发生处（截取上下文第 {$startLineNum} - {$endLineNum} 行，共 {$totalLines} 行）；如需查看其它区间请使用 read_log_file 工具]";
-        } else {
-            $footerNotice = "\n\n[已自动定位到第 {$anchorLineNum} 行错误发生处直至文件末尾（截取上下文第 {$startLineNum} - {$endLineNum} 行，共 {$totalLines} 行）]";
-        }
-
-        return $headerNotice . $windowText . $footerNotice;
-    }
-
-    /**
-     * 扫描日志行数组，匹配首个高置信度错误锚点行（0-indexed）。
-     *
-     * @param string[] $lines
-     * @return int|null 匹配到的行索引，未匹配到返回 null
-     */
-    public static function findErrorAnchorLine(array $lines): ?int
-    {
-        // 第一优先级（Tier 1）：确凿致命错误、异常堆栈、根因、崩溃报告标记
-        // 与前端 RE_CAUSED_BY, RE_PYTHON_TRACEBACK, RE_ERROR_LEVEL, RE_FATAL_LEVEL, RE_EXCEPTION_NAME, Crash Report 标记对齐
-        $tier1Patterns = [
-            '/^Caused by:\s*/i',
-            '/^Traceback\s*\(most\s+recent\s+call\s+last\)\s*:/i',
-            '/^\s*(?:Stacktrace|Details):/i',
-            '/^-- Affected level --$/i',
-            '/Exception in thread "[^"]+"/i',
-            '/(?:\[|:\s*|(?:\/\s*))(?:FATAL|CRITICAL|EMERGENCY|SEVERE)(?:\]|:|\s)/i',
-            '/(?:\[|:\s*|(?:\/\s*))ERR(?:OR)?(?:\]|:|\s)/i',
-            '/^(?:\s*\[?\s*)?(?:(?:ERROR?|FATAL|CRITICAL)\s*[:;])/i',
-            '/\b[A-Za-z0-9_$]+(?:Exception|Error|Throwable)(?::\s+|\s+at\s+|$)/',
-        ];
-
-        // 第二优先级（Tier 2）：堆栈帧、明确失败谓词、Python 文件行
-        // 与前端 RE_STACK_AT, RE_FAIL_KEYWORDS, RE_PYTHON_FILE 对齐
-        $tier2Patterns = [
-            '/^\s*at\s+[A-Za-z0-9_$]+(?:\.[A-Za-z0-9_$]+)+/',
-            '/^\s*File\s+"[^"]*",\s+line\s+\d+/i',
-            '/^\s*Suppressed:\s+/i',
-            '/^\s*(?:Failed\s+to|Cannot\s+|Unable\s+to|Could\s+not|Illegal\s+|Invalid\s+|Unsupported\s+|Not\s+found\s*[:;]|Missing\s+)/i',
-        ];
-
-        $firstTier2Index = null;
-
-        foreach ($lines as $index => $line) {
-            $trimmed = trim($line);
-            if ($trimmed === '') {
-                continue;
-            }
-
-            foreach ($tier1Patterns as $pattern) {
-                if (preg_match($pattern, $line)) {
-                    return $index;
-                }
-            }
-
-            if ($firstTier2Index === null) {
-                foreach ($tier2Patterns as $pattern) {
-                    if (preg_match($pattern, $line)) {
-                        $firstTier2Index = $index;
-                        break;
-                    }
-                }
-            }
-        }
-
-        // 如果首个次级命中是堆栈帧（at ...），向前探查最多 3 行以定位抛出异常的描述行
-        if ($firstTier2Index !== null && preg_match('/^\s*at\s+/i', $lines[$firstTier2Index])) {
-            for ($k = $firstTier2Index - 1; $k >= max(0, $firstTier2Index - 3); $k--) {
-                $prev = trim($lines[$k]);
-                if ($prev !== '' && !preg_match('/^\s*at\s+/i', $prev)) {
-                    $firstTier2Index = $k;
-                    break;
-                }
-            }
-        }
-
-        return $firstTier2Index;
-    }
-
-    /**
-     * Fetch the knowledge base topic overview from the RAG server.
-     *
-     * Injects the topic map into the system prompt so the AI knows what the
-     * knowledge base covers and can pick search directions accordingly.
-     *
-     * @param array $config
-     * @param ToolSession $session
-     * @return string Empty when RAG is not configured or unreachable
-     */
-    private static function fetchTopics(array $config, ToolSession $session): string
-    {
-        $mcp = $config['mcp'] ?? [];
-        $endpoint = $mcp['rag'] ?? [];
-        $url = $endpoint['url'] ?? '';
-
-        if ($url === '') {
-            return '';
-        }
-
-        // topics 仅随知识库重建变化：进程级短 TTL 缓存，避免每次分析都做一次
-        // 完整 MCP 握手 + list_topics 调用（推高首 token 延迟）。失败不缓存，
-        // 下次分析仍会重试。
-        if (self::$topicsCache !== null && self::$topicsCacheExpiresAt > time()) {
-            return self::$topicsCache;
-        }
-
-        try {
-            $client = self::mcpClient($endpoint, $session);
-            $contents = $client->callTool('list_topics', []);
-            $topics = implode("\n\n", $contents);
-            self::$topicsCache = $topics;
-            self::$topicsCacheExpiresAt = time() + 300;
-            return $topics;
-        } catch (\Exception $e) {
-            \App\Syslog::error('LogAgent', '获取知识库主题失败: ' . $e->getMessage());
-            return '';
-        }
-    }
-
-    /**
-     * Return a shared, already-initialized MCPClient for the endpoint.
-     *
-     * Clients are cached per url within a single analyze() call, so repeated
-     * tool invocations skip the initialize handshake round-trip. The cache is
-     * request-scoped (held on the ToolSession), never shared across requests.
-     *
-     * @param array $endpoint
-     * @param ToolSession $session
-     */
-    private static function mcpClient(array $endpoint, ToolSession $session): MCPClient
-    {
-        $url = (string) ($endpoint['url'] ?? '');
-        if (!isset($session->mcpClients[$url])) {
-            $headers = is_array($endpoint['headers'] ?? null) ? $endpoint['headers'] : [];
-            // 内置 RAG 配置了 authToken 时随请求传递，保证自调用通过 /rag 的鉴权
-            if (($endpoint['authToken'] ?? '') !== '') {
-                $headers[] = 'Authorization: Bearer ' . $endpoint['authToken'];
-            }
-            $timeout = (int) ($endpoint['timeout'] ?? 30);
-            $session->mcpClients[$url] = new MCPClient($url, $headers, $timeout);
-        }
-        return $session->mcpClients[$url];
+        return (new PromptBuilder())->buildMessages($content, $logId, $config, $topicsText);
     }
 
     private static function defaultSystemPrompt(?string $logId): string
     {
-        $prompt = <<<PROMPT
-你是一个专业的 Minecraft 日志排障与根因分析助手。你的任务是深入分析玩家提交的日志，精准定位问题并提供切实可行的解决方案。
-
-核心排障与工具调用原则：
-1. 深入探查与上下文线索约束（核心准则）：
-   - 复杂日志绝非仅看表象错误：日志中呈现的表层报错（如下游抛出的 NullPointerException、渲染管线崩溃、或 Crash Report 尾部的单点调用栈）往往只是下游级联反应，真正的根因常隐藏在上游前置事件、模组初始化失败或特定配置项中。
-   - 【硬性要求】除非报错原因极其明确、孤立且无需任何周边上下文（例如纯粹的物理内存不足导致 OutOfMemoryError、或极为直白孤立的 Java 运行主版本不匹配，一眼即可 100% 确定根因且无需任何周边环境印证），否则你【必须至少进行一次日志上下文线索查找】（如调用 `read_log_file` 查看错误发生前后的关联行区间、读取 `crash-reports` 附件的完整堆栈与模组列表，或使用 `grep_log_file` 追踪前置异常链与模组初始化状态），探明真正诱因后再输出结论。严禁仅凭截取的单点报错片段浮于表面仓促下结论。
-2. 合理调用工具与适可而止：
-   - 工具是服务于查清根因的手段：拿到日志后，应首先思考“该报错是否由前置事件引起？是否有未明朗的模组冲突、配置缺失或环境线索未探明？”
-   - 所谓“适可而止”，是指在探明上下文、获取充分因果证据链后，应果断收敛输出排障方案；或在长日志探测 1~2 次基础关键词后确认无致命错误时客观向用户说明，切勿在死胡同里无休止反复换词试错；但【适可而止绝不是在尚未核实上下文因果时就过早放弃调用工具】。
-
-工作方式：
-1. 查看与定位日志内容：
-   - 先用 `list_log_files` 查看有哪些主日志与附加文件。若存在 `crash-reports` 或特定模组崩溃报告，优先读取它们。
-   - 若需在长日志或多个附件中查找特定异常、报错关键字、mod ID 或配置，使用 `grep_log_file` 快速获取匹配行号与上下文。
-   - 若需通读文件或特定行区间，调用 `read_log_file`。需要聚焦局部上下文时，由你传入 `line_start` 和 `line_end` 指定行区间（例如错误锚点前 50 行至后 30 行），探查前置诱因。超大内容需要续读时，使用返回的 `next_offset`。
-2. 启动器与渲染器排障：遇启动器报错时，可调用 `github_list_repos` 查看支持仓库官方全名，使用 `github_search` 在 GitHub 官方仓库的 Issues/PRs/Discussions 检索最新排障线索，使用 `github_get_content` 获取解决方案。
-3. 报错与知识库检索：大分类对检索没有太大作用，切勿纠结分类或目录。遇到报错需要检索时，直接提取日志中的 Java Error 直接报错摘要（如 `Caused by:` 后的异常全名、错误类型、具体报错消息等）作为检索关键词；手机启动器与渲染器常识或版本关系查 `mobile_launcher`。
-4. 若知识库检索结果被截断（出现"…"或"已截断"标记），基于被截断处再次检索补全，不需要重复读取文件。
-
-重要停止规则：
-- 不要在已经有完整日志内容的情况下再次调用 `read_log_file`，重复调用会被拒绝并浪费预算。
-- 严禁使用相同的 `read_log_file` 参数调用两次；已读取内容可直接用于分析。
-- 当已获取充分因果证据链能够完整解释问题时，应收敛工具调用，直接给出结论。
-- 整个分析一般 2 至 4 轮工具调用即可完成；接近这个量级时优先收敛，基于已有证据给出结论。
-- 文件工具失败或超时时，最多重试一次；仍不行就跳过它，基于现有证据继续分析，并在结论中说明哪些方面未能核实。
-- 若长日志初始未匹配到显式错误，按推荐的基础关键词使用 grep_log_file 快速探测 1 至 2 次；若确实未发现异常信号，应适可而止并客观告知用户未发现明显致命错误，切勿无休止更换关键词试错。
-
-回答使用简体中文，结构清晰。全程禁止使用 emoji 或表情符号。
-PROMPT;
-
-        if ($logId !== null) {
-            $prompt .= "\n\n你正在分析的日志 ID 是 {$logId}。你可以使用 list_log_files 查看该日志下的文件列表，使用 grep_log_file 检索关键内容，使用 read_log_file 读取文件内容进行对比分析。";
-        }
-
-        return $prompt;
+        return (new PromptBuilder())->defaultSystemPrompt($logId);
     }
 
     /**
-     * Build the assistant message carrying this round's tool calls.
-     *
-     * Reasoning models (DeepSeek thinking mode 等) require the round's
-     * reasoning_content to be passed back verbatim with the assistant message;
-     * omitting it makes the upstream reject the follow-up request with 400.
-     *
-     * @param array $toolCalls
-     * @param string $reasoningContent
-     * @return array
+     * 按名分发工具，语义与旧 switch 版逐字一致：未知工具返回「未知工具」，
+     * 端点未配置返回「该工具未配置」，硬性参数错误返回可读文本。工具内部预算计数
+     * 与去重依赖传入的同一 $session 跨调用累积（注册表每次重建，状态在 session）。
      */
+    private static function executeTool(string $name, array $arguments, array $config, ?string $logId, ToolSession $session): string
+    {
+        return ToolFactory::buildDispatch($config, $logId)
+            ->execute($name, $arguments, $session)
+            ->content;
+    }
+
     private static function assistantMessageWithToolCalls(array $toolCalls, string $reasoningContent = ''): array
     {
         $formatted = [];
@@ -747,390 +193,58 @@ PROMPT;
         return $message;
     }
 
-    /**
-     * @param string $name
-     * @param array $arguments
-     * @param array $config
-     * @param string|null $logId
-     * @param ToolSession $session
-     * @return string
-     */
-    private static function executeTool(string $name, array $arguments, array $config, ?string $logId, ToolSession $session): string
+    /** 长日志智能聚焦窗口（唯一实现在 LogWindowManager）；命中错误锚点则返回窗口文本，否则 null */
+    public static function buildInitialLogWindow(string $content, int $maxBytes = self::MAX_TOOL_RESULT_BYTES): ?string
     {
-        $mcp = $config['mcp'] ?? [];
-
-        try {
-            switch ($name) {
-                case 'web_search_exa':
-                    // 硬拦截：达上限不再发起 MCP 调用；拦截分支不累加计数
-                    // （避免超限后计数器无限增长）
-                    if ($session->webSearchCalls >= self::MAX_WEB_SEARCH_CALLS) {
-                        return '网络搜索次数已达本次分析上限。请基于已有证据完成分析，未能核实的信息在结论中明确标注。';
-                    }
-                    $session->webSearchCalls++;
-                    $endpoint = $mcp['webSearch'] ?? [];
-                    return self::callMcpTool('web_search_exa', $arguments, $endpoint, $session);
-
-                case 'rag_search':
-                    $session->ragSearchCalls++;
-                    $endpoint = $mcp['rag'] ?? [];
-                    $result = self::callMcpTool('rag_search', $arguments, $endpoint, $session);
-                    // 软提醒：检索本身仍执行（本地 FTS 成本低，且最后一次结果可能正是所需），
-                    // 仅在结果末尾追加收敛提示
-                    if ($session->ragSearchCalls + $session->webSearchCalls >= self::MAX_TOTAL_RETRIEVAL_CALLS) {
-                        $budget = self::MAX_TOTAL_RETRIEVAL_CALLS;
-                        $result .= "\n\n[检索预算提示] 本次分析的知识库与网络检索合计已达约 {$budget} 次，请基于已有证据收敛并输出结论，未能核实的信息明确标注。";
-                    }
-                    return $result;
-
-                case 'list_topics':
-                    $endpoint = $mcp['rag'] ?? [];
-                    return self::callMcpTool('list_topics', [], $endpoint, $session);
-
-                case 'list_log_files':
-                    return self::listLogFiles($logId);
-
-                case 'read_log_file':
-                    return self::readLogFile($logId, $arguments, $session);
-
-                case 'grep_log_file':
-                    return self::grepLogFile($logId, $arguments);
-
-                case 'github_list_repos':
-                    return \App\Client\GitHubClient::listRepos();
-
-                case 'github_search':
-                    if ($session->githubSearchCalls >= 2) {
-                        return 'GitHub 检索次数已达本次分析上限。请基于已有线索收敛并输出结论，未能核实的信息在结论中明确标注。';
-                    }
-                    $session->githubSearchCalls++;
-                    $repo = (string) ($arguments['repo'] ?? '');
-                    $query = (string) ($arguments['query'] ?? '');
-                    $type = (string) ($arguments['type'] ?? 'all');
-                    $state = (string) ($arguments['state'] ?? 'all');
-                    $maxResults = (int) ($arguments['max_results'] ?? 5);
-                    return \App\Client\GitHubClient::search($repo, $query, $type, $state, $maxResults);
-
-                case 'github_get_content':
-                    if ($session->githubDetailCalls >= 2) {
-                        return 'GitHub 详情阅读次数已达本次分析上限。请基于已有线索收敛并输出结论。';
-                    }
-                    $session->githubDetailCalls++;
-                    $repo = (string) ($arguments['repo'] ?? '');
-                    $number = (int) ($arguments['number'] ?? 0);
-                    $type = (string) ($arguments['type'] ?? 'auto');
-                    return \App\Client\GitHubClient::getContent($repo, $number, $type);
-
-                default:
-                    return '未知工具: ' . $name;
-            }
-        } catch (\Exception $e) {
-            return '工具调用失败: ' . $e->getMessage();
-        }
+        return (new LogWindowManager())->buildInitialWindow($content, $maxBytes)->body;
     }
 
-    private static function callMcpTool(string $name, array $arguments, array $endpoint, ToolSession $session): string
+    /** @param string[] $lines */
+    public static function findErrorAnchorLine(array $lines): ?int
     {
-        $url = $endpoint['url'] ?? '';
-
-        if ($url === '') {
-            return '该工具未配置，无法调用';
-        }
-
-        $client = self::mcpClient($endpoint, $session);
-        $contents = $client->callTool($name, $arguments);
-
-        return implode("\n\n", $contents);
+        return LogWindowManager::findErrorAnchorLine($lines);
     }
 
-    /**
-     * List the files bound to the current log session.
-     *
-     * @param string|null $logId
-     * @return string
-     */
-    private static function listLogFiles(?string $logId): string
-    {
-        if ($logId === null) {
-            return '当前会话未绑定日志文件';
-        }
-
-        $log = self::loadSessionLog($logId);
-        if ($log === null) {
-            return '日志不存在: ' . $logId;
-        }
-
-        $lines = [
-            "日志 {$logId} 文件列表：",
-            sprintf('- main（主文件，%d 字节，%d 行）', $log->getSize(), $log->getLineNumbers()),
-        ];
-
-        // crash-reports 类附件置顶并标注 [优先]：崩溃报告信息密度高于普通日志尾部，
-        // 与提示词「检索策略」的优先读取规则呼应；其余文件保持原有顺序
-        $files = $log->getFiles();
-        usort($files, fn($a, $b) => (int) self::isCrashReportName((string) $b['name']) <=> (int) self::isCrashReportName((string) $a['name']));
-        foreach ($files as $file) {
-            $mark = self::isCrashReportName((string) $file['name']) ? '[优先] ' : '';
-            $lines[] = sprintf('- %s%s（%d 字节，%d 行）', $mark, $file['name'], $file['size'], $log->getFileLineNumbers($file['name']));
-        }
-
-        return implode("\n", $lines);
-    }
-
-    /**
-     * 文件名（含 zip 展开后的相对路径）是否为 crash-report 类崩溃报告。
-     */
-    private static function isCrashReportName(string $name): bool
-    {
-        return stripos($name, 'crash-report') !== false;
-    }
-
-    /**
-     * Read the full content of a file bound to the current log session.
-     *
-     * Deliberately returns the whole file (no line-range parameters): fence-off
-     * reads are the main source of repeated tool calls. Duplicate reads of the
-     * same file within a single analyze() session are blocked via the session.
-     *
-     * @param string|null $logId
-     * @param array $arguments
-     * @param ToolSession $session
-     * @return string
-     */
-    private static function readLogFile(?string $logId, array $arguments, ToolSession $session): string
-    {
-        if ($logId === null) {
-            return '当前会话未绑定日志文件';
-        }
-
-        $log = self::loadSessionLog($logId);
-        if ($log === null) {
-            return '日志不存在: ' . $logId;
-        }
-
-        $filename = $arguments['filename'] ?? '';
-        // 会话去重键归一化：'' 与 'main' 指向同一主文件，必须视为同键，
-        // 否则省略 filename 的重复调用会绕过防重复拦截
-        $sessionKey = ($filename === '' || $filename === 'main') ? 'main' : $filename;
-
-        if ($sessionKey === 'main') {
-            $content = $log->getContent();
-        } else {
-            $content = $log->getFile($filename);
-            if ($content === null) {
-                return '文件不存在: ' . $filename;
-            }
-        }
-
-        // 防重复读取循环：仅当文件已「完整」读取过时才拦截。部分读取
-        // （行区间 / offset 续读）不置标记，模型按 next_offset 续读不会被
-        // 误判为重复调用。
-        if (($session->readFiles[$sessionKey] ?? false) === true) {
-            return self::duplicateReadNotice($sessionKey, $content);
-        }
-
-        $length = strlen($content);
-        $total = substr_count($content, "\n") + 1;
-        $hasLineRange = isset($arguments['line_start']) || isset($arguments['line_end']);
-
-        if ($hasLineRange) {
-            $lineStart = max(1, (int) ($arguments['line_start'] ?? 1));
-            $lineEnd = isset($arguments['line_end']) ? max($lineStart, (int) $arguments['line_end']) : $total;
-            $lines = explode("\n", $content);
-            $text = implode("\n", array_slice($lines, $lineStart - 1, $lineEnd - $lineStart + 1));
-            if ($lineStart === 1 && $lineEnd >= $total) {
-                $session->readFiles[$sessionKey] = true;
-            }
-            return sprintf(
-                "文件 %s（共 %d 行，%d 字节；本次行区间=%d-%d）\n内容：\n%s",
-                $sessionKey,
-                $total,
-                $length,
-                $lineStart,
-                min($lineEnd, $total),
-                $text
-            );
-        }
-
-        $offset = max(0, (int) ($arguments['offset'] ?? 0));
-        if ($offset >= $length) {
-            return sprintf('文件 %s 已读取完毕（文件总大小 %d 字节，next_offset=%d）。', $sessionKey, $length, $length);
-        }
-
-        $maxBytes = isset($arguments['max_bytes']) ? max(1024, (int) $arguments['max_bytes']) : $length - $offset;
-        $text = mb_strcut(substr($content, $offset), 0, $maxBytes);
-        $nextOffset = $offset + strlen($text);
-        if ($offset === 0 && $nextOffset >= $length) {
-            $session->readFiles[$sessionKey] = true;
-        }
-        $tail = $nextOffset < $length
-            ? "\n[内容已截断；请使用 offset={$nextOffset} 继续读取，next_offset={$nextOffset}]"
-            : "\n[文件已读取完毕，next_offset={$nextOffset}]";
-
-        return sprintf(
-            "文件 %s（共 %d 行，%d 字节；本次 offset=%d）\n内容：\n%s%s",
-            $sessionKey, $total, $length, $offset, $text, $tail
-        );
-    }
-
-    /**
-     * Response for duplicate read attempts within a single session.
-     */
-    private static function duplicateReadNotice(string $filename, string $content): string
-    {
-        $total = substr_count($content, "\n") + 1;
-        return sprintf(
-            '文件 %s 已读取（共 %d 行，%d 字节），其内容已在上文中提供，请直接基于已有内容进行分析，不要重复调用本工具。',
-            $filename,
-            $total,
-            strlen($content)
-        );
-    }
-
-    /**
-     * Grep matching lines from a log file bound to the current session.
-     *
-     * @param string|null $logId
-     * @param array $arguments
-     * @return string
-     */
-    private static function grepLogFile(?string $logId, array $arguments): string
-    {
-        if ($logId === null) {
-            return '当前会话未绑定日志文件';
-        }
-
-        $query = (string) ($arguments['query'] ?? '');
-        if ($query === '') {
-            return '检索关键词 query 不能为空';
-        }
-
-        $log = self::loadSessionLog($logId);
-        if ($log === null) {
-            return '日志不存在: ' . $logId;
-        }
-
-        $filename = $arguments['filename'] ?? '';
-        $sessionKey = ($filename === '' || $filename === 'main') ? 'main' : $filename;
-
-        if ($sessionKey === 'main') {
-            $content = $log->getContent();
-        } else {
-            $content = $log->getFile($sessionKey);
-            if ($content === null) {
-                return '文件不存在: ' . $filename;
-            }
-        }
-
-        $lines = explode("\n", $content);
-        $totalLines = count($lines);
-
-        $caseSensitive = (bool) ($arguments['case_sensitive'] ?? false);
-        $contextLines = max(0, min(5, (int) ($arguments['context_lines'] ?? 1)));
-        $maxMatches = max(1, min(30, (int) ($arguments['max_matches'] ?? 10)));
-
-        $matchingLines = [];
-        foreach ($lines as $idx => $line) {
-            $matched = $caseSensitive
-                ? str_contains($line, $query)
-                : (stripos($line, $query) !== false);
-
-            if ($matched) {
-                $matchingLines[] = $idx + 1; // 1-indexed
-            }
-        }
-
-        $totalFound = count($matchingLines);
-        if ($totalFound === 0) {
-            return sprintf('在文件 %s 中未找到包含 "%s" 的行。', $sessionKey, $query);
-        }
-
-        $displayedMatches = array_slice($matchingLines, 0, $maxMatches);
-        $matchSet = array_fill_keys($displayedMatches, true);
-
-        // 合并重叠或连续的上下文行区间
-        $ranges = [];
-        foreach ($displayedMatches as $matchLine) {
-            $start = max(1, $matchLine - $contextLines);
-            $end = min($totalLines, $matchLine + $contextLines);
-
-            if (!empty($ranges) && $start <= $ranges[count($ranges) - 1]['end'] + 1) {
-                $lastIdx = count($ranges) - 1;
-                $ranges[$lastIdx]['end'] = max($ranges[$lastIdx]['end'], $end);
-            } else {
-                $ranges[] = [
-                    'start' => $start,
-                    'end' => $end,
-                ];
-            }
-        }
-
-        // 计算行号最大宽度以对齐输出
-        $padWidth = strlen((string) $totalLines);
-
-        $blocks = [];
-        foreach ($ranges as $range) {
-            $blockLines = [];
-            for ($lineNum = $range['start']; $lineNum <= $range['end']; $lineNum++) {
-                $isMatch = isset($matchSet[$lineNum]);
-                $marker = $isMatch ? '> ' : '  ';
-                $paddedNum = str_pad((string) $lineNum, $padWidth, ' ', STR_PAD_LEFT);
-                $blockLines[] = sprintf('%s%s | %s', $marker, $paddedNum, $lines[$lineNum - 1]);
-            }
-            $blocks[] = implode("\n", $blockLines);
-        }
-
-        $header = sprintf(
-            '在文件 %s（共 %d 行）中检索 "%s"（%s）：共找到 %d 处匹配%s',
-            $sessionKey,
-            $totalLines,
-            $query,
-            $caseSensitive ? '区分大小写' : '忽略大小写',
-            $totalFound,
-            $totalFound > $maxMatches ? sprintf('（已展示前 %d 处）：', $maxMatches) : '：'
-        );
-
-        $footer = '';
-        if ($totalFound > $maxMatches) {
-            $footer = sprintf(
-                "\n\n[已达上限 %d 处，后续 %d 处匹配已省略；若需查看更多可增大 max_matches，或配合 read_log_file 精准读取对应行区间]",
-                $maxMatches,
-                $totalFound - $maxMatches
-            );
-        }
-
-        return $header . "\n\n" . implode("\n--\n", $blocks) . $footer;
-    }
-
-    /**
-     * @param string|null $logId
-     * @return \App\Log|null
-     */
-    private static function loadSessionLog(?string $logId): ?\App\Log
-    {
-        $id = new \App\Id($logId);
-        $log = new \App\Log($id);
-        return $log->exists() ? $log : null;
-    }
-
-    /**
-     * Byte-bounded truncation that never splits a multi-byte character
-     * (mb_strcut counts bytes but cuts on character boundaries).
-     *
-     * Truncation always appends a visible marker so the model knows the result
-     * is incomplete and can decide to re-query instead of reasoning over a
-     * silently truncated payload.
-     */
     private static function truncateForModel(string $text, int $maxBytes = self::MAX_TOOL_RESULT_BYTES): string
     {
-        if (strlen($text) <= $maxBytes) {
-            return $text;
-        }
-        return mb_strcut($text, 0, $maxBytes)
-            . "\n\n[...工具结果过长，已截断至 {$maxBytes} 字节；如需更多细节，请调整参数后重新调用]";
+        return ResultTruncator::truncate($text, $maxBytes);
     }
 
-    /* ─── SSE emission ─────────────────────────────────────── */
+    private static function buildCompactSummary(string $tool, string $result): string
+    {
+        return StatusSummarizer::compactSummary($tool, $result);
+    }
+
+    /**
+     * Fetch the knowledge base topic overview from the RAG server and inject it
+     * into the system prompt. Empty when RAG is not configured or unreachable.
+     */
+    private static function fetchTopics(array $config, ToolSession $session): string
+    {
+        $endpoint = $config['mcp']['rag'] ?? [];
+        if (($endpoint['url'] ?? '') === '') {
+            return '';
+        }
+
+        // topics 仅随知识库重建变化：进程级短 TTL 缓存，避免每次分析都做一次
+        // 完整 MCP 握手 + list_topics 调用（推高首 token 延迟）。失败不缓存，
+        // 下次分析仍会重试。
+        if (self::$topicsCache !== null && self::$topicsCacheExpiresAt > time()) {
+            return self::$topicsCache;
+        }
+
+        try {
+            $topics = McpClientFactory::call('list_topics', [], $endpoint, $session);
+            self::$topicsCache = $topics;
+            self::$topicsCacheExpiresAt = time() + 300;
+            return $topics;
+        } catch (\Exception $e) {
+            \App\Syslog::error('LogAgent', '获取知识库主题失败: ' . $e->getMessage());
+            return '';
+        }
+    }
+
+    /* ─── SSE emission（analyze 缓存命中直答 / 错误收尾所需）────────── */
 
     private static function emitter(): AnalysisEmitter
     {
@@ -1144,111 +258,6 @@ PROMPT;
     private static function emitContent(string $delta): void
     {
         self::emitter()->emit('', json_encode(['choices' => [['delta' => ['content' => $delta]]]], self::SSE_JSON_FLAGS));
-    }
-
-    private static function emitThinking(string $reasoning): void
-    {
-        self::emitter()->emit('status', json_encode(['type' => 'thinking', 'delta' => $reasoning], self::SSE_JSON_FLAGS));
-    }
-
-    private static function emitTool(string $name, array $arguments): void
-    {
-        self::emitter()->emit('status', json_encode(['type' => 'tool', 'name' => $name, 'arguments' => $arguments], self::SSE_JSON_FLAGS));
-    }
-
-    private static function emitToolResult(string $name, string $result): void
-    {
-        $summary = match ($name) {
-            'read_log_file', 'list_log_files', 'list_topics', 'grep_log_file' => self::buildCompactSummary($name, $result),
-            'rag_search' => self::buildHitListSummary($result),
-            default => mb_strcut($result, 0, self::STATUS_SUMMARY_BYTES),
-        };
-
-        self::emitter()->emit('status', json_encode([
-            'type' => 'tool_result',
-            'name' => $name,
-            'summary' => $summary,
-            'truncated' => strlen($result) > strlen($summary),
-        ], self::SSE_JSON_FLAGS));
-    }
-
-    /**
-     * Compact summaries for tools whose full output is meaningless to the user:
-     * read_log_file 的原文是给模型的，用户只需知道「读了哪个文件、多少行」；
-     * list_topics 只需知道知识库覆盖哪些主题目录；
-     * grep_log_file 展示命中了多少处及关键匹配行。
-     */
-    private static function buildCompactSummary(string $tool, string $result): string
-    {
-        $lines = explode("\n", $result);
-
-        if ($tool === 'read_log_file') {
-            // 首行即概要：「文件 main（共 N 行，M 字节）」或「文件 X 已读取…」
-            $summary = trim($lines[0]);
-            foreach ($lines as $line) {
-                if (str_starts_with(trim($line), '[文件过大已截断')) {
-                    $summary .= "\n" . trim($line);
-                }
-            }
-            return $summary;
-        }
-
-        if ($tool === 'grep_log_file') {
-            // 首行即检索概况：「在文件 main（共 N 行）中检索 "..."：共找到 M 处匹配」
-            // 附带匹配行指示标记行（形如 "> 142 | ..."），限制在 STATUS_SUMMARY_BYTES 内
-            $summaryLines = [trim($lines[0])];
-            foreach ($lines as $line) {
-                $trim = trim($line);
-                if (str_starts_with($trim, '>')) {
-                    $summaryLines[] = $trim;
-                }
-            }
-            return mb_strcut(implode("\n", $summaryLines), 0, self::STATUS_SUMMARY_BYTES);
-        }
-
-        if ($tool === 'list_topics') {
-            // 首行统计 + 各主题目录行（跳过每目录下的文件示例明细）
-            $head = trim($lines[0]);
-            foreach ($lines as $line) {
-                $trim = trim($line);
-                if (str_starts_with($trim, '■')) {
-                    $head .= "\n" . $trim;
-                }
-            }
-            return mb_strcut($head !== '' ? $head : $result, 0, 1200);
-        }
-
-        // list_log_files 本身已是紧凑的文件清单
-        return mb_strcut($result, 0, self::STATUS_SUMMARY_BYTES);
-    }
-
-    /**
-     * Hit-list summary for multi-document results (rag_search 等) so the UI
-     * shows every matched document instead of the first one's body prefix —
-     * a plain 400-char cut made it look like only one document came back.
-     */
-    private static function buildHitListSummary(string $result): string
-    {
-        if (preg_match('/^在知识库中找到\s*(\d+)\s*条相关文档/u', $result, $countMatch)) {
-            // 标题段 (.+?) 允许包含全角括号等字符，靠行尾锚定与「（来源: …）」收尾定位，
-            // 否则标题自带括号的条目会被整条丢弃，出现「命中 5 条只列出 2 条」
-            preg_match_all('/^\[(\d+)\]\s*(.+?)（来源:\s*([^）]+)）\s*$/mu', $result, $hits, PREG_SET_ORDER);
-            if ($hits !== []) {
-                $lines = ['共命中 ' . $countMatch[1] . ' 条：'];
-                foreach ($hits as $hit) {
-                    $lines[] = sprintf('[%s] %s（%s）', $hit[1], trim($hit[2]), trim($hit[3]));
-                }
-                // 清单需要容纳全部命中条目，放宽到 3000 字符
-                return mb_strcut(implode("\n", $lines), 0, 3000);
-            }
-        }
-
-        return mb_strcut($result, 0, self::STATUS_SUMMARY_BYTES);
-    }
-
-    private static function emitLimit(int $rounds): void
-    {
-        self::emitter()->emit('status', json_encode(['type' => 'limit', 'rounds' => $rounds], self::SSE_JSON_FLAGS));
     }
 
     private static function emitDone(): void
