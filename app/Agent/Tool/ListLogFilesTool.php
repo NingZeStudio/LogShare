@@ -23,7 +23,7 @@ final class ListLogFilesTool extends AbstractConfiguredTool
     {
         return [
             'type' => 'object',
-            'properties' => [],
+            'properties' => new \stdClass(),
         ];
     }
 

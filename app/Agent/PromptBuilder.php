@@ -87,7 +87,7 @@ final class PromptBuilder
                             . '看完地图后应带着明确目标词去 rag_search（可配合 topic 参数定向），不要看完地图就停止分析。',
                         'parameters' => [
                             'type' => 'object',
-                            'properties' => [],
+                            'properties' => new \stdClass(),
                         ],
                     ],
                 ];
@@ -106,7 +106,7 @@ final class PromptBuilder
                             . '不确定启动器仓库名或检索方向时优先调用。',
                         'parameters' => [
                             'type' => 'object',
-                            'properties' => [],
+                            'properties' => new \stdClass(),
                         ],
                     ],
                 ];
@@ -189,7 +189,7 @@ final class PromptBuilder
                         'description' => '列出当前日志 ID 下的所有文件（含主文件与附加文件）。',
                         'parameters' => [
                             'type' => 'object',
-                            'properties' => [],
+                            'properties' => new \stdClass(),
                         ],
                     ],
                 ];

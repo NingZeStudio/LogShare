@@ -766,21 +766,6 @@ class RagSearch
     }
 
     /**
-     * 围绕命中词提取上下文片段。
-     *
-     * 委托 SnippetExtractor；保留本静态方法是因为既有测试通过反射使用它
-     * （语义不变）。
-     *
-     * @param string $body
-     * @param array<int, string> $terms
-     * @return string
-     */
-    private static function extractSnippet(string $body, array $terms): string
-    {
-        return SnippetExtractor::extract($body, $terms);
-    }
-
-    /**
      * Split a query into distinct non-empty terms on whitespace and punctuation.
      *
      * 委托 LexicalIndex::splitTerms；保留本静态方法是因为既有测试与调用方

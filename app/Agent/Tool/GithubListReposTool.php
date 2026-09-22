@@ -24,7 +24,7 @@ final class GithubListReposTool extends AbstractConfiguredTool
     {
         return [
             'type' => 'object',
-            'properties' => [],
+            'properties' => new \stdClass(),
         ];
     }
 
