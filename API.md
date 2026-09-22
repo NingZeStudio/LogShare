@@ -1278,6 +1278,73 @@ DELETE /v1/admin/event-queue/dead
 
 ---
 
+### 48. AI 分析记录与 Trace 追溯
+
+```
+GET    /v1/admin/ai/analyses
+GET    /v1/admin/ai/analyses/{cacheKey}
+GET    /v1/admin/ai/analyses/{cacheKey}/trace
+DELETE /v1/admin/ai/analyses/{cacheKey}
+```
+
+- `GET /v1/admin/ai/analyses`：分析记录分页列表，支持 `page`, `limit`, `mode`（deep/launcher/quick）, `date`（YYYY-MM-DD）, `minScore`, `maxScore`, `keyword` 过滤。
+- `GET /v1/admin/ai/analyses/{cacheKey}`：获取单条分析完整详情，包含多轮工具调用链（`toolCallChain`）、四维评分（`score`）、结构化验证结果（`validation`）与元数据。
+- `GET /v1/admin/ai/analyses/{cacheKey}/trace`：导出该次分析的全生命周期 Trace JSON 数据（含逐轮耗时、模型名称、提示词版本与错误堆栈）。
+- `DELETE /v1/admin/ai/analyses/{cacheKey}`：物理删除分析记录并同步清空对应结果缓存。
+
+### 49. 质量评分仪表盘（Scoreboard）
+
+```
+GET /v1/admin/ai/scoreboard
+GET /v1/admin/ai/scoreboard/slow
+GET /v1/admin/ai/scoreboard/low-score
+```
+
+- `GET /v1/admin/ai/scoreboard`：四维质量评分概览与日均趋势（支持 `days` 参数，默认 7 天），聚合分析总数、平均总分、工具效率分、证据充分性分及评级分布。
+- `GET /v1/admin/ai/scoreboard/slow`：慢分析耗时排查列表（参数 `limit`, `minDurationMs` 默认 15000ms）。
+- `GET /v1/admin/ai/scoreboard/low-score`：低分诊断预警列表（参数 `limit`, `maxScore` 默认 60）。
+
+### 50. Prompt 版本化热管理
+
+```
+GET    /v1/admin/ai/prompts
+GET    /v1/admin/ai/prompts/{promptVersion}
+POST   /v1/admin/ai/prompts
+PUT    /v1/admin/ai/prompts/{promptVersion}
+DELETE /v1/admin/ai/prompts/{promptVersion}
+POST   /v1/admin/ai/prompts/{promptVersion}/activate
+```
+
+- `GET /v1/admin/ai/prompts`：列出所有提示词版本，标明当前激活版本与更新时间。
+- `GET /v1/admin/ai/prompts/{promptVersion}`：获取指定版本的完整提示词文本与各模块片段配置。
+- `POST /v1/admin/ai/prompts`：创建新 Prompt 版本（可从当前激活版本 Fork 派生，请求体包含 `version`, `name`, `sections`, `notes`）。
+- `PUT /v1/admin/ai/prompts/{promptVersion}`：更新指定 Prompt 版本的片段内容。
+- `DELETE /v1/admin/ai/prompts/{promptVersion}`：删除未激活的版本（当前激活版本受保护不可删除）。
+- `POST /v1/admin/ai/prompts/{promptVersion}/activate`：将指定版本激活为全局默认提示词，毫秒级跨进程热重载生效。
+
+### 51. 工具链在线门控与配置
+
+```
+GET /v1/admin/ai/tools
+PUT /v1/admin/ai/tools/{name}/enable
+PUT /v1/admin/ai/tools/{name}/config
+```
+
+- `GET /v1/admin/ai/tools`：列出已注册的全部排障工具（`rag_search`, `web_search_exa`, `grep_log_file`, `github_issue_search` 等 9 大工具）及其启用状态、重试预算与降级链。
+- `PUT /v1/admin/ai/tools/{name}/enable`：在线启用或禁用指定工具（请求体 `{"enabled": true/false}`），立即同步更新 Prompt 中的工具列表与 Function Calling Schema。
+- `PUT /v1/admin/ai/tools/{name}/config`：调整工具运行参数（`maxRetries`, `timeoutMs`, `fallback` 链等）。
+
+### 52. 排障模式配置
+
+```
+GET /v1/admin/ai/modes
+PUT /v1/admin/ai/modes/{mode}
+```
+
+- `GET /v1/admin/ai/modes`：列出 `deep`、`launcher`、`quick` 三种排障模式当前的运行参数（最大轮次、Exa 网络搜索上限、RAG 知识检索上限、行级日志检索上限）。
+- `PUT /v1/admin/ai/modes/{mode}`：调整指定模式的预算参数，热重载立即生效。
+
+---
 
 ## 通用响应格式
 

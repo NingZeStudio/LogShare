@@ -11,6 +11,8 @@ class RedisMock
     private static array $lists = [];
     /** Hashes 模拟：key => [field => string, ...] */
     private static array $hashes = [];
+    /** Sorted Sets 模拟：key => [member => score, ...] */
+    private static array $zsets = [];
 
     /** Streams 模拟：key => [['id' => string, 'fields' => array]]（插入序） */
     private static array $streams = [];
@@ -558,6 +560,121 @@ class RedisMock
         return array_map(fn($e) => [$e['id'], $e['fields']], self::$streams[$key] ?? []);
     }
 
+    public function mGet(array $keys): array
+    {
+        self::guard();
+        $result = [];
+        foreach ($keys as $key) {
+            $val = $this->get($key);
+            $result[] = $val !== false ? $val : false;
+        }
+        return $result;
+    }
+
+    public function zAdd(string $key, float|int $score, string $member): int
+    {
+        self::guard();
+        if (!isset(self::$zsets[$key])) {
+            self::$zsets[$key] = [];
+        }
+        $isNew = !isset(self::$zsets[$key][$member]);
+        self::$zsets[$key][$member] = (float) $score;
+        return $isNew ? 1 : 0;
+    }
+
+    public function zRevRangeByScore(string $key, string|float $max, string|float $min, array $options = []): array
+    {
+        self::guard();
+        if (!isset(self::$zsets[$key])) {
+            return [];
+        }
+        $items = self::$zsets[$key];
+        arsort($items);
+
+        $minVal = ($min === '-inf') ? -INF : (float) $min;
+        $maxVal = ($max === '+inf') ? INF : (float) $max;
+
+        $matched = [];
+        foreach ($items as $member => $score) {
+            if ($score >= $minVal && $score <= $maxVal) {
+                $matched[] = (string) $member;
+            }
+        }
+
+        if (isset($options['limit']) && is_array($options['limit'])) {
+            $offset = (int) ($options['limit'][0] ?? 0);
+            $count = (int) ($options['limit'][1] ?? count($matched));
+            $matched = array_slice($matched, $offset, $count);
+        }
+
+        return $matched;
+    }
+
+    public function zRangeByScore(string $key, string|float $min, string|float $max, array $options = []): array
+    {
+        self::guard();
+        if (!isset(self::$zsets[$key])) {
+            return [];
+        }
+        $items = self::$zsets[$key];
+        asort($items);
+
+        $minVal = ($min === '-inf') ? -INF : (float) $min;
+        $maxVal = ($max === '+inf') ? INF : (float) $max;
+
+        $matched = [];
+        foreach ($items as $member => $score) {
+            if ($score >= $minVal && $score <= $maxVal) {
+                $matched[] = (string) $member;
+            }
+        }
+
+        if (isset($options['limit']) && is_array($options['limit'])) {
+            $offset = (int) ($options['limit'][0] ?? 0);
+            $count = (int) ($options['limit'][1] ?? count($matched));
+            $matched = array_slice($matched, $offset, $count);
+        }
+
+        return $matched;
+    }
+
+    public function zRem(string $key, string ...$members): int
+    {
+        self::guard();
+        if (!isset(self::$zsets[$key])) {
+            return 0;
+        }
+        $removed = 0;
+        foreach ($members as $m) {
+            if (isset(self::$zsets[$key][$m])) {
+                unset(self::$zsets[$key][$m]);
+                $removed++;
+            }
+        }
+        return $removed;
+    }
+
+    public function zRemRangeByRank(string $key, int $start, int $end): int
+    {
+        self::guard();
+        if (!isset(self::$zsets[$key])) {
+            return 0;
+        }
+        asort(self::$zsets[$key]);
+        $keys = array_keys(self::$zsets[$key]);
+        $total = count($keys);
+        if ($start < 0) $start = max(0, $total + $start);
+        if ($end < 0) $end = max(-1, $total + $end);
+        if ($start > $end || $start >= $total) {
+            return 0;
+        }
+        $toRemove = array_slice($keys, $start, $end - $start + 1);
+        foreach ($toRemove as $k) {
+            unset(self::$zsets[$key][$k]);
+        }
+        return count($toRemove);
+    }
+
     public static function reset(): void
     {
         self::$data = [];
@@ -566,6 +683,7 @@ class RedisMock
         self::$hashes = [];
         self::$streams = [];
         self::$groups = [];
+        self::$zsets = [];
         self::$failAll = false;
     }
 }

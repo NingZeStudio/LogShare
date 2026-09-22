@@ -1,5 +1,30 @@
 # Changelog
 
+## 1.8.2-beta.2 — PreRelease (2026-09-22)
+
+### 预发布说明
+
+本版本为面向 LogAgent 治理与可观测体系的公开预发布，新增管理端全套 AI 分析记录管理、质量评分看板、Prompt 版本管理、工具链在线门控与分析模式配置，并深度适配前台结构化诊断结果展示。
+
+### 核心变更
+
+- **LogAgent 全栈可观测与 Admin 治理引擎**：
+  - **分析记录全生命周期管理（`AnalysisRecordManager`）**：基于 Redis ZSET（时间/分数/耗时三维索引）+ 本地归档构建高可用存储层，支持按日期、模式、评分等条件分页检索，单条详情追溯（trace + score + validation + toolCallChain），以及单条分析记录物理删除与一键导出 Trace JSON。
+  - **质量评分仪表盘（Scoreboard）**：提供四维评分概览（工具效率、证据充分性、结论明确性、总体质量）、日均趋势分析、低分预警列表（score < 60）与慢分析耗时排查（耗时 > 阈值）。
+  - **Prompt 版本化热管理（`PromptManager`）**：支持 PromptBuilder 多版本管理，包括列出版本、读取版本提示词、Fork 派生新版本、在线编辑修改、安全删除以及一键激活线上生效，毫秒级跨进程热重载。
+  - **工具链在线动态门控（`ToolManager`）**：实时对接 ToolRegistry 9 大排障工具，支持在线启用/禁用开关（动态同步 Prompt 与 Tool Schemas），并支持配置重试预算与 Fallback 降级链。
+  - **排障模式参数可视化（`AnalysisMode`）**：支持后台可视化调整 `deep` / `launcher` / `quick` 三大排障模式的运行预算（最大轮次、Exa 网络搜索预算、RAG 检索预算与行级读取预算）。
+- **结构化诊断输出与前台感知升级**：
+  - 诊断正文规范化结构化 JSON 输出块（根因、置信度、排障清单、证据追踪），前台前端自动解析并渲染为诊断摘要卡片。
+- **架构与框架健壮性增强**：
+  - 解决 FastRoute 控制器占位符冲突（将 Prompt 版本路径参数重命名为 `{promptVersion}`）。
+  - 动态配置热更新机制加固：`getDynamicConfigRaw()` 与 `touchDynamicConfig()` 确保在保存局部更新时完整保留兄弟配置，杜绝配置被意外置空。
+- **测试框架与基础设施健壮性**：
+  - `RedisMock` 补齐 ZSET 有序集合全套核心方法（`zAdd`, `zRevRangeByScore`, `zRangeByScore`, `zRem`, `zRemRangeByRank`）与 `mGet`，单元测试离线环境完全解耦。
+  - 新增 `tests/Unit/AdminAiTest.php` 单元测试套件，全面覆盖分析记录、评分看板、Prompt 管理与工具链管理逻辑。
+
+---
+
 ## 1.8.1-beta.1 — PreRelease (2026-09-22)
 
 ### 预发布说明

@@ -122,6 +122,8 @@ class LogAgent
                 self::writeCache($cacheKey, $result->fullAnswer, $cacheTTL);
             }
 
+            AnalysisRecordManager::record($result, $ctx);
+
             self::emitDone();
         } catch (\App\Exception\ClientDisconnectedException $e) {
             // 客户端已断开：SseWriter 无法再写入任何帧，仅记日志并中止，
