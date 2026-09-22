@@ -25,3 +25,7 @@ parameters:
     # PHPStan 因生产路径不再引用而报 method.unused，属预期，整体忽略该文件。
     - identifier: method.unused
       path: app/Agent/LogAgent.php
+    # RagSearch::extractSnippet 是 Step 2 拆分后的反射兼容壳（检索路径已改走
+    # SnippetExtractor / LexicalIndex），既有 RagSearchTest 仍按旧签名反射直调。
+    - message: '#Static method App\\Rag\\RagSearch::extractSnippet\(\) is unused#'
+      path: app/Rag/RagSearch.php

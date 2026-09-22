@@ -14,23 +14,6 @@ namespace App\Rag;
 class RagSearch
 {
     /**
-     * 正文短于该长度（字符）时整段返回。
-     *
-     * 分块本身按 H2 语义单元切割，绝大多数在 1-2K 字符内——整段返回才能把
-     * 「签名 → 含义 → 修复步骤」这类结构完整交给模型；此前 600 的阈值导致
-     * 长文档几乎总是走窗口模式，解法部分被丢掉。
-     */
-    private const SNIPPET_FULL_BODY_LIMIT = 1600;
-
-    /**
-     * 超长正文围绕命中词向前/后扩展的最大字符窗口。
-     * 实际边界回退到最近的空白/句读（最多回看 200 字符），不硬性要求句子边界，
-     * 否则代码与术语密集的英文文档会因边界过密而被掐到几十个字符。
-     */
-    private const SNIPPET_HALF_WINDOW = 800;
-    private const SNIPPET_BOUNDARY_LOOKBACK = 200;
-
-    /**
      * 知识库主题目录的人工描述，是 list_topics / 系统提示词主题地图的可读性来源。
      *
      * 模型根据这段描述决定检索方向：目录名本身不可读的（如 mg-issues、zl2-issues）
@@ -246,7 +229,7 @@ class RagSearch
 
             $storeEmbedding = function (int $rowid, array $vec) use ($embedStmt, &$embedded): void {
                 $embedStmt->bindValue(1, $rowid, \PDO::PARAM_INT);
-                $embedStmt->bindValue(2, self::packVector($vec), \PDO::PARAM_LOB);
+                $embedStmt->bindValue(2, VectorIndex::packVector($vec), \PDO::PARAM_LOB);
                 $embedStmt->execute();
                 $embedded++;
             };
@@ -323,14 +306,6 @@ class RagSearch
     }
 
     /**
-     * Escape LIKE wildcards (with backslash as the ESCAPE char).
-     */
-    private static function escapeLike(string $value): string
-    {
-        return str_replace(['\\', '%', '_'], ['\\\\', '\%', '\_'], $value);
-    }
-
-    /**
      * Normalize a topic argument shared by the MCP layer and search().
      *
      * trim → 去首尾 '/' → 空字符串归 null；拒绝路径遍历（'..'）与超长值。
@@ -381,125 +356,16 @@ class RagSearch
 
         // 防御性二次归一化（幂等）：控制器已校验过，直接内部调用同样生效
         $topic = self::normalizeTopic($topic);
-        $sourceFilter = '';
-        $sourceParams = [];
-        if ($topic !== null) {
-            $sourceFilter = " AND source LIKE ? ESCAPE '\\'";
-            $sourceParams = [self::escapeLike($topic) . '/%'];
-        }
 
         // 候选池：语义精排前多召回一些；纯词法路径仍只输出 k 条
         $pool = max(20, $k * 4);
 
-        $terms = self::splitTerms($query);
-        $results = [];
-        $seen = [];
+        $results = (new LexicalIndex($this->pdo))->search($query, self::splitTerms($query), $pool, $topic);
 
-        // 1. FTS5 BM25 over English / code tokens with prefix matching.
-        //    Strict AND first; when it yields nothing (over-constrained multi-word
-        //    queries), degrade to OR ranked by bm25 so partial matches still surface.
-        preg_match_all('/[0-9A-Za-z_]+/', $query, $tokenMatches);
-        $tokens = array_values(array_unique(array_map('strtolower', $tokenMatches[0])));
-
-        if (!empty($tokens)) {
-            $ftsMatches = [implode(' AND ', array_map(fn($t) => $t . '*', $tokens))];
-            if (count($tokens) > 1) {
-                $ftsMatches[] = implode(' OR ', array_map(fn($t) => $t . '*', $tokens));
-            }
-            foreach ($ftsMatches as $match) {
-                if ($results !== []) {
-                    break;
-                }
-                $stmt = $this->pdo->prepare(
-                    "SELECT rowid, title, body, source, bm25(docs, 10.0, 1.0, 1.0) AS rank
-                     FROM docs WHERE docs MATCH ?{$sourceFilter} ORDER BY rank LIMIT " . $pool
-                );
-                $stmt->execute(array_merge([$match], $sourceParams));
-                foreach ($stmt->fetchAll() as $row) {
-                    $key = $row['source'] . '#' . $row['title'];
-                    if (isset($seen[$key])) {
-                        continue;
-                    }
-                    $seen[$key] = true;
-                    $results[] = [
-                        'title' => $row['title'],
-                        'body' => $row['body'],
-                        'source' => $row['source'],
-                        'score' => $row['rank'],
-                        'snippet' => self::extractSnippet($row['body'], $terms),
-                    ];
-                }
-            }
-        }
-
-        // 2. LIKE fallback for CJK / substring matching. AND semantics first;
-        //    empty result degrades to OR ranked by number of matched terms
-        //    (title hit = 2, body hit = 1).
-        if (!empty($terms)) {
-            foreach ([true, false] as $requireAll) {
-                if (($results !== [] && $requireAll === false && !empty($tokens)) || ($results !== [] && $requireAll)) {
-                    break;
-                }
-                $rankParts = [];
-                $rankParams = [];
-                $whereParts = [];
-                $whereParams = [];
-
-                foreach ($terms as $term) {
-                    $like = '%' . self::escapeLike($term) . '%';
-                    $rankParts[] = "(CASE WHEN title LIKE ? ESCAPE '\\' THEN 2 ELSE 0 END + CASE WHEN body LIKE ? ESCAPE '\\' THEN 1 ELSE 0 END)";
-                    $rankParams[] = $like;
-                    $rankParams[] = $like;
-                    $wherePart = "(title LIKE ? ESCAPE '\\' OR body LIKE ? ESCAPE '\\')";
-                    if ($requireAll) {
-                        $whereParts[] = $wherePart;
-                        $whereParams = array_merge($whereParams, [$like, $like]);
-                    } else {
-                        $whereParts[] = $wherePart;
-                        $whereParams = array_merge($whereParams, [$like, $like]);
-                    }
-                }
-
-                if (!$requireAll) {
-                    $whereSql = '(' . implode(' OR ', $whereParts) . ')';
-                } else {
-                    $whereSql = implode(' AND ', $whereParts);
-                }
-
-                $sql = "SELECT rowid, title, body, source, (" . implode(' + ', $rankParts) . ") AS rank
-                        FROM docs WHERE ({$whereSql}){$sourceFilter}
-                        ORDER BY rank DESC, length(body) ASC LIMIT " . ($results === [] ? $pool : max(5, $pool - count($results)));
-                $stmt = $this->pdo->prepare($sql);
-                $stmt->execute(array_merge($rankParams, $whereParams, $sourceParams));
-
-                foreach ($stmt->fetchAll() as $row) {
-                    $key = $row['source'] . '#' . $row['title'];
-                    if (isset($seen[$key])) {
-                        continue;
-                    }
-                    $seen[$key] = true;
-                    $results[] = [
-                        'title' => $row['title'],
-                        'body' => $row['body'],
-                        'source' => $row['source'],
-                        'score' => $requireAll ? 'fallback' : 'fallback-or',
-                        'snippet' => self::extractSnippet($row['body'], $terms),
-                    ];
-                }
-            }
-        }
-
-        // 3. Semantic enhancement: vector recall is primary, lexical results supplement it.
+        // Semantic enhancement: vector recall is primary, lexical results supplement it.
         return $this->applySemanticEnhancement($query, $results, $k, $topic);
     }
 
-    /**
-     * Vector-recall candidates are primary and lexical results supplement them. Any failure logs and returns the
-     * lexical-only slice — semantic search must never break retrieval.
-     *
-     * @param array<int, array{title: string, body: string, source: string, score: mixed, snippet: string}> $lexical
-     * @return array<int, array{title: string, body: string, source: string, score: mixed, snippet: string}>
-     */
     /**
      * Process-level cache for semantic enhancement results (query+k → final list).
      *
@@ -516,8 +382,6 @@ class RagSearch
     private const SEMANTIC_CACHE_TTL = 60;
     private const SEMANTIC_CACHE_MAX = 64;
     private const SEMANTIC_CACHE_MAX_BYTES = 1048576;
-    /** 向量余弦扫描的单批行数，控制一次性载入内存的向量总量 */
-    private const VECTOR_SCAN_BATCH = 5000;
 
     private function applySemanticEnhancement(string $query, array $lexical, int $k, ?string $topic = null): array
     {
@@ -578,7 +442,7 @@ class RagSearch
 
             // 向量召回：与全库嵌入算余弦，补足词法漏掉的同义表述；
             // topic 模式下过滤下推到召回 SQL（源头限定目录，无需扩量放大）
-            $vectorHits = $this->topByCosine($queryVec, max(20, $k * 4), $topic);
+            $vectorHits = (new VectorIndex($this->pdo))->topByCosine($queryVec, max(20, $k * 4), $topic);
             $seen = [];
             $out = [];
             foreach (array_merge($vectorHits, $lexical) as $result) {
@@ -598,104 +462,6 @@ class RagSearch
             \App\Syslog::error('RAG', 'semantic pipeline failed, falling back to lexical: ' . $e->getMessage());
             return array_slice($lexical, 0, $k);
         }
-    }
-
-    /**
-     * Cosine-similarity scan over stored chunk embeddings.
-     *
-     * Only vec blobs are materialised for scoring (bodies would cost ~MBs per
-     * query); metadata for the top hits is fetched in a second round trip.
-     * Chunks without an embedding (semantic was off at build time) are skipped.
-     *
-     * @param array<int, float> $queryVec
-     * @param string|null $topicPrefix When set, the scan JOINs docs and filters
-     *                                 source by "<topic>/%" at the SQL level
-     *                                 (recall is restricted at the source, so
-     *                                 no over-fetch-then-filter is needed)
-     * @return array<int, array{title: string, body: string, source: string, score: mixed, snippet: string}>
-     */
-    private function topByCosine(array $queryVec, int $limit, ?string $topicPrefix = null): array
-    {
-        $qNorm = self::norm($queryVec);
-        $dim = count($queryVec);
-        $scored = [];
-        $dimensionMismatchSeen = false;
-        if ($topicPrefix !== null) {
-            $scanStmt = $this->pdo->prepare(
-                "SELECT e.rowid, e.vec FROM doc_embeddings e
-                 JOIN docs d ON d.rowid = e.rowid
-                 WHERE d.source LIKE ? ESCAPE '\\'
-                 LIMIT ? OFFSET ?"
-            );
-        } else {
-            $scanStmt = $this->pdo->prepare("SELECT e.rowid, e.vec FROM doc_embeddings e LIMIT ? OFFSET ?");
-        }
-        $batchSize = self::VECTOR_SCAN_BATCH;
-        $offset = 0;
-        // 分批扫描向量：万级 chunk × 千维向量一次全量载入会占用数十 MB，
-        // LIMIT/OFFSET 分批 + 逐批释放控制内存峰值
-        while (true) {
-            $scanStmt->execute($topicPrefix !== null
-                ? [self::escapeLike($topicPrefix) . '/%', $batchSize, $offset]
-                : [$batchSize, $offset]);
-            $batchRows = $scanStmt->fetchAll();
-            if ($batchRows === []) {
-                break;
-            }
-            $offset += count($batchRows);
-            foreach ($batchRows as $row) {
-                $vec = self::unpackVector((string) $row['vec']);
-                if ($vec === []) {
-                    continue;
-                }
-                if (count($vec) !== $dim) {
-                    // 历史向量与当前 embedding 模型维度不一致（如切换模型后未重建索引）
-                    $dimensionMismatchSeen = true;
-                    continue;
-                }
-                $dot = 0.0;
-                foreach ($queryVec as $i => $qv) {
-                    $dot += $qv * $vec[$i];
-                }
-                $vNorm = self::norm($vec);
-                if ($qNorm == 0.0 || $vNorm == 0.0) {
-                    continue;
-                }
-                $scored[] = ['rowid' => (int) $row['rowid'], 'sim' => $dot / ($qNorm * $vNorm)];
-            }
-            if (count($batchRows) < $batchSize) {
-                break;
-            }
-        }
-
-        if ($dimensionMismatchSeen) {
-            static $warnedOnce = false;
-            if (!$warnedOnce) {
-                $warnedOnce = true;
-                \App\Syslog::error('RAG', "stored embeddings have a different dimension than the current model ({$dim}) — they are being ignored; re-run rag:build to re-embed");
-            }
-        }
-
-        usort($scored, fn($a, $b) => $b['sim'] <=> $a['sim']);
-
-        // prepare 提到循环外，避免同一 SQL 重复编译
-        $metaStmt = $this->pdo->prepare("SELECT title, body, source FROM docs WHERE rowid = ?");
-        $hits = [];
-        foreach (array_slice($scored, 0, $limit) as $s) {
-            $metaStmt->execute([$s['rowid']]);
-            $row = $metaStmt->fetch();
-            if ($row === false) {
-                continue;
-            }
-            $hits[] = [
-                'title' => $row['title'],
-                'body' => $row['body'],
-                'source' => $row['source'],
-                'score' => 'vector:' . round($s['sim'], 4),
-                'snippet' => self::extractSnippet($row['body'], []),
-            ];
-        }
-        return $hits;
     }
 
     /**
@@ -739,40 +505,10 @@ class RagSearch
     }
 
     /**
-     * @param array<int, float> $vec
-     */
-    private static function packVector(array $vec): string
-    {
-        return pack('g*', ...array_map('floatval', $vec));
-    }
-
-    private static function unpackVector(string $blob): array
-    {
-        $count = intdiv(strlen($blob), 4);
-        return $count === 0 ? [] : array_values(unpack('g' . $count, $blob));
-    }
-
-    /**
-     * @param array<int, float> $vec
-     */
-    private static function norm(array $vec): float
-    {
-        $sum = 0.0;
-        foreach ($vec as $v) {
-            $sum += $v * $v;
-        }
-        return sqrt($sum);
-    }
-
-    /**
      * 围绕命中词提取上下文片段。
      *
-     * 取舍策略：
-     *  - 短正文（≤ SNIPPET_FULL_BODY_LIMIT）整段返回——分块按 H2 切割，
-     *    整段才能保住「签名 → 含义 → 修复步骤」这类结构完整性；
-     *  - 超长正文围绕第一个命中词取 ±SNIPPET_HALF_WINDOW 硬窗口，
-     *    再向内回退到最近的空白/句读做整洁断点；找不到边界时用硬窗口，
-     *    绝不允许出现几十字符的过短片段。
+     * 委托 SnippetExtractor；保留本静态方法是因为既有测试通过反射使用它
+     * （语义不变）。
      *
      * @param string $body
      * @param array<int, string> $terms
@@ -780,113 +516,21 @@ class RagSearch
      */
     private static function extractSnippet(string $body, array $terms): string
     {
-        $bodyLen = mb_strlen($body);
-        if ($bodyLen === 0) {
-            return '';
-        }
-
-        if ($bodyLen <= self::SNIPPET_FULL_BODY_LIMIT) {
-            return $body;
-        }
-
-        $hitPos = null;
-        $hitLen = 0;
-        foreach ($terms as $term) {
-            if (mb_strlen($term) < 2) {
-                continue; // bigram 噪声项不作为窗口锚点
-            }
-            $pos = mb_stripos($body, $term);
-            if ($pos !== false && ($hitPos === null || $pos < $hitPos)) {
-                $hitPos = $pos;
-                $hitLen = mb_strlen($term);
-            }
-        }
-
-        // 命中标题、正文无词时，返回正文开头片段
-        if ($hitPos === null) {
-            return mb_substr($body, 0, self::SNIPPET_HALF_WINDOW) . '…';
-        }
-
-        // 硬窗口 + 向内找最近的空白/句读做整洁断点（最多回看 BOUNDARY_LOOKBACK）
-        $start = max(0, $hitPos - self::SNIPPET_HALF_WINDOW);
-        $start = self::retreatToBoundary($body, $start, min($hitPos, $start + self::SNIPPET_BOUNDARY_LOOKBACK));
-
-        $end = min($bodyLen, $hitPos + $hitLen + self::SNIPPET_HALF_WINDOW);
-        $end = self::advanceToBoundary($body, max($end - self::SNIPPET_BOUNDARY_LOOKBACK, $hitPos + $hitLen), $end);
-
-        return ($start > 0 ? '…' : '')
-            . trim(mb_substr($body, $start, $end - $start))
-            . ($end < $bodyLen ? "\n…" : '');
-    }
-
-    /**
-     * From $from, walk forward to the first blank/sentence boundary at or before
-     * $to. Returns $to when no boundary is found in range.
-     */
-    private static function retreatToBoundary(string $body, int $from, int $to): int
-    {
-        for ($i = $from; $i < $to; $i++) {
-            if (self::isSnippetBreak(mb_substr($body, $i, 1))) {
-                return $i;
-            }
-        }
-        return $to;
-    }
-
-    private static function advanceToBoundary(string $body, int $from, int $to): int
-    {
-        for ($i = $to - 1; $i >= max($from, 0); $i--) {
-            if (self::isSnippetBreak(mb_substr($body, $i, 1))) {
-                return $i;
-            }
-        }
-        return $to;
-    }
-
-    private static function isSnippetBreak(string $ch): bool
-    {
-        // 空白与句读都可作为断点：保留换行即保留 Markdown 列表结构
-        return trim($ch) === '' || in_array($ch, ['。', '！', '？', '；', '.', '!', '?', ';'], true);
+        return SnippetExtractor::extract($body, $terms);
     }
 
     /**
      * Split a query into distinct non-empty terms on whitespace and punctuation.
      *
-     * CJK runs of 3+ characters are additionally exploded into overlapping
-     * bigrams (数据包导致失败 → 数据/据包/包导/...): there is no CJK word
-     * segmentation, so the original run as a single LIKE term almost never
-     * matches; bigrams let the OR-fallback rank documents by how many
-     * fragments they contain, which correlates well with relevance.
+     * 委托 LexicalIndex::splitTerms；保留本静态方法是因为既有测试与调用方
+     * 通过反射/直调使用它（语义不变）。
      *
      * @param string $query
      * @return array<int, string>
      */
     private static function splitTerms(string $query): array
     {
-        $terms = preg_split('/[\s,，、;；:：.。!！?？\t]+/u', $query);
-        if ($terms === false) {
-            return [];
-        }
-
-        $terms = array_values(array_unique(array_filter(array_map('trim', $terms), fn($t) => $t !== '')));
-
-        $withBigrams = [];
-        foreach ($terms as $term) {
-            $withBigrams[] = $term;
-            if (preg_match_all('/[\x{4e00}-\x{9fff}]{2,}/u', $term, $runs) !== 0) {
-                foreach ($runs[0] as $run) {
-                    $len = mb_strlen($run);
-                    if ($len < 3) {
-                        continue;
-                    }
-                    for ($i = 0; $i + 2 <= $len; $i++) {
-                        $withBigrams[] = mb_substr($run, $i, 2);
-                    }
-                }
-            }
-        }
-
-        return array_values(array_unique($withBigrams));
+        return LexicalIndex::splitTerms($query);
     }
 
     /**
