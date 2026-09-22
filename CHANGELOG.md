@@ -1,5 +1,36 @@
 # Changelog
 
+## 1.8.1-beta.1 — PreRelease (2026-09-22)
+
+### 预发布说明
+
+本版本为 v1.8.1 功能冻结前的公开预发布，包含 LogAgent 完整化改造全部成果，
+供社区提前测试。API 与数据库 schema 保持向后兼容，生产环境请继续使用 v1.8.0。
+
+### 核心变更
+
+- **LogAgent 完整化改造（重大重构）**：
+  - God Class 拆解：原 LogAgent.php 1316 行拆分为 20+ 单一职责组件，最大文件 ≤ 350 行
+  - `AgentRuntime`：独立多轮 tool loop 引擎，分层停止条件（轮次上限 / 检索预算 / 上下文窗口）
+  - `PromptBuilder`：提示词模板化与版本化，支持 quick / deep / launcher 分析模式切换
+  - `ToolRegistry` + `ToolInterface`：工具统一注册与分发，新增工具只需一个类 + 一行注册
+  - `ToolSession` 增强：富会话状态（工具调用链 / 已核实事实 / 锚定行 / token 预算）
+  - `LogWindowManager`：动态日志窗口（锚点扩散 + 窗口压缩），多轮过程中持续聚焦崩溃区域
+  - `ResultValidator`：结论结构化验证（工具证据链 / 未核实声明标注 / 来源可追溯性）
+  - `AnalysisScorer`：分析质量自动评分（工具效率 / 证据充分性 / 结论明确性，0-100）
+  - `AnalysisTracer`：完整链路可观测（每轮调用 / 工具耗时 / 错误 / 最终指标可导出 JSON）
+  - `AIClientGateway` + `LlmGateway`：LLM 调用统一网关，支持多 provider 故障转移
+  - `LlmStreamHandler`：流式响应标准化处理
+  - 薄委托层保留：LogAgent 原有反射测试与外部接口 100% 兼容，SSE 逐帧输出与改造前一致
+
+### 代码质量
+
+- 新增 4 个 Pest 单测文件，覆盖 ToolRegistry / AgentRuntime / PromptBuilder / 工具重试降级
+- PHPStan Level 5 无新错误
+- 总代码量：30,315 行 PHP / 193 文件（净增 +3,035 行 / +44 文件）
+
+---
+
 ## 1.8.0 — 2026-09-21
 
 ### 重大架构演进与新特性
