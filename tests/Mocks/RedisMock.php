@@ -521,6 +521,8 @@ class RedisMock
                     'name' => $gname,
                     'consumers' => count(array_unique(array_column($g['pending'], 'consumer'))),
                     'pending' => count($g['pending']),
+                    // Redis 7.0+ 的 XINFO GROUPS 字段：组自创建以来累计投递条数
+                    'entries-read' => $g['delivered'],
                     'last-delivered-id' => $g['delivered'] > 0 && isset(self::$streams[$key][$g['delivered'] - 1])
                         ? self::$streams[$key][$g['delivered'] - 1]['id']
                         : '0-0',
