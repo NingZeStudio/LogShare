@@ -61,140 +61,39 @@ class AIClient
                 $ch = null;
                 try {
                     $payload = self::buildPayload($messages, $config['model'], $tools);
-                    $buffer = '';
-                    $fullContent = '';
-                    $fullReasoning = '';
-                    $toolCalls = [];
-                    $lastToolCallIndex = null;
                     $responseBody = '';
                     $rawBody = '';
+
+                    $parser = new SseParser(
+                        function (string $delta) use (&$emitted, $onDelta): void {
+                            $emitted = true;
+                            $onDelta($delta);
+                        },
+                        function (string $reasoning) use (&$emitted, $onReasoning): void {
+                            $emitted = true;
+                            $onReasoning($reasoning);
+                        }
+                    );
 
                     $ch = curl_init($config['baseUrl']);
                     curl_setopt_array($ch, self::curlOptions($payload, $apiKey, $config['timeout'], $config['headers'] ?? []));
                     curl_setopt($ch, CURLOPT_RETURNTRANSFER, false);
-                $writeCallback = function ($ch, $data) use (
-                    &$buffer,
-                    &$fullContent,
-                    &$fullReasoning,
-                    &$toolCalls,
-                    &$responseBody,
-                    &$rawBody,
-                    &$emitted,
-                    &$lastToolCallIndex,
-                    $onDelta,
-                    $onReasoning
-                ) {
-                    $bytesReceived = strlen($data);
-                    $buffer .= str_replace(["\r\n", "\r"], "\n", $data);
+                    curl_setopt($ch, CURLOPT_WRITEFUNCTION, function ($ch, $data) use (&$responseBody, &$rawBody, $parser): int {
+                        if (strlen($responseBody) < 8192) {
+                            $responseBody .= $data;
+                        }
+                        if (strlen($rawBody) < self::MAX_RAW_BODY_BYTES) {
+                            $rawBody .= $data;
+                        }
 
-                    if (strlen($responseBody) < 8192) {
-                        $responseBody .= $data;
+                        return $parser->feed($data);
+                    });
+                    curl_exec($ch);
+                    if ($parser->hasPending()) {
+                        $parser->feed("\n");
                     }
-                    if (strlen($rawBody) < self::MAX_RAW_BODY_BYTES) {
-                        $rawBody .= $data;
-                    }
-
-                    while (($pos = strpos($buffer, "\n")) !== false) {
-                        $line = rtrim(substr($buffer, 0, $pos), "\r");
-                        $buffer = substr($buffer, $pos + 1);
-
-                        // 兼容「data: {json}」与「data:{json}」两种分隔风格
-                        if (str_starts_with($line, 'data: ')) {
-                            $lineData = substr($line, 6);
-                        } elseif (str_starts_with($line, 'data:')) {
-                            $lineData = substr($line, 5);
-                        } else {
-                            continue;
-                        }
-
-                        $trimmedData = trim($lineData);
-
-                        if ($trimmedData === '[DONE]') {
-                            return $bytesReceived;
-                        }
-
-                        $parsed = json_decode($lineData, true);
-                        if (!is_array($parsed)) {
-                            continue;
-                        }
-
-                        // 部分网关以 HTTP 200 + 流内 error 帧报告失败（如上下文
-                        // 超限、模型路由失败），必须显式失败换 key 重试，而不是
-                        // 静默忽略导致「空流假成功」
-                        if (isset($parsed['error'])) {
-                            $message = is_array($parsed['error'])
-                                ? ($parsed['error']['message'] ?? json_encode($parsed['error'], JSON_UNESCAPED_UNICODE))
-                                : (string) $parsed['error'];
-                            throw new \Exception('上游 API 流式错误：' . $message);
-                        }
-
-                        $delta = $parsed['choices'][0]['delta'] ?? [];
-
-                        if (isset($delta['content']) && is_string($delta['content'])) {
-                            $fullContent .= $delta['content'];
-                            $emitted = true;
-                            $onDelta($delta['content']);
-                        }
-
-                        if (isset($delta['reasoning_content']) && is_string($delta['reasoning_content'])) {
-                            $fullReasoning .= $delta['reasoning_content'];
-                            $emitted = true;
-                            $onReasoning($delta['reasoning_content']);
-                        }
-
-                        if (isset($delta['tool_calls']) && is_array($delta['tool_calls'])) {
-                            foreach ($delta['tool_calls'] as $toolCall) {
-                                // index 归属：正规流携带 index 直接用；部分网关省略 index，
-                                // 此时以「新 id 或新 name」判定开启新桶，纯 arguments 分片
-                                // 归属最近打开的桶，避免多个并行调用被串接到同一桶。
-                                $index = isset($toolCall['index']) && is_numeric($toolCall['index'])
-                                    ? (int) $toolCall['index']
-                                    : null;
-                                if ($index === null) {
-                                    if (!empty($toolCall['id']) || !empty($toolCall['function']['name'])) {
-                                        $index = count($toolCalls);
-                                    } else {
-                                        $index = $lastToolCallIndex ?? 0;
-                                    }
-                                }
-                                $lastToolCallIndex = $index;
-
-                                if (!isset($toolCalls[$index])) {
-                                    $toolCalls[$index] = [
-                                        'id' => null,
-                                        'type' => 'function',
-                                        'name' => null,
-                                        'arguments' => '',
-                                    ];
-                                }
-                                // 注意：部分网关的后续分片会携带空字符串的 id/name，
-                                // isset('') 为 true，不能直接覆盖首片的真实值
-                                if (!empty($toolCall['id'])) {
-                                    $toolCalls[$index]['id'] = $toolCall['id'];
-                                }
-                                if (
-                                    isset($toolCall['function']['name'])
-                                    && $toolCall['function']['name'] !== ''
-                                ) {
-                                    $toolCalls[$index]['name'] = $toolCall['function']['name'];
-                                }
-                                if (isset($toolCall['function']['arguments'])) {
-                                    $toolCalls[$index]['arguments'] .= $toolCall['function']['arguments'];
-                                }
-                            }
-                        }
-                    }
-
-                    return strlen($data);
-                };
-
-                curl_setopt($ch, CURLOPT_WRITEFUNCTION, $writeCallback);
-                curl_exec($ch);
-                if ($buffer !== '') {
-                    $writeCallback($ch, "\n");
-                }
-                $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-                $curlError = curl_error($ch);
+                    $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+                    $curlError = curl_error($ch);
 
                 if (!empty($curlError)) {
                     throw new \Exception('连接 AI API 失败：' . $curlError);
@@ -216,7 +115,7 @@ class AIClient
 
                 // 空完成检测：既无正文也无工具调用也无思维链 = 上游异常。视为
                 // 失败，换 key 重试或向上抛错，而不是给客户端一个空分析。
-                if (trim($fullContent) === '' && $toolCalls === [] && trim($fullReasoning) === '') {
+                if (!$parser->hasContent() && !$parser->hasAnyToolCallBuckets() && !$parser->hasReasoning()) {
                     // 非流式回退：部分网关在大上下文/工具循环下会忽略 stream=true，
                     // 以 HTTP 200 返回一次性 JSON；按行 SSE 解析拿不到任何 data: 行。
                     $fallback = self::extractNonStreamingResult($rawBody);
@@ -225,17 +124,12 @@ class AIClient
                         if ($fbReasoning !== '') {
                             $emitted = true;
                             $onReasoning($fbReasoning);
-                            $fullReasoning = $fbReasoning;
                         }
                         if ($fbContent !== '') {
                             $emitted = true;
                             $onDelta($fbContent);
-                            $fullContent = $fbContent;
                         }
-                        if ($fbToolCalls !== []) {
-                            $emitted = true;
-                            $toolCalls = $fbToolCalls;
-                        }
+                        $parser->absorb($fbReasoning, $fbContent, $fbToolCalls);
                     } else {
                         // 留存响应体头部片段，便于定位上游到底回了什么
                         $bodyHead = substr($responseBody, 0, 512);
@@ -253,17 +147,11 @@ class AIClient
                 }
 
                 $success = true;
-                // 防御：部分网关的分片中 name 可能为空、arguments 可能缺省，
-                // 空 name 的 tool_call 回传给上游会被 400 拒绝（name cannot be empty）
-                $toolCalls = array_values(array_filter($toolCalls, fn($c) => !empty($c['name'])));
-                foreach ($toolCalls as &$call) {
-                    if ($call['arguments'] === '') {
-                        $call['arguments'] = '{}';
-                    }
-                }
-                unset($call);
-                $onToolCalls($toolCalls, $fullReasoning);
-                $onDone($fullContent, !empty($toolCalls));
+                // 归并收尾：SseParser 已产出文本/思维链，tool_calls 已完成空 name 过滤与
+                // arguments 归一（回传上游 400 防御），统一收敛为 ChatResponse 值对象
+                $response = new ChatResponse($parser->fullContent(), $parser->fullReasoning(), $parser->toolCalls());
+                $onToolCalls($response->toolCalls, $response->reasoning);
+                $onDone($response->content, $response->hasToolCalls());
                 break 2;
 
             } catch (\App\Exception\ClientDisconnectedException $e) {
@@ -288,7 +176,7 @@ class AIClient
                 }
                 break;
             } finally {
-                $writeCallback = null;
+                // 释放 curl 句柄：写回调以字面量登记、未捕获 $ch，句柄销毁即回收回调
                 $ch = null;
             }
             }
@@ -408,17 +296,7 @@ class AIClient
 
     private static function buildPayload(array $messages, string $model, array $tools): array
     {
-        $payload = [
-            'model' => $model,
-            'stream' => true,
-            'messages' => $messages,
-        ];
-
-        if (!empty($tools)) {
-            $payload['tools'] = $tools;
-        }
-
-        return $payload;
+        return (new ChatRequest($model, $messages, $tools))->toPayload();
     }
 
     private static function curlOptions(array $payload, string $apiKey, int $timeout, array $customHeaders = []): array
