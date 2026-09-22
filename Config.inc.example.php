@@ -167,6 +167,12 @@ return [
                 'enabled' => false,
                 'maxCandidates' => 30,
             ],
+            // 查询预处理：LLM 把中文症状查询扩写出英文异常类名/关键词喂给
+            // FTS 通道；规则分类对无显式 topic 的检索做目录偏置提权（分类偏置
+            // 随本开关启用）。关闭时检索路径逐字节不变。
+            'queryRewrite' => [
+                'enabled' => false,
+            ],
         ],
         'mcp' => [
             'webSearch' => [

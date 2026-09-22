@@ -356,14 +356,32 @@ class RagSearch
 
         // 防御性二次归一化（幂等）：控制器已校验过，直接内部调用同样生效
         $topic = self::normalizeTopic($topic);
+        $originalQuery = $query;
+
+        // 查询预处理（ai.rag.queryRewrite.enabled，默认关闭 → 逐字节不变）：
+        // 改写只喂给检索通道，embed/缓存仍用原查询；分类偏置只在无显式
+        // topic 时生效，模型圈定的目录优先级高于规则猜测。
+        $pre = ['query' => $query, 'weights' => [], 'rewritten' => false];
+        if (QueryPreProcessor::enabled()) {
+            $pre = QueryPreProcessor::preprocess($query);
+        }
 
         // 候选池：语义精排前多召回一些；纯词法路径仍只输出 k 条
         $pool = max(20, $k * 4);
 
-        $results = (new LexicalIndex($this->pdo))->search($query, self::splitTerms($query), $pool, $topic);
+        $results = (new LexicalIndex($this->pdo))->search($pre['query'], self::splitTerms($pre['query']), $pool, $topic);
 
         // Semantic enhancement: vector recall is primary, lexical results supplement it.
-        return $this->applySemanticEnhancement($query, $results, $k, $topic);
+        // 语义召回与结果缓存锚定原始查询（改写词只服务词法通道）。分类偏置生效时
+        // 扩大语义截断量到 pool、偏置后再截 k；默认路径仍按 k 截断，缓存键不变。
+        $biasable = $topic === null && $pre['weights'] !== [];
+        $final = $this->applySemanticEnhancement($originalQuery, $results, $biasable ? $pool : $k, $topic);
+
+        if ($biasable) {
+            $final = QueryPreProcessor::applyTopicBias($final, $pre['weights']);
+        }
+
+        return array_slice($final, 0, $k);
     }
 
     /**
