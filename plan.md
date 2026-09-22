@@ -1,67 +1,85 @@
-# LogAgent 完整化改造 — 技术报告与开发计划
+# RAG 架构扩展 — 技术报告与开发计划
 
-> 基于 LogShare v1.7.8 代码审查，对 AI 分析核心模块（LogAgent）进行结构化重构与能力增强。
+> 基于 LogShare 当前代码与知识库审计，对 RAG 检索层进行能力增强与架构升级。
+> 上一阶段 LogAgent 完整化改造已合并（commit `dfca4fe`），本计划承接后续。
 
 ---
 
 ## 一、现状诊断
 
-### 1.1 代码分布
+### 1.1 当前架构
 
-| 文件 | 行数 | 职责 |
-|---|---|---|
-| `app/Agent/LogAgent.php` | 1316 | 工具定义、系统提示词、多轮 tool loop、缓存锁、SSE 发射、日志窗口、grep/read、截断 |
-| `app/Agent/ToolSession.php` | 43 | 会话状态（仅 4 个计数器 + 已读文件标记） |
-| `app/Client/AIClient.php` | 580 | LLM 流式调用、SSE 解析、多 key 轮询、非流式回退 |
-| `app/Client/MCPClient.php` | 237 | MCP 协议 HTTP 转发 |
-| `app/Ai/AnalysisQueue.php` | 364 | 队列入队/出队/中继 |
-| `app/Process/AiQueueConsumer.php` | 327 | 队列消费者进程 |
-| **合计** | **~2,867** | |
+```
+rag/knowledge/         332KB / 1,150 个 Markdown 文件
+    ├── 日志分析/        42 个结构化报错条目（KB 编号）
+    ├── patterns/       13 个故障模式
+    ├── mobile_launcher/ 启动器常识（2 个文件）
+    ├── format/         3 个日志格式指南
+    ├── android-native-lib/ 原生库加载问题（2 个文件）
+    ├── tools/          测试样例
+    ├── zl_about/       站点运营信息（3 个文件）
+    └── zl_announcement/ 站点公告（1 个文件）
 
-### 1.2 核心问题
+app/Rag/
+    ├── RagSearch.php       932 行 — FTS5 BM25 + CJK bigram LIKE + 向量语义
+    ├── RagManager.php      543 行 — 构建/CRUD/统计/Admin API
+    └── SemanticClient.php  203 行 — 多 provider embedding 故障转移
 
-**（1）God Class：LogAgent.php 1316 行什么都干**
+app/Client/
+    └── MCPClient.php       237 行 — MCP 协议 HTTP 传输
 
-`buildTools()` 手写了 300+ 行 JSON Schema 字符串（工具定义）；`buildMessages()` 内嵌 200+ 行系统提示词 heredoc；多轮 tool loop、缓存锁、SSE 发射、日志窗口定位、grep/read 文件操作、结果截断——全部塞在一个静态类里。新增工具需要改这个方法，改提示词也在这个文件里，两个不相关的改动容易冲突。
+app/Command/
+    └── RagBuildCommand.php  61 行 — CLI 重建索引
 
-**（2）ToolSession 是空壳**
+app/Controller/
+    └── RagController.php   275 行 — Admin Web CRUD
+```
 
-43 行代码只记了 `readFiles`（防重复读取）、`ragSearchCalls` / `webSearchCalls` / `githubSearchCalls` / `githubDetailCalls` 四个计数器。没有对话历史摘要、没有工具调用链记录、没有置信度追踪、没有 token 预算管理。
+### 1.2 做得好的部分
 
-**（3）提示词不可维护**
+- **RagSearch 双路检索扎实**：FTS5 porter unicode61 分词 + prefix 匹配；CJK 3+ 字切成 overlapping bigram 做 LIKE fallback；语义向量可选补充；进程级 FIFO 缓存 64 条/1MB
+- **语义层多 provider 故障转移**：按配置顺序重试，跳过无 apiKey 的 provider，支持不同 gateway 的模型名差异
+- **索引构建原子化**：写临时库 → rename，构建失败不破坏线上索引
+- **知识库 CRUD 有安全边界**：路径遍历防护、扩展名白名单、原子写入、Admin 脱敏
+- **分块按 H2 Heading 切割**：保留 H1 标题前缀，短块（≤1600 字）整段返回保结构，长块做命中词为中心 ±800 字符窗口 + 句读边界回退
 
-系统提示词是 `buildMessages()` 方法内的 heredoc 字符串，硬编码拼接。无法版本化、无法 A/B 测试、无法按分析模式切换（快速/深度/启动器排障）。每次调整提示词都要翻 1,316 行文件找位置。
+### 1.3 核心短板
 
-**（4）没有 Tool Registry**
+**（1）RagSearch 932 行一人扛全部**
 
-工具定义直接在 `buildTools()` 里手写数组。没有统一注册机制、没有参数校验层、没有调用分发抽象。新增一个工具要复制粘贴一大段数组结构。
+分块、FTS5、LIKE fallback、向量扫描、snippet 提取、topics 管理全在一个类里。新增分块策略需要改 932 行文件， rerank 逻辑无处安放。
 
-**（5）没有结果验证层**
+**（2）检索管道是"顺序单次"而非"多路融合"**
 
-模型输出结论后直接 SSE 发回客户端。没有结构化校验：结论是否有工具调用支撑？未核实声明是否被标注？引用来源是否可追溯？
+当前 `BM25 → LIKE fallback → 向量补充` 是串行管道，不是并行召回 + 融合精排。BM25 和向量的 top-k 结果简单 merge，没有 rerank，高相关文档可能被低相关文档挤出 top-n。
 
-**（6）没有置信度/质量评分**
+**（3）查询侧没有预处理**
 
-分析完成就完了。低质量分析（如工具调用循环、结论空洞、证据不足）和高质量分析在输出层面没有区别。
+用户的查询（实际是 LLM 生成的检索词）直接送入检索。没有查询改写、没有分类路由、没有停用词过滤、没有同义词扩展。中文口语化查询（如"进世界就闪退"）命中率低。
 
-**（7）日志窗口一次性预扫描**
+**（4）Chunking 策略单一**
 
-`buildInitialLogWindow()` 只在分析开始时做一次预扫描。多轮 tool call 过程中模型 grep/read 到的新锚点不会被纳入窗口调整，后期上下文可能脱离实际崩溃区域。
+只有按 `##` Heading 切分。问题：
+- 超长 H2 section 不会被二次切分，单个 chunk 可能数千字
+- 没有 overlap：相邻 chunk 边界处的上下文丢失
+- 没有 token-aware 切分：按字符数而非 token 数判断 chunk 大小
+- 没有层级化 parent-child 结构
 
-**（8）异常恢复粗放**
+**（5）Embedding 层薄**
 
-单轮工具调用失败只返回错误字符串。没有重试策略、没有 fallback 工具链（rag_search 无结果 → web_search → 标记未核实）、失败的工具不阻塞后续轮次。
+SemanticClient 只做了基础 `POST /embeddings`。缺少：查询向量缓存、batch size 自适应、维度自动探测、本地 embedding provider 支持。构建时 embed 一次，查询时全量扫描向量表（LIMIT 5000），知识库变大后查询延迟会上升。
 
-**（9）静态方法堆砌**
+**（6）没有增量索引**
 
-LogAgent、AIClient、GitHubClient 几乎全是 `public static function`，没有依赖注入，没有接口契约。单元测试需要静态 mocking 或全局状态重置，测试成本高。
+`rag:build` 每次都全量重建。知识库从 1,150 个文件涨到 5,000+ 时构建时间会显著变长。新增/修改单个文档需要全量 rebuild，Admin 在线编辑后无法热更新索引。
 
-### 1.3 做得好的部分
+**（7）MCP 只有 HTTP 短轮询**
 
-- **AIClient 的 SSE 解析**处理了各种边界情况：空流检测、非流式回退、多网关兼容（index 缺失时的分片归属）、流内 error 帧识别
-- **GitHubClient** 的多 Token 轮询 + 速率感知 + Redis 缓存 + 水帖过滤功能完整
-- **Log 模型的缓存墓碑**和 **LRU 分析缓存**（32 条/32MB 预算）考虑到了 Swoole 常驻进程内存特性
-- **RagSearch 的双路检索**（FTS5 BM25 + CJK bigram LIKE fallback + 可选向量语义）实现扎实
+MCPClient 每次调用都是独立的 HTTP POST + 握手。多轮 tool call 场景下重复握手 overhead 明显，且没有连接级缓存。
+
+**（8）没有检索可观测性**
+
+不知道用户查询了什么、哪些命中了、哪些没命中、各阶段耗时多少、embedding API 花了多少钱。没有慢查询日志，没有命中率统计。
 
 ---
 
@@ -70,403 +88,338 @@ LogAgent、AIClient、GitHubClient 几乎全是 `public static function`，没�
 ### 2.1 架构目标
 
 ```
-LogAgent.php          →  精简入口（~100 行），只做编排
-AgentRuntime.php      →  多轮循环 + 停止条件 + 会话生命周期
-PromptBuilder.php     →  提示词模板组装（可版本化、可切换模式）
-ToolRegistry.php      →  工具注册、发现、参数校验、调用分发
-Tool/                 →  每个工具一个类，实现 ToolInterface
-ToolSession.php       →  富会话状态（调用链、置信度、token 预算）
-LogWindowManager.php  →  动态日志窗口（锚点扩散）
-ResultValidator.php   →  结论结构化验证
-AnalysisScorer.php    →  分析质量评分
-AnalysisTracer.php    →  完整链路追踪（可观测性）
+app/Rag/
+├── Chunker.php               # 分块策略（Heading / 滑动窗口 / token-aware）
+├── Chunk.php                 # Chunk 值对象
+├── LexicalIndex.php          # FTS5 + LIKE 检索（从 RagSearch 抽出）
+├── VectorIndex.php           # 向量扫描 + 余弦相似度（从 RagSearch 抽出）
+├── SnippetExtractor.php      # 片段提取与截断（从 RagSearch 抽出）
+├── RetrievalPipeline.php     # 多路召回 → merge → rerank（新）
+├── RagSearch.php             # 精简为门面（~150 行）
+├── RagManager.php            # 增强：增量索引、热更新
+├── SemanticClient.php        # 增强：查询缓存、batch 自适应、本地 provider
+└── SemanticCache.php         # 查询向量缓存（新）
+
+app/Rag/Rerank/
+├── RerankInterface.php
+├── LLMReranker.php           # 用 LLM 做 pairwise rerank
+└── NoopReranker.php          # 关闭 rerank 时的直通
+
+app/Agent/Tool/
+└── RagSearchTool.php         # 增强：注入查询改写与 rerank 能力
 ```
 
 ### 2.2 能力目标
 
-1. **可维护性**：最大文件 ≤ 350 行，新增工具无需修改 Agent 主体
-2. **可观测性**：完整分析链路可追溯、可调试、可度量
-3. **可靠性**：工具调用重试 + fallback 链，单点失败不阻塞整体分析
-4. **质量**：结论结构化输出，含置信度评分和证据链
-5. **动态性**：提示词可配置切换、可 A/B 测试、可热更新
+1. **检索质量**：多路召回 + rerank，top-k 准确率预期提升 30-50%
+2. **查询鲁棒性**：查询改写 + 分类路由，口语化/模糊查询命中率显著提升
+3. **分块质量**：滑动窗口 overlap + token-aware 切分，边界上下文丢失减少
+4. **构建效率**：增量索引，单文档热更新，Admin 编辑后秒级生效
+5. **查询成本**：embedding 查询缓存，重复查询零 API 调用
+6. **可观测性**：完整检索链路埋点，慢查询日志，命中率统计
 
 ---
 
 ## 三、详细设计
 
-### 3.1 PromptBuilder — 提示词模板管理层
+### 3.1 分块策略升级（Chunker）
 
-**问题**：当前系统提示词是 heredoc 硬编码在 `buildMessages()` 中，与业务逻辑耦合。
+**现状**：只有按 `##` Heading 切分。
 
-**设计**：
+**新增三种分块策略，可配置叠加**：
 
 ```php
-final class PromptBuilder
+final class Chunker
 {
-    // 模板片段（可独立维护、可配置注入）
-    private const FRAGMENTS = [
-        'core'          => '核心身份与输出规范',
-        'retrieval'     => '检索策略与预算规则',
-        'github'        => 'GitHub 排障指引',
-        'modloader'     => 'ModLoader 开发文档比对思维链',
-        'mobile'        => '移动端启动器常识',
-        'stop'          => '停止规则',
-        'citation'      => '引用规范',
-    ];
+    /** 按 H2 Heading 切分（保留，作为基础策略） */
+    public static function byHeading(string $source, string $content): array;
 
-    // 分析模式
-    public const MODE_QUICK    = 'quick';     // 快速分析：1-2 轮，主要靠 Codex
-    public const MODE_DEEP     = 'deep';      // 深度分析：启用全部工具
-    public const MODE_LAUNCHER = 'launcher';  // 启动器排障：优先 GitHub 工具链
+    /** 滑动窗口切分：固定 chunkSize + overlap 比例 */
+    public static function bySlidingWindow(string $content, int $chunkSize = 1000, int $overlap = 150): array;
 
-    // 组装提示词
-    public function build(string $mode, array $context): string;
-    
-    // 动态注入 topic 地图
-    public function withTopics(string $topicsMap): self;
-    
-    // 版本化（支持 A/B 测试）
-    public function withVersion(string $version): self;
+    /** Token-aware 切分：按估算 token 数切割，避免超长上下文 */
+    public static function byToken(string $content, int $maxTokens = 512, int $overlapTokens = 64): array;
+
+    /** 组合策略：Heading 切分为主，超长 chunk 自动降级为滑动窗口二次切分 */
+    public static function chunk(string $source, string $content, ChunkStrategy $strategy): array;
+}
+
+enum ChunkStrategy {
+    case HEADING_ONLY;      // 仅按 H2 切分（当前行为，默认）
+    case SLIDING_WINDOW;    // 纯滑动窗口
+    case TOKEN_AWARE;       // 按 token 数切分
+    case HYBRID;            // Heading 为主，超长 chunk 二次切分（推荐）
 }
 ```
 
-**模式差异**：
+**关键细节**：
+- `HYBRID` 模式：先按 Heading 切分，如果某个 chunk 超过 `maxTokens`（如 1024），对该 chunk 内部再用滑动窗口二次切分，并标记 parent chunk id，形成 parent-child 层级结构
+- 每个 Chunk 值对象携带：`source`（文件路径）、`title`、`body`、`startOffset`、`endOffset`、`parentId`（如有）、`tokenCount`
+- 构建索引时 chunk 元数据存入 SQLite 的 `chunks` 表（新增），方便后续增量更新做 mtime 比对
 
-| 模式 | 工具集 | 轮次上限 | 检索预算 |
-|---|---|---|---|
-| quick | 无（仅 Codex） | 1 | 0 |
-| deep | 全部 | 50 | web≤5, total≤6 |
-| launcher | GitHub + RAG | 20 | web≤3, github≤5, total≤6 |
+### 3.2 检索管道重構（RetrievalPipeline）
 
-### 3.2 ToolRegistry + ToolInterface — 工具统一注册与分发
+**现状**：`RagSearch::search()` 内部串行执行 BM25 → LIKE → 向量，简单 merge。
 
-**问题**：当前工具定义在 `buildTools()` 中手写数组，新增工具需要复制粘贴大段结构。
-
-**设计**：
+**新设计：并行召回 + 融合精排**
 
 ```php
-interface ToolInterface
-{
-    public function name(): string;
-    public function schema(): array;           // OpenAI function calling schema
-    public function execute(array $args, ToolSession $session): string;
-    public function retryStrategy(): RetryStrategy;
-    public function fallbackTools(): array;    // 失败时 fallback 到哪些工具
-}
-
-abstract class AbstractTool implements ToolInterface
-{
-    // 默认重试：网络类 3 次（指数退避），本地类 1 次
-    public function retryStrategy(): RetryStrategy { ... }
-    public function fallbackTools(): array { return []; }
-}
-
-final class ToolRegistry
-{
-    // 注册工具
-    public function register(ToolInterface $tool): void;
-    
-    // 按名称查找
-    public function get(string $name): ?ToolInterface;
-    
-    // 获取全部 schema（传给 LLM）
-    public function getSchemas(array $names = null): array;
-    
-    // 执行工具（含重试 + fallback）
-    public function execute(string $name, array $args, ToolSession $session): ToolResult;
-}
-```
-
-**8 个工具拆分**：
-
-| 工具类 | 来源 | 行数预估 |
-|---|---|---|
-| `WebSearchTool` | 从 LogAgent::executeTool 拆分 | ~60 |
-| `RagSearchTool` | 从 LogAgent + RagSearch 拆分 | ~80 |
-| `ListTopicsTool` | 从 LogAgent::executeTool 拆分 | ~40 |
-| `ReadLogTool` | 从 LogAgent::readLogFile 拆分 | ~80 |
-| `GrepLogTool` | 从 LogAgent::grepLogFile 拆分 | ~80 |
-| `ListLogFilesTool` | 从 LogAgent 拆分 | ~40 |
-| `GithubSearchTool` | 从 GitHubClient 拆分 | ~100 |
-| `GithubDetailTool` | 从 GitHubClient 拆分 | ~100 |
-
-### 3.3 AgentRuntime — 多轮循环引擎
-
-**问题**：`LogAgent::analyze()` 的 for 循环里混了 SSE 发射、工具执行、消息组装、缓存写入，循环控制和副作用交织。
-
-**设计**：
-
-```php
-final class AgentRuntime
-{
-    public function run(
-        AgentContext $ctx,      // content, cacheKey, logId, emitter
-        ToolRegistry $tools,     // 工具集
-        PromptBuilder $prompt,   // 提示词
-        AnalysisTracer $tracer,  // 链路追踪
-    ): AnalysisResult;
-}
-
-final class AgentContext
+final class RetrievalPipeline
 {
     public function __construct(
-        public string $content,
-        public ?string $cacheKey,
-        public ?string $logId,
-        public AnalysisEmitter $emitter,
+        private readonly LexicalIndex $lexical,
+        private readonly VectorIndex $vector,
+        private readonly Reranker $reranker,
+        private readonly SnippetExtractor $snippets,
     ) {}
+
+    /**
+     * @param array{query: string, topic: string|null, k: int} $params
+     * @return array<int, ScoredChunk>
+     */
+    public function retrieve(array $params): array;
 }
 
-final class AnalysisResult
+final class ScoredChunk
 {
     public function __construct(
-        public string $fullAnswer,
-        public bool $success,
-        public int $rounds,
-        public array $toolCallChain,    // 完整工具调用链
-        public ?string $cacheKey,
-        public array $metrics,          // 耗时、token、工具调用统计
+        public readonly string $source,
+        public readonly string $title,
+        public readonly string $body,
+        public readonly float $lexicalScore,    // BM25 原始分
+        public readonly float $vectorScore,     // 余弦相似度
+        public readonly float $fusedScore,      // 融合后分数
+        public readonly int $rank,              // 最终排名
     ) {}
 }
 ```
 
-**循环控制逻辑**：
+**检索流程**：
 
 ```
-for round = 0 .. maxRounds:
-    1. 调用 LLM（传入 messages + tools schema）
-    2. 流式发射 content/reasoning 到 SSE
-    3. 收集 tool_calls
-    4. 若无 tool_calls → 完成（success = true），break
-    5. 若 tool_calls 中 name 为空 → 完成，break
-    6. 逐个执行 tool_call：
-       a. 从 ToolRegistry 获取工具
-       b. 带重试策略执行
-       c. 失败 → 尝试 fallback 工具
-       d. 截断结果 → 写入 messages
-       e. 记录到 ToolSession + AnalysisTracer
-    7. 检查停止条件：
-       - 已达 maxRounds → emitLimit, break
-       - token 预算耗尽 → emitLimit, break
-       - 检索预算耗尽 → 注入收敛提示，继续
+1. 查询预处理（QueryPreProcessor）
+   ├── 查询改写：LLM 将原始查询扩写为 2-3 个精准检索词
+   ├── 分类路由：判断查询类型（崩溃/模组/性能/网络），加权对应 topic
+   └── 停用词过滤 + 同义词扩展
+
+2. 多路并行召回（各取 top-20）
+   ├── BM25: FTS5 MATCH + prefix matching
+   ├── LIKE: CJK bigram fallback
+   └── 向量: 余弦相似度 top-20
+
+3. 融合（RRF — Reciprocal Rank Fusion）
+   score = Σ (1 / (k + rank_i))  ×  typeWeight
+   不用加权平均，RRF 对分数尺度不敏感，更适合融合不同排序体系
+
+4. Rerank（可选，配置开关）
+   ├── LLM Reranker: pairwise comparison，用 cheap 模型对 top-30 精排
+   └── NoopReranker: 跳过，直接用 RRF 融合分
+
+5. Snippet 提取
+   └── 对 top-k 结果提取围绕命中词的上下文片段
 ```
 
-**停止条件（分层）**：
+**RRF 融合优于简单加权平均的原因**：BM25 分和余弦相似度的数值范围不同（BM25 可能到 10+，余弦在 0-1 之间），加权平均对尺度敏感。RRF 只依赖排名位置，天然免疫尺度差异。
 
-| 条件 | 行为 |
+### 3.3 查询改写与分类路由（QueryPreProcessor）
+
+```php
+final class QueryPreProcessor
+{
+    /**
+     * 将原始查询扩写为更精准的检索词。
+     * 调用 LLM（cheap/fast 模型），prompt 非常轻量：
+     * "给定一个 Minecraft 日志排障查询，输出 2-3 个英文检索词
+     *  （异常类名、错误关键词），保留原文中的技术术语不变。
+     *   查询：{query}
+     *   检索词（逗号分隔）："
+     */
+    public function rewrite(string $query, string $mode = self::MODE_LIGHT): array;
+
+    /**
+     * 判断查询类型，返回 topic 权重映射。
+     * 用于检索时对不同 topic 的结果做加权偏置。
+     */
+    public function classify(string $query): array; // ['patterns' => 1.2, '日志分析' => 1.0, ...]
+}
+```
+
+**分类映射**：
+
+| 查询特征 | 加权 topic |
 |---|---|
-| 模型无 tool_calls | 正常完成 |
-| 轮次达到 maxRounds | 终止，标记超限 |
-| web_search 调用 ≥ MAX_WEB_SEARCH_CALLS | 注入收敛提示，继续但不允许更多 web_search |
-| 总检索调用 ≥ MAX_TOTAL_RETRIEVAL_CALLS | 注入收敛提示，继续但不允许更多检索 |
-| 模型输出"分析完成"/"根因已确定"等停止信号 | 正常完成 |
-| 上下文窗口即将耗尽 | 注入窗口压缩提示 |
+| 包含 Mixin/ClassNotFound/NoSuchMethod | patterns ×1.3, 日志分析 ×1.2 |
+| 包含 SIGSEGV/OOM/exit code | patterns ×1.3 |
+| 包含 闪退/崩溃/卡死（中文） | patterns ×1.2, 日志分析 ×1.2 |
+| 包含 FCL/Pojav/Amethyst/MobileGlues | mobile_launcher ×1.5 |
+| 包含 Fabric/Forge/NeoForge/Quilt | 日志分析 ×1.3 |
+| 包含 世界加载/chunk/NBT | patterns ×1.2 |
+| 包含 网络/ConnectException/Timeout | 日志分析 ×1.1 |
 
-### 3.4 ToolSession 增强 — 富会话状态
+### 3.4 Reranker — 精排层
 
-**当前**：43 行，4 个计数器 + readFiles 数组。
-
-**增强后**：
-
-```php
-final class ToolSession
-{
-    // 已有
-    public array $mcpClients = [];
-    public array $readFiles = [];
-    public int $ragSearchCalls = 0;
-    public int $webSearchCalls = 0;
-    public int $githubSearchCalls = 0;
-    public int $githubDetailCalls = 0;
-
-    // 新增
-    public array $toolCallChain = [];        // 工具调用链 [{round, name, args, result, duration, verified}]
-    public array $verifiedFacts = [];        // 已核实的事实集合
-    public array $anchoredLines = [];        // 日志中已锚定的行号区间
-    public int $estimatedTokens = 0;         // 估算已用 token 数
-    public array $logWindowSummary = '';     // 当前日志窗口摘要（动态更新）
-    public ?float $confidence = null;        // 整体置信度（分析完成后填充）
-}
-```
-
-### 3.5 LogWindowManager — 动态日志窗口
-
-**问题**：当前 `buildInitialLogWindow()` 只在开始时做一次预扫描。模型后续 grep/read 到的新锚点不会反馈到窗口。
-
-**设计**：
+**LLM-based Pairwise Reranker**：
 
 ```php
-final class LogWindowManager
-{
-    // 初始窗口：基于异常信号预扫描（已有逻辑保留）
-    public function buildInitialWindow(string $content): LogWindow;
-    
-    // 动态扩展：每轮 tool call 后，如果模型 grep/read 到了新锚点，
-    // 向上下游扩展形成完整因果链视图
-    public function expandWithAnchors(LogWindow $window, array $newAnchors): LogWindow;
-    
-    // 窗口压缩：接近 token 预算时，收缩到已锚定的高价值区域
-    public function compress(LogWindow $window, int $targetTokens): LogWindow;
-    
-    // 生成窗口摘要（注入到下一轮 system prompt）
-    public function summary(LogWindow $window): string;
-}
-```
-
-**锚点扩散算法**：
-- 输入：模型 grep 到的异常行号
-- 扩展：向上游找堆栈入口（`at x.x.x` / `Caused by`），向下游找崩溃点（`[Server thread/ERROR]` / `SIGSEGV` / `exit code`）
-- 形成连续行区间，标记为"已检查区域"
-- 下一轮 prompt 中注入："以下区域已检查：行 120-180 无异常；行 240-310 发现 Mixin 注入失败"
-
-### 3.6 ResultValidator — 结论结构化验证
-
-```php
-final class ResultValidator
-{
-    public function validate(string $answer, ToolSession $session): ValidationResult;
-}
-
-final class ValidationResult
+final class LLMReranker implements Reranker
 {
     public function __construct(
-        public bool $hasToolEvidence,       // 结论是否有工具调用支撑
-        public array $unverifiedClaims,      // 未核实的声明列表
-        public array $sourceTraceability,    // 引用来源可追溯性
-        public array $structuredOutput,      // {rootCause, confidence, evidence[], steps[]}
+        private readonly AIClientGateway $gateway,
+        private readonly int $maxCandidates = 30,
     ) {}
+
+    /**
+     * 对 candidates 做 pairwise comparison rerank。
+     * 调用 LLM 一次，传入 query + 全部候选，要求按相关性排序。
+     * 使用 cheap 模型（如已在配置的 minimax-m2.5-free），
+     * prompt 控制在 200 字以内，单次调用成本 < ¥0.001。
+     */
+    public function rerank(string $query, array $candidates): array;
 }
 ```
 
-**验证规则**：
-1. 如果模型下了"根因是 X"的结论，检查是否有对应的 tool_call 支撑
-2. 如果结论包含"可能是 X"，检查是否被标记为"未核实"
-3. 如果引用了 GitHub Issue/PR 编号，检查是否有对应的 `github_get_content` 调用
-4. 输出结构化 JSON，前端可以按"根因 / 证据 / 修复步骤"分栏展示
+**开关控制**：`ai.rag.rerank.enabled`（默认 false，确认有效后再开）。关闭时 RetrievalPipeline 直接用 RRF 融合分。
 
-### 3.7 AnalysisScorer — 质量评分
+### 3.5 Chunker 落地到构建流程
+
+`RagSearch::buildIndex()` 中的 chunking 逻辑替换为 `Chunker`：
 
 ```php
-final class AnalysisScorer
-{
-    public function score(AnalysisContext $ctx): Score;
-}
+// 旧逻辑（内联在 buildIndex 中）：
+foreach (self::chunkMarkdown($relative, $content) as $chunk) { ... }
 
-final class Score
-{
-    public function __construct(
-        public int $toolEfficiency,      // 0-100：工具调用是否高效（无冗余循环）
-        public int $evidenceSufficiency, // 0-100：证据是否充分
-        public int $conclusionClarity,   // 0-100：结论是否明确
-        public int $overall,             // 加权总分
-        public array $issues,            // 扣分项说明
-    ) {}
+// 新逻辑：
+$chunks = Chunker::chunk($relative, $content, ChunkStrategy::HYBRID);
+foreach ($chunks as $chunk) {
+    // chunk 携带 tokenCount，存入新增的 chunks 表
+    $insert->execute([$chunk->title, $chunk->body, $relative, $chunk->tokenCount]);
 }
 ```
 
-**评分触发**：
-- 分析完成后自动评分
-- 低分（< 60）触发 `AnalysisTracer` 记录，供管理员 review
-- 极低分（< 40）可选择自动重分析（更换 prompt 版本或调整 temperature）
+**新增 `chunks` 表**（与 `docs` 表并列）：
+```sql
+CREATE TABLE IF NOT EXISTS chunks (
+    rowid INTEGER PRIMARY KEY,
+    doc_rowid INTEGER,           -- 关联 docs.rowid
+    title TEXT,
+    body TEXT,
+    source TEXT,
+    token_count INTEGER,
+    parent_rowid INTEGER,        -- parent chunk rowid（如有）
+    FOREIGN KEY (doc_rowid) REFERENCES docs(rowid),
+    FOREIGN KEY (parent_rowid) REFERENCES chunks(rowid)
+);
+```
 
-### 3.8 AnalysisTracer — 链路可观测性
+### 3.6 增量索引（RagManager 增强）
+
+**新增方法**：
 
 ```php
-final class AnalysisTracer
+final class RagManager
 {
-    public function recordRound(int $round, array $messages, array $toolCalls, array $results, float $durationMs): void;
-    public function recordToolCall(string $name, array $args, string $result, float $durationMs, bool $retried): void;
-    public function recordError(string $stage, string $error): void;
-    public function export(): array;  // 完整 trace JSON
+    /** 增量重建：仅处理变更的文件（基于 mtime 比对） */
+    public static function incrementalBuild(string $knowledgeDir, ?SemanticClient $semantic): array;
+
+    /** 增量重建单个文档（Admin 编辑后热更新） */
+    public static function reindexDoc(string $relativePath, ?SemanticClient $semantic): array;
+
+    /** 获取需要更新的文件列表（mtime 与索引中记录不符） */
+    public static function getStaleFiles(string $knowledgeDir): array;
 }
 ```
 
-**Trace 结构**：
+**增量逻辑**：
+1. 读取现有 `index.db` 中 `chunks` 表的 `source_mtime` 字段
+2. 遍历知识库目录，比对文件 mtime
+3. 仅对 mtime 变更的文件执行 re-chunk + re-embed
+4. 删除已不存在的文件对应的 chunk
+5. 原子化 replace 变更的 chunk 行
+
+**Admin 热更新**：`RagController::saveDoc()` 写入文件后自动调用 `RagManager::reindexDoc()`，无需手动 `rag:build`。
+
+### 3.7 Embedding 增强（SemanticClient + SemanticCache）
+
+**新增 SemanticCache**：
+
+```php
+final class SemanticCache
+{
+    /** 查询向量缓存：query hash → vector */
+    private const CACHE_PREFIX = 'rag:embed:query:';
+    private const CACHE_TTL = 86400; // 24h
+
+    public function get(string $query): ?array;
+    public function set(string $query, array $vector): void;
+}
+```
+
+- 查询向量缓存在 Redis 中（24h TTL），相同查询零 API 调用
+- 缓存键：`sha256(query)`，避免长 key 问题
+- 进程内也做一层 memory cache（100 条 / 1MB），减少 Redis 往返
+
+**SemanticClient 增强**：
+- batch size 自适应：根据 provider 响应自动调整（成功则 +4，失败则 ÷2，范围 4-64）
+- 维度自动探测：首次响应后缓存维度，后续请求维度不一致时触发告警并自动 re-embed 该 batch
+- 新增本地 provider：`http://localhost:11434/api/embeddings`（Ollama 格式），支持完全离线部署
+
+### 3.8 MCP 层增强
+
+当前 MCPClient 每次调用都是独立 HTTP POST。增强：
+
+1. **连接复用**：同一 endpoint 在一次分析运行内复用 MCPClient 实例（已有 `McpClientFactory` 做 Session 级缓存，维持）
+2. **SSE 长连接传输**（可选）：支持 MCP Server 以 SSE 模式推送工具结果，降低多轮 call 的握手开销
+3. **MCP 结果缓存**：Session 内相同 tool + arguments 的调用直接返回缓存结果
+4. **健康检查**：每次分析开始前 ping RAG MCP endpoint，不可用时自动降级为纯词法检索
+
+### 3.9 知识库内容治理
+
+**新增 `rag/knowledge/.manifest.json`**：
+
 ```json
 {
-  "cacheKey": "ai:analysis:hash:xxx",
-  "logId": "abc123",
-  "model": "minimax-m2.5-free",
-  "promptVersion": "v2",
-  "mode": "deep",
-  "startedAt": 1234567890,
-  "finishedAt": 1234567950,
-  "durationMs": 6000,
-  "rounds": 4,
-  "success": true,
-  "rounds_detail": [
-    {
-      "round": 0,
-      "tools_called": ["rag_search"],
-      "tool_results": ["..."],
-      "durationMs": 2300
-    }
-  ],
-  "finalScore": { "overall": 78, ... },
-  "validation": { "hasToolEvidence": true, "unverifiedClaims": [] }
+  "version": "2.0",
+  "builtAt": 1234567890,
+  "chunker": "hybrid",
+  "maxTokens": 1024,
+  "overlapTokens": 128,
+  "semantic": {"enabled": true, "providers": ["siliconflow/bge-m3"]},
+  "rerank": {"enabled": false},
+  "files": [
+    {"path": "patterns/mixin-apply-failed.md", "mtime": 1234567800, "chunks": 3},
+    ...
+  ]
 }
 ```
 
-### 3.9 AIClient 重构
-
-当前 580 行，主要工作在 `streamChat()` 的 curl write callback 中。重构为：
-
-```php
-final class AIClient
-{
-    // 精简到 ~200 行
-    public function stream(ChatRequest $req, StreamHandler $handler): void;
-    public function chat(ChatRequest $req): ChatResponse;
-}
-
-final class ChatRequest { ... }    // 不可变请求值对象
-final class ChatResponse { ... }   // 不可变响应值对象
-final class SseParser { ... }      // SSE 解析器（从 write callback 中提取）
-```
-
-SSE 解析逻辑独立为 `SseParser`，可单独测试。
+- 构建时自动生成，记录知识库版本与每文件元数据
+- 增量索引通过 manifest 快速判断哪些文件需要更新
+- Admin 页面显示知识库版本与最后构建时间
 
 ---
 
 ## 四、改造后文件结构
 
 ```
-app/Agent/
-├── LogAgent.php              # 入口编排（~100 行）
-├── AgentRuntime.php          # 多轮循环 + 停止条件（~300 行）
-├── PromptBuilder.php         # 提示词模板组装（~350 行）
-├── ToolRegistry.php          # 工具注册与分发（~150 行）
-├── Tool/
-│   ├── ToolInterface.php
-│   ├── AbstractTool.php
-│   ├── WebSearchTool.php
-│   ├── RagSearchTool.php
-│   ├── ListTopicsTool.php
-│   ├── ReadLogTool.php
-│   ├── GrepLogTool.php
-│   ├── ListLogFilesTool.php
-│   └── GithubTool.php
-├── ToolSession.php           # 富会话状态（~150 行）
-├── LogWindowManager.php      # 动态日志窗口（~200 行）
-├── ResultValidator.php       # 结论验证（~200 行）
-├── AnalysisScorer.php        # 质量评分（~150 行）
-└── AnalysisTracer.php        # 链路追踪（~200 行）
-
-app/Client/
-├── AIClient.php              # 精简 LLM 调用（~200 行，原 580）
-├── SseParser.php             # 独立 SSE 解析器（新）
-├── GitHubClient.php          # 不变（~953 行）
-├── MCPClient.php             # 不变（~237 行）
-└── ...
-
-app/Ai/
-├── AnalysisQueue.php         # 不变（~364 行）
-└── ...
-
 app/Rag/
-├── RagManager.php            # 不变（~543 行）
-├── RagSearch.php             # 不变（~932 行）
-└── SemanticClient.php        # 不变（~203 行）
+├── Chunk.php                    # Chunk 值对象（新）
+├── Chunker.php                  # 分块策略（新）
+├── LexicalIndex.php             # FTS5 + LIKE 检索（从 RagSearch 抽出）
+├── VectorIndex.php              # 向量扫描 + 余弦相似度（从 RagSearch 抽出）
+├── SnippetExtractor.php         # 片段提取（从 RagSearch 抽出）
+├── RetrievalPipeline.php        # 多路召回 → merge → rerank（新）
+├── RagSearch.php                # 精简为门面（~150 行）
+├── RagManager.php               # 增强：增量索引 + 热更新
+├── SemanticClient.php           # 增强：batch 自适应 + 本地 provider
+├── SemanticCache.php            # 查询向量缓存（新）
+├── QueryPreProcessor.php        # 查询改写 + 分类路由（新）
+└── Rerank/
+    ├── RerankInterface.php      # 精排接口
+    ├── LLMReranker.php          # LLM pairwise rerank（新）
+    └── NoopReranker.php         # 直通（新）
+
+app/Agent/Tool/
+└── RagSearchTool.php            # 增强：支持 k/topic 参数透传
 ```
 
 ---
@@ -475,81 +428,106 @@ app/Rag/
 
 | 阶段 | 内容 | 预估行数 | 工作量 |
 |---|---|---|---|
-| 阶段一 | PromptBuilder + ToolRegistry + 工具拆分 | ~1,300 | 3-4h |
-| 阶段二 | AgentRuntime + ToolSession 增强 + LogWindowManager | ~650 | 2h |
-| 阶段三 | ResultValidator + AnalysisScorer | ~350 | 2h |
-| 阶段四 | 工具重试/fallback + 降级链路 + AIClient 重构 | ~400 | 1-2h |
-| 阶段五 | AnalysisTracer + 可观测性 | ~200 | 1h |
-| **总计** | | **~2,900** | **9-11h** |
+| 阶段一 | Chunker + Chunk 值对象 + 分块策略 | ~400 | 2h |
+| 阶段二 | LexicalIndex + VectorIndex + SnippetExtractor 拆分 | ~500 | 2-3h |
+| 阶段三 | RetrievalPipeline + RRF 融合 + LLM Reranker | ~350 | 2h |
+| 阶段四 | QueryPreProcessor（查询改写 + 分类路由） | ~200 | 1.5h |
+| 阶段五 | RagManager 增量索引 + 热更新 | ~300 | 2-3h |
+| 阶段六 | SemanticCache + SemanticClient 增强 | ~200 | 1h |
+| 阶段七 | 集成测试 + 回归验证 + MCP 增强 | ~300 | 2h |
+| **总计** | | **~2,250** | **~12-13h** |
 
 ---
 
 ## 六、实施步骤
 
-### Step 1：基础设施（先写，不碰现有逻辑）
+### Step 1：分块基础设施
+1. 新建 `Chunk` 值对象、`Chunker`（三种策略 + HYBRID 组合）
+2. 新增 `chunks` SQLite 表（带 token_count / parent_rowid）
+3. 修改 `RagSearch::buildIndex()` 调用 Chunker
+4. 单测：验证各策略切分结果、HYBRID 超长 chunk 二次切分、parent-child 关系
 
-1. 新建 `ToolInterface`、`AbstractTool`、`ToolResult`、`RetryStrategy`
-2. 新建 `ToolRegistry`
-3. 新建 `PromptBuilder`（从现有 heredoc 搬运内容，不修改措辞）
-4. 新建 `SseParser`（从 AIClient 提取）
-5. 写单测验证 ToolRegistry 注册/分发/参数校验
+### Step 2：检索拆分
+1. 从 RagSearch 932 行中抽取 `LexicalIndex`（FTS5 + LIKE）和 `VectorIndex`（向量扫描 + 余弦）
+2. 抽取 `SnippetExtractor`（片段提取逻辑）
+3. RagSearch 精简为门面， delegating 到三个组件
+4. 单测：LexicalIndex 和 VectorIndex 独立可测
 
-### Step 2：拆分工具（逐个迁移）
+### Step 3：RetrievalPipeline + Rerank
+1. 新建 `RetrievalPipeline`：并行调用 Lexical + Vector，RRF 融合
+2. 新建 `RerankInterface` / `LLMReranker` / `NoopReranker`
+3. 配置开关 `ai.rag.rerank.enabled`
+4. 集成测试：rerank 对 top-k 准确率的影响（用已知 query 验证）
 
-按依赖从低到高：`ListTopicsTool` → `ListLogFilesTool` → `GrepLogTool` → `ReadLogTool` → `RagSearchTool` → `WebSearchTool` → `GithubSearchTool` → `GithubDetailTool`
+### Step 4：查询预处理
+1. 新建 `QueryPreProcessor`：查询改写 + 分类路由
+2. 接入 `RagSearchTool`，检索前自动调用
+3. 单测：改写准确性、分类映射正确性
 
-每拆一个，在 `LogAgent::buildTools()` 中保留原有逻辑但改为从 `ToolRegistry` 读取，确保行为完全一致。
+### Step 5：增量索引
+1. 新建 `chunks` 表的 mtime 字段
+2. `RagManager::incrementalBuild()` + `reindexDoc()`
+3. `RagController::saveDoc()` 写入后自动触发热更新
+4. 单测：增量 build 只处理变更文件、删除文件对应的 chunk 被清理
 
-### Step 3：提取 AgentRuntime
+### Step 6：Embedding 增强
+1. 新建 `SemanticCache`（Redis + 进程内双层缓存）
+2. `SemanticClient` batch size 自适应 + 维度探测 + 本地 provider
+3. 单测：缓存命中/未命中、batch 自适应逻辑
 
-1. 新建 `AgentRuntime`，把 `analyze()` 中的 for 循环移进去
-2. 把 SSE 发射逻辑封装为 `AnalysisEmitter` 接口（已有 `SseEmitter` / `StreamEmitter` / `AnalysisEmitter`，统一接入）
-3. 集成 `PromptBuilder` 和 `ToolRegistry`
-4. 写集成测试：模拟 3 轮 tool call，验证 SSE 输出与原来一致
-
-### Step 4：增强会话与窗口
-
-1. 扩展 `ToolSession`
-2. 新建 `LogWindowManager`，接入多轮循环
-3. 每轮 tool call 后更新锚点和窗口
-
-### Step 5：结果验证与评分
-
-1. 新建 `ResultValidator`，分析完成后自动验证
-2. 新建 `AnalysisScorer`，自动评分
-3. 结构化输出：`{ rootCause, confidence, evidence, steps }`
-
-### Step 6：可观测性
-
-1. 新建 `AnalysisTracer`，记录完整链路
-2. Admin 后台新增"分析记录"页面（可选）
-3. 指标埋点：各工具调用次数、各阶段耗时、缓存命中率
-
-### Step 7：重构 AIClient
-
-1. 提取 `SseParser`
-2. 引入 `ChatRequest` / `ChatResponse` 值对象
-3. 简化 `streamChat()` 入口
+### Step 7：MCP + 可观测性
+1. MCPClient 连接复用已有，加 SSE 传输支持（可选）
+2. 检索埋点：BM25 命中数、向量命中数、融合结果、各阶段耗时
+3. 慢查询日志（>500ms）
+4. `rag:stats` 命令：命中率、检索量趋势、embedding 成本
 
 ---
 
 ## 七、回滚与兼容策略
 
-1. **渐进式替换**：每个阶段完成后 `LogAgent::analyze()` 的行为与之前完全一致（通过集成测试保证），新逻辑通过开关控制
-2. **配置开关**：`ai.agent.newRuntime`（默认 false），验证无误后切 true
-3. **回滚**：关开关即可回退到原有逻辑，不涉及数据库迁移或文件删除
-4. **提示词版本**：`PromptBuilder` 支持多版本并存，A/B 测试或回滚只需改配置
+1. **配置开关矩阵**：
+
+| 开关 | 默认值 | 说明 |
+|---|---|---|
+| `ai.rag.chunker` | `heading` | heading / sliding / token / hybrid |
+| `ai.rag.rerank.enabled` | `false` | rerank 开关，关闭直通 RRF |
+| `ai.rag.queryRewrite.enabled` | `false` | 查询改写开关 |
+| `ai.rag.incrementalBuild` | `false` | 增量索引开关，关闭则全量 |
+| `ai.rag.semanticCache` | `true` | 查询向量缓存 |
+
+2. **渐进式切换**：每个开关独立，可单独开启/关闭。Chunker 切换后第一次 `rag:build` 重建索引，之后行为稳定
+3. **回滚**：改配置即可回退到前一策略，不涉及数据迁移
+4. **索引兼容**：新版本 `chunks` 表不存在时自动 fallback 到旧 `docs` 表查询路径
 
 ---
 
 ## 八、验收标准
 
-- [ ] 所有现有单测通过（`php vendor/bin/pest`）
-- [ ] PHPStan Level 5 无新错误
-- [ ] 集成测试：模拟 3 轮 tool call，SSE 输出与改造前逐帧一致
-- [ ] 最大单个文件 ≤ 350 行
-- [ ] 新增工具只需新增一个 Tool 类 + 注册一行代码，无需修改 AgentRuntime
-- [ ] 提示词可在不修改代码的情况下通过配置切换模式
-- [ ] 分析结果输出结构化 JSON（rootCause / confidence / evidence / steps）
-- [ ] 完整分析 trace 可导出为 JSON
-- [ ] 工具调用失败时自动 fallback，不阻塞整体分析
+- [ ] 新增 `chunks` 表，HYBRID chunking 策略可配置
+- [ ] `RetrievalPipeline` 并行召回 BM25 + LIKE + 向量，RRF 融合
+- [ ] LLM Reranker 可通过配置开关
+- [ ] QueryPreProcessor 查询改写与分类路由可配置开关
+- [ ] `RagManager::incrementalBuild()` 只处理 mtime 变更的文件
+- [ ] `RagManager::reindexDoc()` 支持单文档热更新
+- [ ] `SemanticCache` 缓存查询向量，重复查询不触发 embedding API
+- [ ] `SemanticClient` 支持本地 Ollama provider
+- [ ] 检索埋点记录各阶段耗时与命中数，`rag:stats` 可查看
+- [ ] 集成测试：标准查询集在 rerank 开启后 top-5 准确率 ≥ 纯 BM25 基线
+
+---
+
+## 九、与 LogAgent 改造的协同
+
+本计划与已合并的 LogAgent 改造（`feat/logagent-refactor`）形成协同：
+
+| 协同点 | 说明 |
+|---|---|
+| **RagSearchTool** | LogAgent 改造已将 RagSearch 封装为独立 Tool 类，本计划增强检索能力后，Tool 层零改动直接受益 |
+| **PromptBuilder** | 查询改写需要 LLM 调用，通过 `AIClientGateway` 接口复用，不新增外部依赖 |
+| **AnalysisTracer** | 检索各阶段耗时自动记录到 trace，无需额外埋点代码 |
+| **ToolRegistry** | Rerank 可作为 Tool 注册到 Registry，或在 RetrievalPipeline 内部透明执行（推荐后者，不暴露给 LLM） |
+| **Config 体系** | 新增 RAG 配置项通过 `App\Config` 热加载，无需重启 |
+
+---
+
+*计划版本：v1.0 | 对应 LogShare commit: dfca4fe*
