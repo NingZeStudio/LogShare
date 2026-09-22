@@ -182,6 +182,13 @@ return [
             // 加 {"type":"ollama","baseUrl":"http://localhost:11434",
             // "embeddingModel":"bge-m3"} 可用本地 Ollama 完全离线嵌入。
             'semanticCache' => true,
+            // 检索遥测：各阶段耗时与命中数按天聚合到 Redis，供 rag:stats 与
+            // 管理端观测；total_ms ≥ slowMs 记为慢查询并写 WARN 日志。只读
+            // 旁路，不影响检索结果；Redis 不可用时静默丢弃。
+            'telemetry' => [
+                'enabled' => true,
+                'slowMs' => 500,
+            ],
         ],
         'mcp' => [
             'webSearch' => [

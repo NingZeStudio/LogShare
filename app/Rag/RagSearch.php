@@ -512,6 +512,7 @@ class RagSearch
      */
     public function search(string $query, int $k = 5, ?string $topic = null): array
     {
+        $t0 = microtime(true);
         $k = max(1, min((int) $k, 20));
         $query = trim($query);
         if ($query === '') {
@@ -522,30 +523,45 @@ class RagSearch
         $topic = self::normalizeTopic($topic);
         $originalQuery = $query;
 
+        // 阶段指标（Step 7 检索埋点）：随检索流程逐步填充，出口统一上报
+        $m = ['query' => mb_substr($query, 0, 120), 'k' => $k, 'topic' => $topic];
+
         // 查询预处理（ai.rag.queryRewrite.enabled，默认关闭 → 逐字节不变）：
         // 改写只喂给检索通道，embed/缓存仍用原查询；分类偏置只在无显式
         // topic 时生效，模型圈定的目录优先级高于规则猜测。
         $pre = ['query' => $query, 'weights' => [], 'rewritten' => false];
         if (QueryPreProcessor::enabled()) {
+            $tPre = microtime(true);
             $pre = QueryPreProcessor::preprocess($query);
+            $m['rewrite_ms'] = round((microtime(true) - $tPre) * 1000, 2);
+            $m['rewritten'] = $pre['rewritten'];
         }
 
         // 候选池：语义精排前多召回一些；纯词法路径仍只输出 k 条
         $pool = max(20, $k * 4);
 
+        $tLex = microtime(true);
         $results = (new LexicalIndex($this->pdo))->search($pre['query'], self::splitTerms($pre['query']), $pool, $topic);
+        $m['lexical_ms'] = round((microtime(true) - $tLex) * 1000, 2);
+        $m['lexical_hits'] = count($results);
 
         // Semantic enhancement: vector recall is primary, lexical results supplement it.
         // 语义召回与结果缓存锚定原始查询（改写词只服务词法通道）。分类偏置生效时
         // 扩大语义截断量到 pool、偏置后再截 k；默认路径仍按 k 截断，缓存键不变。
         $biasable = $topic === null && $pre['weights'] !== [];
-        $final = $this->applySemanticEnhancement($originalQuery, $results, $biasable ? $pool : $k, $topic);
+        $tSem = microtime(true);
+        $final = $this->applySemanticEnhancement($originalQuery, $results, $biasable ? $pool : $k, $topic, $m);
+        $m['semantic_ms'] = round((microtime(true) - $tSem) * 1000, 2);
 
         if ($biasable) {
             $final = QueryPreProcessor::applyTopicBias($final, $pre['weights']);
         }
 
-        return array_slice($final, 0, $k);
+        $out = array_slice($final, 0, $k);
+        $m['final'] = count($out);
+        $m['total_ms'] = round((microtime(true) - $t0) * 1000, 2);
+        RetrievalMetrics::record($m);
+        return $out;
     }
 
     /**
@@ -565,7 +581,7 @@ class RagSearch
     private const SEMANTIC_CACHE_MAX = 64;
     private const SEMANTIC_CACHE_MAX_BYTES = 1048576;
 
-    private function applySemanticEnhancement(string $query, array $lexical, int $k, ?string $topic = null): array
+    private function applySemanticEnhancement(string $query, array $lexical, int $k, ?string $topic = null, array &$metrics = []): array
     {
         $client = self::semanticClientFromConfig();
         if ($client === null || !$client->isConfigured()) {
@@ -576,12 +592,14 @@ class RagSearch
         $cacheKey = 'semantic-v2:' . md5($query) . ':' . $k . ':' . ($topic ?? '');
         $cached = self::$semanticCache[$cacheKey] ?? null;
         if ($cached !== null && $cached['expires'] > time()) {
+            $metrics['result_cache'] = 1;
             return $cached['results'];
         }
 
         try {
-            $results = $this->runSemanticPipeline($query, $lexical, $k, $client, $topic);
+            $results = $this->runSemanticPipeline($query, $lexical, $k, $client, $topic, $metrics);
         } catch (\Throwable $e) {
+            $metrics['semantic_error'] = $e->getMessage();
             \App\Syslog::error('RAG', 'semantic enhancement failed, falling back to lexical: ' . $e->getMessage());
             return array_slice($lexical, 0, $k);
         }
@@ -614,7 +632,7 @@ class RagSearch
      * @param array<int, array{title: string, body: string, source: string, score: mixed, snippet: string}> $lexical
      * @return array<int, array{title: string, body: string, source: string, score: mixed, snippet: string}>
      */
-    private function runSemanticPipeline(string $query, array $lexical, int $k, SemanticClient $client, ?string $topic = null): array
+    private function runSemanticPipeline(string $query, array $lexical, int $k, SemanticClient $client, ?string $topic = null, array &$metrics = []): array
     {
         try {
             // 查询向量缓存（Redis + 进程内，ai.rag.semanticCache）：命中则零
@@ -627,17 +645,24 @@ class RagSearch
                     throw new \RuntimeException('empty query embedding');
                 }
                 $cache->set($query, $queryVec);
+                RetrievalMetrics::counter('embed_api_calls');
+            } else {
+                RetrievalMetrics::counter('embed_cache_hits');
             }
 
             // 向量召回：与全库嵌入算余弦，补足词法漏掉的同义表述；
             // topic 模式下过滤下推到召回 SQL（源头限定目录，无需扩量放大）
             $vectorHits = (new VectorIndex($this->pdo))->topByCosine($queryVec, max(20, $k * 4), $topic);
+            $metrics['vector_hits'] = count($vectorHits);
 
             // rerank 开关开启：走 RetrievalPipeline（RRF 融合 + LLM 精排）。
             // 关闭时保持既有「向量优先、词法补充」的截断合并，逐字节不变。
             if (self::rerankEnabled()) {
                 $pipeline = new RetrievalPipeline(self::rerankerFromConfig());
-                return $pipeline->retrieve($query, $lexical, $vectorHits, $k)['results'];
+                $r = $pipeline->retrieve($query, $lexical, $vectorHits, $k);
+                $metrics['reranked'] = !empty($r['reranked']);
+                $metrics['fused'] = (int) $r['fused'];
+                return $r['results'];
             }
 
             $seen = [];
