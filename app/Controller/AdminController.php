@@ -944,6 +944,148 @@ class AdminController extends AbstractController
         return $this->respondSuccess(RagManager::getBuildStatus(), 'RAG build status retrieved successfully');
     }
 
+    /**
+     * RAG 能力开关快照（chunker / rerank / queryRewrite / incrementalBuild /
+     * semanticCache / telemetry）。只读，供管理面板渲染当前生效配置。
+     */
+    #[GetMapping(path: 'rag/config')]
+    public function getRagConfig(): ResponseInterface
+    {
+        $rag = Config::all()['ai']['rag'] ?? [];
+        return $this->respondSuccess([
+            'chunker' => (string) ($rag['chunker'] ?? 'heading'),
+            'rerank' => [
+                'enabled' => (bool) ($rag['rerank']['enabled'] ?? false),
+                'maxCandidates' => (int) ($rag['rerank']['maxCandidates'] ?? 30),
+            ],
+            'queryRewrite' => [
+                'enabled' => (bool) ($rag['queryRewrite']['enabled'] ?? false),
+            ],
+            'incrementalBuild' => (bool) ($rag['incrementalBuild'] ?? false),
+            'semanticCache' => (bool) ($rag['semanticCache'] ?? true),
+            'telemetry' => [
+                'enabled' => (bool) ($rag['telemetry']['enabled'] ?? true),
+                'slowMs' => (int) ($rag['telemetry']['slowMs'] ?? 500),
+            ],
+        ], 'RAG capability switches retrieved successfully');
+    }
+
+    /**
+     * 更新 RAG 能力开关。走 Config::saveDynamic 白名单式局部合并，只接受
+     * 已知字段并做取值校验；chunker 变更后需重跑 rag:build 才影响索引。
+     */
+    #[PutMapping(path: 'rag/config')]
+    public function updateRagConfig(): ResponseInterface
+    {
+        $body = $this->getParsedBody();
+        if (empty($body)) {
+            throw new ApiError(400, 'Invalid or empty RAG config payload');
+        }
+
+        $ragUpdate = [];
+        if (isset($body['chunker'])) {
+            $chunker = strtolower(trim((string) $body['chunker']));
+            if (\App\Rag\ChunkStrategy::tryFrom($chunker) === null) {
+                throw new ApiError(422, 'Invalid chunker; expected heading|sliding|token|hybrid');
+            }
+            $ragUpdate['chunker'] = $chunker;
+        }
+        if (isset($body['rerank']) && is_array($body['rerank'])) {
+            $ragUpdate['rerank'] = [
+                'enabled' => (bool) ($body['rerank']['enabled'] ?? false),
+                'maxCandidates' => max(2, min(50, (int) ($body['rerank']['maxCandidates'] ?? 30))),
+            ];
+        }
+        if (isset($body['queryRewrite']) && is_array($body['queryRewrite'])) {
+            $ragUpdate['queryRewrite'] = ['enabled' => (bool) ($body['queryRewrite']['enabled'] ?? false)];
+        }
+        if (array_key_exists('incrementalBuild', $body)) {
+            $ragUpdate['incrementalBuild'] = (bool) $body['incrementalBuild'];
+        }
+        if (array_key_exists('semanticCache', $body)) {
+            $ragUpdate['semanticCache'] = (bool) $body['semanticCache'];
+        }
+        if (isset($body['telemetry']) && is_array($body['telemetry'])) {
+            $ragUpdate['telemetry'] = [
+                'enabled' => (bool) ($body['telemetry']['enabled'] ?? true),
+                'slowMs' => max(1, (int) ($body['telemetry']['slowMs'] ?? 500)),
+            ];
+        }
+
+        if ($ragUpdate === []) {
+            throw new ApiError(400, 'No recognized RAG switch provided');
+        }
+
+        try {
+            Config::saveDynamic(['ai' => ['rag' => $ragUpdate]]);
+            AuditLogManager::record('config.update', 'rag_config', [
+                'keys' => array_keys($ragUpdate),
+            ], true, 'admin', $this->getClientIp());
+        } catch (\InvalidArgumentException $e) {
+            throw new ApiError(422, 'RAG config validation failed: ' . $e->getMessage());
+        } catch (\Throwable $e) {
+            throw new ApiError(500, 'Failed to save RAG config: ' . $e->getMessage());
+        }
+
+        return $this->getRagConfig();
+    }
+
+    /**
+     * 增量索引预览：返回知识库目录相对索引的 changed/missing/unchanged 清单，
+     * 不触发写入。索引尚未构建时返回 409。
+     */
+    #[GetMapping(path: 'rag/build/stale')]
+    public function getRagStaleFiles(): ResponseInterface
+    {
+        try {
+            $stale = RagManager::getStaleFiles();
+        } catch (\RuntimeException $e) {
+            throw new ApiError(409, $e->getMessage());
+        } catch (\Throwable $e) {
+            throw new ApiError(500, 'Failed to diff knowledge base: ' . $e->getMessage());
+        }
+        return $this->respondSuccess($stale, 'RAG stale files retrieved successfully');
+    }
+
+    /**
+     * 触发增量构建（仅重索引 mtime 变化的文件）。与全量 rag/build 共用状态
+     * 文件与 building 防重入锁；返回触发结果，进度由 rag/build/status 轮询。
+     */
+    #[PostMapping(path: 'rag/build/incremental')]
+    public function triggerRagIncrementalBuild(): ResponseInterface
+    {
+        $result = RagManager::triggerIncrementalBuild();
+        AuditLogManager::record('rag.build.incremental', 'rag_index', [
+            'success' => $result['success'],
+        ], true, 'admin', $this->getClientIp());
+        return $this->respondSuccess($result, $result['message']);
+    }
+
+    /**
+     * 检索遥测：当日（或 ?date=Y-m-d）各阶段耗时/命中聚合 + ?slow=1 慢查询明细。
+     */
+    #[GetMapping(path: 'rag/telemetry')]
+    public function getRagTelemetry(): ResponseInterface
+    {
+        $params = $this->request->getQueryParams();
+        $date = isset($params['date']) && is_string($params['date']) ? trim($params['date']) : null;
+        if ($date !== null && $date !== '' && !preg_match('/^\d{4}-\d{2}-\d{2}$/', $date)) {
+            throw new ApiError(400, 'date must be formatted as Y-m-d');
+        }
+
+        $summary = \App\Rag\RetrievalMetrics::summary($date !== '' ? $date : null);
+        $slow = !empty($params['slow'])
+            ? \App\Rag\RetrievalMetrics::recentSlow(max(1, min(100, (int) ($params['slowLimit'] ?? 10))))
+            : [];
+
+        return $this->respondSuccess([
+            'date' => $date !== null && $date !== '' ? $date : date('Y-m-d'),
+            'summary' => $summary,
+            'available' => $summary !== null,
+            'slowQueries' => $slow,
+        ], 'RAG telemetry retrieved successfully');
+    }
+
     #[PostMapping(path: 'rag/search')]
     public function searchRag(): ResponseInterface
     {
