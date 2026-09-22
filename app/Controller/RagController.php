@@ -141,7 +141,7 @@ class RagController extends AbstractController
                                     . '看完地图后应带着明确目标词去 rag_search（可配合 topic 参数定向），不要看完地图就停止分析。',
                                 'inputSchema' => [
                                     'type' => 'object',
-                                    'properties' => [],
+                                    'properties' => new \stdClass(),
                                 ],
                             ],
                         ],
@@ -186,7 +186,7 @@ class RagController extends AbstractController
                     break;
 
                 case 'ping':
-                    $response['result'] = [];
+                    $response['result'] = new \stdClass();
                     break;
 
                 default:

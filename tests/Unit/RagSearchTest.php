@@ -1,6 +1,7 @@
 <?php
 
 use App\Rag\RagSearch;
+use App\Rag\SnippetExtractor;
 
 beforeEach(function () {
     $this->dbPath = CORE_PATH . '/tmp/rag_test_' . uniqid() . '.db';
@@ -110,24 +111,18 @@ test('splitTerms splits on whitespace and punctuation, exploding CJK bigrams', f
 });
 
 test('snippet returns whole body for short chunks', function () {
-    $ref = new ReflectionClass(RagSearch::class);
-    $method = $ref->getMethod('extractSnippet');
-
     $body = '这是一段很短的正文，直接整段返回。';
-    expect($method->invoke(null, $body, ['短']))->toBe($body);
+    expect(SnippetExtractor::extract($body, ['短']))->toBe($body);
 });
 
 test('snippet centers on the first matching term for long bodies', function () {
-    $ref = new ReflectionClass(RagSearch::class);
-    $method = $ref->getMethod('extractSnippet');
-
     // 命中词在中段且两侧远超 ±800 窗口：snippet 应围绕它、以省略号收边
     $prefix = str_repeat('前置无关内容。', 200); // 1400 字符
     $hit = '目标关键词';
     $suffix = str_repeat('后置无关内容。', 200);
     $body = $prefix . $hit . $suffix;
 
-    $snippet = $method->invoke(null, $body, ['目标关键词']);
+    $snippet = SnippetExtractor::extract($body, ['目标关键词']);
 
     expect($snippet)->toContain('目标关键词');
     expect($snippet)->toStartWith('…');
@@ -136,12 +131,9 @@ test('snippet centers on the first matching term for long bodies', function () {
 });
 
 test('snippet returns leading fragment when term only matches title', function () {
-    $ref = new ReflectionClass(RagSearch::class);
-    $method = $ref->getMethod('extractSnippet');
-
     // 超过 SNIPPET_FULL_BODY_LIMIT(1600) 才走窗口模式
     $body = str_repeat('正文里没有任何查询词。', 260); // 1820 字符
-    $snippet = $method->invoke(null, $body, ['标题词']);
+    $snippet = SnippetExtractor::extract($body, ['标题词']);
 
     expect($snippet)->not->toContain('标题词');
     expect(mb_strlen($snippet))->toBeLessThan(mb_strlen($body));
