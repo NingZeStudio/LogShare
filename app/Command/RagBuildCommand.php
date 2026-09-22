@@ -17,10 +17,15 @@ class RagBuildCommand extends HyperfCommand
     {
         parent::configure();
         $this->setDescription('构建/重建 RAG SQLite FTS5 知识库索引');
+        $this->addOption('incremental', 'i', \Symfony\Component\Console\Input\InputOption::VALUE_NONE, '增量构建：仅重索引 mtime 变化的文件');
     }
 
     public function handle()
     {
+        if ($this->input->getOption('incremental')) {
+            return $this->handleIncremental();
+        }
+
         $knowledgeDir = dirname(__DIR__, 2) . '/rag/knowledge';
         $dbPath = RagSearch::resolveDbPath();
         $semantic = RagSearch::semanticClientFromConfig();
@@ -55,6 +60,27 @@ class RagBuildCommand extends HyperfCommand
             $result['chunks'],
             $stats['chunks'],
             $embeddedNote
+        ));
+        return self::SUCCESS;
+    }
+
+    private function handleIncremental(): int
+    {
+        $this->line('RAG 增量构建（仅重索引 mtime 变化的文件）');
+        try {
+            $result = \App\Rag\RagManager::runIncrementalBuild();
+        } catch (\Throwable $e) {
+            $this->error('增量构建失败: ' . $e->getMessage());
+            return self::FAILURE;
+        }
+
+        $this->info(sprintf(
+            '完成: 更新 %d 个文件, 清理 %d 个已删除文件, 未变 %d 个, 重建 %d 个分块%s',
+            $result['updated'],
+            $result['removed'],
+            $result['unchanged'],
+            $result['chunks'],
+            $result['embedded'] > 0 ? ", 已向量化 {$result['embedded']} 条" : ''
         ));
         return self::SUCCESS;
     }
