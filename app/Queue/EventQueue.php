@@ -248,6 +248,10 @@ final class EventQueue
 
         if ($allSuccess) {
             self::recordMetric('processed_success');
+        } elseif ($event->isPropagationStopped()) {
+            // 处理器主动阻断流转（异步安全审核命中违规，日志已物理删除并封禁）：
+            // 事件按业务预期终结，计入拦截而非失败，否则失败率会被治理动作系统性抬高
+            self::recordMetric('processed_blocked');
         } else {
             self::recordMetric('processed_failed');
         }
@@ -327,6 +331,8 @@ final class EventQueue
             'backlog' => 0,
             'pending' => 0,
             'streamLength' => 0,
+            'entriesRead' => 0,
+            'consumers' => 0,
             'deadLetters' => DeadLetterQueue::count(),
             'counters' => self::getMetrics(),
             'registeredEvents' => self::getRegisteredEvents(),
@@ -334,16 +340,25 @@ final class EventQueue
 
         if (RedisClient::getRedis() !== null) {
             try {
+                // 消费者处理完即 XACK + XDEL，streamLength 结构性恒为 0，
+                // 累计吞吐只能看消费组的 entries-read（Redis 7.0+，低版本无此字段时保持 0）
                 $stats['streamLength'] = RedisStreams::xLen($stream);
                 $groups = RedisStreams::xInfoGroups($stream);
                 foreach ($groups as $g) {
                     if (($g['name'] ?? '') === $group) {
                         $stats['pending'] = (int) ($g['pending'] ?? 0);
                         $stats['backlog'] = (int) ($g['lag'] ?? 0) + $stats['pending'];
+                        $stats['entriesRead'] = (int) ($g['entries-read'] ?? 0);
                         break;
                     }
                 }
-            } catch (\Throwable) {
+                $stats['consumers'] = count(RedisStreams::xInfoConsumers($stream, $group));
+            } catch (\Throwable $e) {
+                // 尚无任何上传时流与消费组都不存在，属正常空态；其余异常必须落日志，
+                // 否则面板会长期把「检视失败」显示成「队列空闲」
+                if (!str_contains($e->getMessage(), 'no such key') && !str_contains($e->getMessage(), 'NOGROUP')) {
+                    \App\Syslog::error('EventQueue', 'getStats stream inspection failed: ' . $e->getMessage());
+                }
             }
         }
 
