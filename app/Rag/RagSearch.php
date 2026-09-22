@@ -225,54 +225,7 @@ class RagSearch
 
         $embedded = 0;
         if ($semantic !== null && $semantic->isConfigured() && $chunks > 0) {
-            $embedStmt = $tmpPdo->prepare("INSERT OR REPLACE INTO doc_embeddings(rowid, vec) VALUES (?, ?)");
-
-            $storeEmbedding = function (int $rowid, array $vec) use ($embedStmt, &$embedded): void {
-                $embedStmt->bindValue(1, $rowid, \PDO::PARAM_INT);
-                $embedStmt->bindValue(2, VectorIndex::packVector($vec), \PDO::PARAM_LOB);
-                $embedStmt->execute();
-                $embedded++;
-            };
-
-            $embedSingle = function (int $rowid, string $text) use ($semantic, $storeEmbedding): bool {
-                $text = trim(mb_strcut($text, 0, 4000));
-                if ($text === '') {
-                    return false;
-                }
-                try {
-                    $vec = $semantic->embed([$text])[0] ?? null;
-                    if ($vec === null) {
-                        return false;
-                    }
-                    $storeEmbedding($rowid, $vec);
-                    return true;
-                } catch (\Throwable) {
-                    return false;
-                }
-            };
-
-            $batchSize = 16;
-            $pairs = array_map(null, $chunkRowids, $chunkBodies);
-            foreach (array_chunk($pairs, $batchSize) as $i => $batch) {
-                $texts = array_map(fn($p) => trim(mb_strcut((string) $p[1], 0, 4000)), $batch);
-
-                try {
-                    $vectors = $semantic->embed($texts);
-                    foreach ($batch as $j => [$rowid,]) {
-                        if (!isset($vectors[$j]) || trim($texts[$j]) === '') {
-                            continue;
-                        }
-                        $storeEmbedding($rowid, $vectors[$j]);
-                    }
-                } catch (\Throwable $e) {
-                    \App\Syslog::error('RAG', 'embedding batch #' . $i . ' failed (' . $e->getMessage() . '), retrying per chunk');
-                    foreach ($batch as $j => [$rowid, $body]) {
-                        if (!$embedSingle($rowid, $body)) {
-                            \App\Syslog::error('RAG', "chunk rowid={$rowid} skipped: unembeddable");
-                        }
-                    }
-                }
-            }
+            $embedded = $this->embedChunks($tmpPdo, $chunkRowids, $chunkBodies, $semantic);
         }
 
         $tmpPdo = null;
@@ -285,6 +238,179 @@ class RagSearch
         self::configurePdo($this->pdo);
 
         return ['files' => $files, 'chunks' => $chunks, 'embedded' => $embedded];
+    }
+
+    /**
+     * 批量嵌入 chunk 并写入 doc_embeddings（batch 失败逐条重试）。
+     * buildIndex 与增量重建共用；返回成功嵌入条数。
+     *
+     * @param int[] $rowids
+     * @param string[] $bodies
+     */
+    private function embedChunks(\PDO $pdo, array $rowids, array $bodies, SemanticClient $semantic): int
+    {
+        $embedded = 0;
+        $embedStmt = $pdo->prepare("INSERT OR REPLACE INTO doc_embeddings(rowid, vec) VALUES (?, ?)");
+
+        $storeEmbedding = function (int $rowid, array $vec) use ($embedStmt, &$embedded): void {
+            $embedStmt->bindValue(1, $rowid, \PDO::PARAM_INT);
+            $embedStmt->bindValue(2, VectorIndex::packVector($vec), \PDO::PARAM_LOB);
+            $embedStmt->execute();
+            $embedded++;
+        };
+
+        $embedSingle = function (int $rowid, string $text) use ($semantic, $storeEmbedding): bool {
+            $text = trim(mb_strcut($text, 0, 4000));
+            if ($text === '') {
+                return false;
+            }
+            try {
+                $vec = $semantic->embed([$text])[0] ?? null;
+                if ($vec === null) {
+                    return false;
+                }
+                $storeEmbedding($rowid, $vec);
+                return true;
+            } catch (\Throwable) {
+                return false;
+            }
+        };
+
+        $batchSize = 16;
+        $pairs = array_map(null, $rowids, $bodies);
+        foreach (array_chunk($pairs, $batchSize) as $i => $batch) {
+            $texts = array_map(fn($p) => trim(mb_strcut((string) $p[1], 0, 4000)), $batch);
+
+            try {
+                $vectors = $semantic->embed($texts);
+                foreach ($batch as $j => [$rowid,]) {
+                    if (!isset($vectors[$j]) || trim($texts[$j]) === '') {
+                        continue;
+                    }
+                    $storeEmbedding($rowid, $vectors[$j]);
+                }
+            } catch (\Throwable $e) {
+                \App\Syslog::error('RAG', 'embedding batch #' . $i . ' failed (' . $e->getMessage() . '), retrying per chunk');
+                foreach ($batch as $j => [$rowid, $body]) {
+                    if (!$embedSingle($rowid, $body)) {
+                        \App\Syslog::error('RAG', "chunk rowid={$rowid} skipped: unembeddable");
+                    }
+                }
+            }
+        }
+
+        return $embedded;
+    }
+
+    /**
+     * ai.rag.incrementalBuild 开关（默认 false = 只走全量构建）。
+     */
+    public static function incrementalBuildEnabled(): bool
+    {
+        try {
+            return (\App\Config::Get('ai')['rag']['incrementalBuild'] ?? false) === true;
+        } catch (\Throwable) {
+            return false;
+        }
+    }
+
+    /**
+     * 索引内各源文件的 mtime（source → 最近一次索引时的文件 mtime）。
+     *
+     * @return array<string, int>
+     */
+    public function indexedMtimes(): array
+    {
+        $rows = $this->pdo->query(
+            'SELECT d.source, max(m.source_mtime) AS mt FROM docs d JOIN chunk_meta m ON m.rowid = d.rowid GROUP BY d.source'
+        )->fetchAll();
+        $out = [];
+        foreach ($rows as $row) {
+            $out[(string) $row['source']] = (int) $row['mt'];
+        }
+        return $out;
+    }
+
+    /**
+     * 重索引单个源文件：删除旧 chunk（含向量与元数据）后按当前策略重建。
+     *
+     * 供增量构建与 saveDoc/deleteDoc 热更新共用。父子 chunk 一起删一起建
+     * （整文件粒度，不做单 chunk 增量）。语义开启时对新 chunk 重嵌入。
+     *
+     * $mtime 应传文件的真实 mtime（调用方 filemtime 获取），否则下一次
+     * getStaleFiles 比对不中，增量构建会永远把该文件判为 changed。
+     *
+     * @return array{chunks: int, embedded: int}
+     */
+    public function reindexSource(string $source, string $content, ?SemanticClient $semantic = null, ?int $mtime = null): array
+    {
+        $mtime = $mtime ?? time();
+        $deleted = $this->pdo->prepare('DELETE FROM docs WHERE source = ?');
+        $deleted->bindValue(1, $source);
+        $deleted->execute();
+        // docs 是虚表没有外键级联：向量与元数据按旧 rowid 手动清理
+        $this->pdo->exec('DELETE FROM doc_embeddings WHERE rowid NOT IN (SELECT rowid FROM docs)');
+        $this->pdo->exec('DELETE FROM chunk_meta WHERE rowid NOT IN (SELECT rowid FROM docs)');
+        // parent_rowid 指向本文件旧父块的孤儿引用一并清除层级（保守置空）
+        $this->pdo->exec('UPDATE chunk_meta SET parent_rowid = NULL WHERE parent_rowid NOT IN (SELECT rowid FROM docs)');
+
+        $rowids = [];
+        $bodies = [];
+        $chunks = 0;
+        $insert = $this->pdo->prepare('INSERT INTO docs(title, body, source) VALUES (?, ?, ?)');
+        $metaInsert = $this->pdo->prepare(
+            'INSERT INTO chunk_meta(rowid, token_count, parent_rowid, start_offset, end_offset, source_mtime)
+             VALUES (?, ?, ?, ?, ?, ?)'
+        );
+        $strategy = self::chunkStrategyFromConfig();
+
+        $this->pdo->beginTransaction();
+        try {
+            $fileChunks = Chunker::chunk($source, $content, $strategy);
+            $rowidByIndex = [];
+            foreach ($fileChunks as $i => $chunk) {
+                $insert->execute([$chunk->title, $chunk->body, $source]);
+                $rowid = (int) $this->pdo->lastInsertId();
+                $rowidByIndex[$i] = $rowid;
+                $metaInsert->execute([
+                    $rowid,
+                    $chunk->tokenCount,
+                    $chunk->parentId === null ? null : ($rowidByIndex[$chunk->parentId] ?? null),
+                    $chunk->startOffset,
+                    $chunk->endOffset,
+                    $mtime,
+                ]);
+                $rowids[] = $rowid;
+                $bodies[] = $chunk->title . "\n" . $chunk->body;
+                $chunks++;
+            }
+            $this->pdo->commit();
+        } catch (\Throwable $e) {
+            $this->pdo->rollBack();
+            throw $e;
+        }
+
+        $embedded = 0;
+        if ($semantic !== null && $semantic->isConfigured() && $rowids !== []) {
+            $embedded = $this->embedChunks($this->pdo, $rowids, $bodies, $semantic);
+        }
+
+        return ['chunks' => $chunks, 'embedded' => $embedded];
+    }
+
+    /**
+     * 从索引中彻底移除某源文件（文件已删除时调用）。
+     */
+    public function forgetSource(string $source): int
+    {
+        $stmt = $this->pdo->prepare('DELETE FROM docs WHERE source = ?');
+        $stmt->bindValue(1, $source);
+        $stmt->execute();
+        $n = $stmt->rowCount();
+        $this->pdo->exec('DELETE FROM doc_embeddings WHERE rowid NOT IN (SELECT rowid FROM docs)');
+        $this->pdo->exec('DELETE FROM chunk_meta WHERE rowid NOT IN (SELECT rowid FROM docs)');
+        $this->pdo->exec('UPDATE chunk_meta SET parent_rowid = NULL WHERE parent_rowid NOT IN (SELECT rowid FROM docs)');
+        return $n;
     }
 
     /**

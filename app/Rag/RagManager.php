@@ -134,6 +134,181 @@ class RagManager
     }
 
     /**
+     * Diff the knowledge directory against the index by mtime.
+     *
+     * 索引缺少 chunk_meta mtime（旧索引）时全部文件视为 stale——增量入口
+     * 自动退化为全量重建，安全侧。
+     *
+     * @return array{changed: string[], missing: string[], unchanged: int}
+     */
+    public static function getStaleFiles(): array
+    {
+        $dbPath = RagSearch::resolveDbPath();
+        if (!is_file($dbPath)) {
+            throw new \RuntimeException('Index not built yet; run a full build first');
+        }
+
+        $rag = new RagSearch($dbPath);
+        $indexed = $rag->indexedMtimes();
+
+        $kbDir = self::getKnowledgeDir();
+        $onDisk = [];
+        $iterator = new \RecursiveIteratorIterator(
+            new \RecursiveDirectoryIterator($kbDir, \FilesystemIterator::SKIP_DOTS)
+        );
+        foreach ($iterator as $fileInfo) {
+            if (!$fileInfo->isFile() || !in_array(strtolower($fileInfo->getExtension()), RagManager::ALLOWED_EXTENSIONS, true)) {
+                continue;
+            }
+            $relative = ltrim(str_replace('\\', '/', substr($fileInfo->getPathname(), strlen(rtrim($kbDir, '/\\')))), '/');
+            $onDisk[$relative] = (int) $fileInfo->getMTime();
+        }
+
+        $changed = [];
+        $unchanged = 0;
+        foreach ($onDisk as $source => $mtime) {
+            if (($indexed[$source] ?? -1) !== $mtime) {
+                $changed[] = $source;
+            } else {
+                $unchanged++;
+            }
+        }
+        $missing = array_values(array_diff(array_keys($indexed), array_keys($onDisk)));
+
+        return ['changed' => $changed, 'missing' => $missing, 'unchanged' => $unchanged];
+    }
+
+    /**
+     * 增量构建：只重索引 mtime 变化的文件、清理已删除文件的 chunk。
+     *
+     * @return array{updated: int, removed: int, unchanged: int, chunks: int, embedded: int}
+     */
+    public static function runIncrementalBuild(): array
+    {
+        $startedAt = time();
+        self::setBuildStatus([
+            'status' => 'building',
+            'startedAt' => $startedAt,
+            'finishedAt' => null,
+            'elapsedSeconds' => null,
+            'result' => null,
+            'error' => null,
+        ]);
+
+        try {
+            $stale = self::getStaleFiles();
+            $dbPath = RagSearch::resolveDbPath();
+            $rag = new RagSearch($dbPath);
+            $semantic = RagSearch::semanticClientFromConfig();
+            $kbDir = self::getKnowledgeDir();
+
+            $chunks = 0;
+            $embedded = 0;
+            foreach ($stale['changed'] as $source) {
+                $abs = $kbDir . '/' . $source;
+                if (!is_file($abs)) {
+                    // diff 与执行之间文件被删：按 missing 处理
+                    $rag->forgetSource($source);
+                    continue;
+                }
+                $r = $rag->reindexSource($source, (string) @file_get_contents($abs), $semantic, (int) @filemtime($abs));
+                $chunks += $r['chunks'];
+                $embedded += $r['embedded'];
+            }
+            foreach ($stale['missing'] as $source) {
+                $rag->forgetSource($source);
+            }
+
+            $result = [
+                'updated' => count($stale['changed']),
+                'removed' => count($stale['missing']),
+                'unchanged' => $stale['unchanged'],
+                'chunks' => $chunks,
+                'embedded' => $embedded,
+            ];
+            $finishedAt = time();
+            self::setBuildStatus([
+                'status' => 'success',
+                'startedAt' => $startedAt,
+                'finishedAt' => $finishedAt,
+                'elapsedSeconds' => $finishedAt - $startedAt,
+                'result' => $result,
+                'error' => null,
+            ]);
+            return $result;
+        } catch (\Throwable $e) {
+            $finishedAt = time();
+            self::setBuildStatus([
+                'status' => 'failed',
+                'startedAt' => $startedAt,
+                'finishedAt' => $finishedAt,
+                'elapsedSeconds' => $finishedAt - $startedAt,
+                'result' => null,
+                'error' => $e->getMessage(),
+            ]);
+            throw $e;
+        }
+    }
+
+    /**
+     * 异步触发增量构建（复用全量构建的状态文件与 building 防重入锁）。
+     *
+     * @return array{success: bool, status: string, message: string}
+     */
+    public static function triggerIncrementalBuild(): array
+    {
+        $current = self::getBuildStatus();
+        $startedAt = $current['startedAt'];
+        if ($current['status'] === 'building' && $startedAt !== null && (time() - (int) $startedAt) < 300) {
+            return ['success' => false, 'status' => 'building', 'message' => '知识库构建任务正在执行中，请勿重复触发'];
+        }
+
+        if (class_exists(Coroutine::class) && Coroutine::inCoroutine()) {
+            Coroutine::create(function () {
+                try {
+                    self::runIncrementalBuild();
+                } catch (\Throwable) {
+                    // 状态已落盘 failed，无需在此抛出协程异常
+                }
+            });
+            return ['success' => true, 'status' => 'building', 'message' => '增量构建已启动'];
+        }
+
+        // CLI/测试环境同步执行
+        self::runIncrementalBuild();
+        return ['success' => true, 'status' => 'success', 'message' => '增量构建已完成'];
+    }
+
+    /**
+     * 文档保存/删除后的单文件热更新（受 ai.rag.incrementalBuild 开关约束）。
+     *
+     * 失败只记日志不抛出：磁盘写入已成功，索引落后可以由下一次构建挽回。
+     */
+    private static function hotUpdateSource(string $relativePath, bool $exists): void
+    {
+        if (!RagSearch::incrementalBuildEnabled()) {
+            return;
+        }
+        try {
+            $dbPath = RagSearch::resolveDbPath();
+            if (!is_file($dbPath)) {
+                return; // 索引未建，热更新无从谈起
+            }
+            $rag = new RagSearch($dbPath);
+            if ($exists) {
+                $abs = self::getKnowledgeDir() . '/' . $relativePath;
+                if (is_file($abs)) {
+                    $rag->reindexSource($relativePath, (string) file_get_contents($abs), RagSearch::semanticClientFromConfig(), (int) filemtime($abs));
+                }
+            } else {
+                $rag->forgetSource($relativePath);
+            }
+        } catch (\Throwable $e) {
+            \App\Syslog::error('RAG', "hot update failed for {$relativePath}: " . $e->getMessage());
+        }
+    }
+
+    /**
      * Trigger asynchronous knowledge base rebuild.
      *
      * @return array{success: bool, status: string, message: string}
@@ -182,10 +357,23 @@ class RagManager
     /**
      * Execute build logic synchronously and update status.
      *
+     * ai.rag.incrementalBuild 开启且索引已存在时自动降级为增量构建
+     * （rag/knowledge 全量重扫成本高，Admin 触发按钮无需区分入口）；
+     * 索引缺失时增量无从比对，安全侧回退全量。
+     *
      * @return array<string, mixed>
      */
     public static function runBuild(): array
     {
+        if (RagSearch::incrementalBuildEnabled() && is_file(RagSearch::resolveDbPath())) {
+            try {
+                self::runIncrementalBuild();
+            } catch (\Throwable) {
+                // 状态已由 runIncrementalBuild 落盘 failed，保持 runBuild 不抛出的契约
+            }
+            return self::getBuildStatus();
+        }
+
         $startedAt = time();
         $baseDir = defined('CORE_PATH') ? CORE_PATH : (defined('BASE_PATH') ? BASE_PATH : dirname(__DIR__, 2));
         $knowledgeDir = $baseDir . '/rag/knowledge';
@@ -486,6 +674,9 @@ class RagManager
             throw new \RuntimeException("Failed to atomically replace document: {$targetPath}");
         }
 
+        // 增量开关打开时热更新该文件的索引（失败仅记日志，不阻塞保存）
+        self::hotUpdateSource($relativePath, true);
+
         return [
             'path' => $relativePath,
             'name' => $filename,
@@ -503,10 +694,14 @@ class RagManager
      */
     public static function deleteDoc(string $relativePath): array
     {
+        $normalized = trim(str_replace('\\', '/', $relativePath));
         $realPath = self::resolveSafePath($relativePath, true);
         if (!@unlink($realPath)) {
             throw new \RuntimeException("Failed to delete document: {$relativePath}");
         }
+
+        // 与索引中记录的 source 形式对齐（buildIndex 的相对路径无前导斜杠）
+        self::hotUpdateSource(ltrim($normalized, '/'), false);
 
         return [
             'path' => $relativePath,

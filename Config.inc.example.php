@@ -173,6 +173,10 @@ return [
             'queryRewrite' => [
                 'enabled' => false,
             ],
+            // 增量索引：开启后 rag:rebuild/管理端可走增量构建（仅重索引 mtime
+            // 变化的文件），且 saveDoc/deleteDoc 会同步热更新对应文件的索引。
+            // 关闭时行为与旧版一致（仅全量 rag:build）。
+            'incrementalBuild' => false,
         ],
         'mcp' => [
             'webSearch' => [
