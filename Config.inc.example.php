@@ -177,6 +177,11 @@ return [
             // 变化的文件），且 saveDoc/deleteDoc 会同步热更新对应文件的索引。
             // 关闭时行为与旧版一致（仅全量 rag:build）。
             'incrementalBuild' => false,
+            // 查询向量缓存（Redis 24h + 进程内 100 条/1MB）：相同查询零
+            // embedding API 调用，只省成本不改结果，默认开启。providers 中
+            // 加 {"type":"ollama","baseUrl":"http://localhost:11434",
+            // "embeddingModel":"bge-m3"} 可用本地 Ollama 完全离线嵌入。
+            'semanticCache' => true,
         ],
         'mcp' => [
             'webSearch' => [

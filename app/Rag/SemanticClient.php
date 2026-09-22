@@ -15,14 +15,20 @@ namespace App\Rag;
  *
  * Endpoints follow the widely-adopted gateway conventions:
  *   POST {baseUrl}/embeddings   {"model": ..., "input": [...]}
+ *
+ * Local Ollama providers (SemanticClient::ollama()) use the native format
+ * instead: POST /api/embeddings {"model": ..., "prompt": ...} → {"embedding":
+ * [...]}（单条请求，逐条循环）。本地回环地址免鉴权。
+ *
+ * 非 final：测试子类可覆写 embed() 注入确定性向量源（batch 自适应逻辑验证）。
  */
-final class SemanticClient
+class SemanticClient
 {
     private const CONNECT_TIMEOUT = 10;
     private const MAX_RESPONSE_BYTES = 2097152;
 
     /**
-     * @param array<int, array{name: string, baseUrl: string, apiKey: string, embeddingModel: string}> $providers
+     * @param array<int, array{name: string, baseUrl: string, apiKey: string, embeddingModel: string, local?: bool}> $providers
      */
     public function __construct(
         private array $providers,
@@ -48,16 +54,41 @@ final class SemanticClient
             'baseUrl' => rtrim($baseUrl, '/'),
             'apiKey' => trim($apiKey),
             'embeddingModel' => $embeddingModel,
+            'local' => false,
         ];
     }
 
     /**
-     * Whether semantic enhancement can actually run (at least one keyed provider).
+     * 本地 Ollama provider（plan 3.7：完全离线部署）。
+     *
+     * 与 provider() 的私网拦截不同：这里只放行 loopback 字面量
+     * （localhost / 127.0.0.1 / [::1]），其余主机名仍拒绝——Ollama 默认
+     * 就监听 127.0.0.1:11434，不放宽到任意外部地址。免鉴权（apiKey 为空）。
+     */
+    public static function ollama(string $name, string $baseUrl, string $embeddingModel): array
+    {
+        $parts = parse_url($baseUrl);
+        $host = strtolower((string) ($parts['host'] ?? ''));
+        if (!is_array($parts) || ($parts['scheme'] ?? '') !== 'http' || !in_array($host, ['localhost', '127.0.0.1', '::1'], true)) {
+            throw new \InvalidArgumentException('Ollama provider URL must be http on loopback (localhost/127.0.0.1/::1)');
+        }
+        return [
+            'name' => $name,
+            'baseUrl' => rtrim($baseUrl, '/'),
+            'apiKey' => '',
+            'embeddingModel' => $embeddingModel,
+            'local' => true,
+        ];
+    }
+
+    /**
+     * Whether semantic enhancement can actually run (keyed provider, or a
+     * trusted local Ollama which needs no api key).
      */
     public function isConfigured(): bool
     {
         foreach ($this->providers as $p) {
-            if ($p['apiKey'] !== '') {
+            if ($p['apiKey'] !== '' || !empty($p['local'])) {
                 return true;
             }
         }
@@ -72,15 +103,23 @@ final class SemanticClient
         return $this->lastProviderUsed;
     }
 
+    /** 上一次成功响应的向量维度（首次请求前为 null），供维度漂移告警用 */
+    private ?int $lastDims = null;
+
+    public function getLastDims(): ?int
+    {
+        return $this->lastDims;
+    }
+
     /**
-     * One-line summary of the keyed providers and their embedding models,
+     * One-line summary of the usable providers and their embedding models,
      * e.g. "siliconflow/BAAI/bge-m3 -> huidev/bge-m3".
      */
     public function describe(): string
     {
         $parts = [];
         foreach ($this->providers as $p) {
-            if ($p['apiKey'] === '') {
+            if ($p['apiKey'] === '' && empty($p['local'])) {
                 continue;
             }
             $parts[] = $p['name'] . '/' . $p['embeddingModel'];
@@ -99,6 +138,14 @@ final class SemanticClient
     {
         if ($texts === []) {
             return [];
+        }
+
+        $usable = array_values(array_filter($this->providers, fn($p) => $p['apiKey'] !== '' || !empty($p['local'])));
+        if ($usable !== [] && !empty($usable[0]['local'])) {
+            // 首选可用 provider 是本地 Ollama → 原生单条协议
+            $vectors = $this->embedOllama($usable[0], $texts);
+            $this->lastProviderUsed = $usable[0]['name'];
+            return $vectors;
         }
 
         $body = $this->postWithFailover('embeddingModel', '/embeddings', [
@@ -122,8 +169,38 @@ final class SemanticClient
             $vectors[$idx] = array_map('floatval', $vec);
         }
         ksort($vectors);
+        $vectors = array_values($vectors);
 
-        return array_values($vectors);
+        // $texts 非空且响应条数已校验 → $vectors 必非空
+        $this->lastDims = count($vectors[0]);
+        return $vectors;
+    }
+
+    /**
+     * Ollama 原生 /api/embeddings 是单条协议（prompt → embedding），批量
+     * 输入在这里逐条循环；任意一条失败即整体抛出（与远程批量语义一致，
+     * 由调用方降批/逐条重试）。
+     *
+     * @param array{name: string, baseUrl: string, apiKey: string, embeddingModel: string} $provider
+     * @param array<int, string> $texts
+     * @return array<int, array<int, float>>
+     */
+    private function embedOllama(array $provider, array $texts): array
+    {
+        $vectors = [];
+        foreach ($texts as $text) {
+            $body = $this->postTo($provider, '/api/embeddings', [
+                'model' => $provider['embeddingModel'],
+                'prompt' => $text,
+            ]);
+            $vec = $body['embedding'] ?? null;
+            if (!is_array($vec) || $vec === []) {
+                throw new \RuntimeException('Ollama response missing embedding');
+            }
+            $vectors[] = array_map('floatval', $vec);
+        }
+        $this->lastDims = count($vectors[0]);
+        return $vectors;
     }
 
     /**
@@ -136,7 +213,7 @@ final class SemanticClient
         $errors = [];
 
         foreach ($this->providers as $provider) {
-            if ($provider['apiKey'] === '') {
+            if ($provider['apiKey'] === '' && empty($provider['local'])) {
                 continue; // unconfigured provider — skip silently
             }
 
@@ -165,10 +242,10 @@ final class SemanticClient
         curl_setopt_array($ch, [
             CURLOPT_POST => true,
             CURLOPT_POSTFIELDS => json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE),
-            CURLOPT_HTTPHEADER => [
+            CURLOPT_HTTPHEADER => array_filter([
                 'Content-Type: application/json',
-                'Authorization: Bearer ' . $provider['apiKey'],
-            ],
+                $provider['apiKey'] !== '' ? 'Authorization: Bearer ' . $provider['apiKey'] : null,
+            ]),
             CURLOPT_RETURNTRANSFER => true,
             CURLOPT_TIMEOUT => $this->timeout,
             CURLOPT_CONNECTTIMEOUT => self::CONNECT_TIMEOUT,

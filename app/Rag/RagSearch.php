@@ -241,8 +241,12 @@ class RagSearch
     }
 
     /**
-     * 批量嵌入 chunk 并写入 doc_embeddings（batch 失败逐条重试）。
+     * 批量嵌入 chunk 并写入 doc_embeddings。
      * buildIndex 与增量重建共用；返回成功嵌入条数。
+     *
+     * batch size 自适应（plan 3.7）：成功 +4（上限 64），失败 ÷2（下限 4）
+     * 并逐条重试该批；维度漂移（响应维度相对首批突变）时自动重嵌入该批
+     * 一次，仍漂移则逐条降级只收维度一致的向量——维度混杂会污染余弦扫描。
      *
      * @param int[] $rowids
      * @param string[] $bodies
@@ -259,7 +263,10 @@ class RagSearch
             $embedded++;
         };
 
-        $embedSingle = function (int $rowid, string $text) use ($semantic, $storeEmbedding): bool {
+        $batchSize = 16;
+        $expectedDims = null;
+
+        $embedSingle = function (int $rowid, string $text, ?int $expectedDims) use ($semantic, $storeEmbedding): bool {
             $text = trim(mb_strcut($text, 0, 4000));
             if ($text === '') {
                 return false;
@@ -269,6 +276,9 @@ class RagSearch
                 if ($vec === null) {
                     return false;
                 }
+                if ($expectedDims !== null && count($vec) !== $expectedDims) {
+                    return false; // 维度漂移的单条不入库，避免污染余弦扫描
+                }
                 $storeEmbedding($rowid, $vec);
                 return true;
             } catch (\Throwable) {
@@ -276,23 +286,51 @@ class RagSearch
             }
         };
 
-        $batchSize = 16;
         $pairs = array_map(null, $rowids, $bodies);
-        foreach (array_chunk($pairs, $batchSize) as $i => $batch) {
+        // 指针式切片：batch size 自适应必须在运行时生效
+        for ($pos = 0, $total = count($pairs), $batchNo = 0; $pos < $total; $batchNo++) {
+            $i = $batchNo;
+            $batch = array_slice($pairs, $pos, $batchSize);
+            $pos += count($batch);
             $texts = array_map(fn($p) => trim(mb_strcut((string) $p[1], 0, 4000)), $batch);
 
             try {
                 $vectors = $semantic->embed($texts);
+
+                // 维度探测：漂移时重嵌入该批一次（plan 3.7），仍漂移则逐条降级，
+                // 只收维度一致的向量
+                if ($expectedDims !== null && $vectors !== [] && count($vectors[0]) !== $expectedDims) {
+                    \App\Syslog::warning('RAG', "embedding dims drifted ({$expectedDims} -> " . count($vectors[0]) . "), re-embedding batch #{$i}");
+                    $vectors = $semantic->embed($texts);
+                    if ($vectors !== [] && count($vectors[0]) !== $expectedDims) {
+                        \App\Syslog::error('RAG', "embedding dims still mismatched in batch #{$i}, falling back per chunk");
+                        foreach ($batch as [$rowid, $body]) {
+                            if (!$embedSingle($rowid, (string) $body, $expectedDims)) {
+                                \App\Syslog::error('RAG', "chunk rowid={$rowid} skipped: dims mismatch or unembeddable");
+                            }
+                        }
+                        continue;
+                    }
+                }
+                if ($expectedDims === null && $vectors !== []) {
+                    $expectedDims = count($vectors[0]);
+                }
+
+                $batchSize = min(64, $batchSize + 4); // 自适应扩张
                 foreach ($batch as $j => [$rowid,]) {
                     if (!isset($vectors[$j]) || trim($texts[$j]) === '') {
+                        continue;
+                    }
+                    if (count($vectors[$j]) !== $expectedDims) {
                         continue;
                     }
                     $storeEmbedding($rowid, $vectors[$j]);
                 }
             } catch (\Throwable $e) {
-                \App\Syslog::error('RAG', 'embedding batch #' . $i . ' failed (' . $e->getMessage() . '), retrying per chunk');
-                foreach ($batch as $j => [$rowid, $body]) {
-                    if (!$embedSingle($rowid, $body)) {
+                $batchSize = max(4, intdiv($batchSize, 2)); // 自适应收缩
+                \App\Syslog::error('RAG', 'embedding batch #' . $i . ' failed (' . $e->getMessage() . '), batch -> ' . $batchSize . ', retrying per chunk');
+                foreach ($batch as [$rowid, $body]) {
+                    if (!$embedSingle($rowid, (string) $body, $expectedDims)) {
                         \App\Syslog::error('RAG', "chunk rowid={$rowid} skipped: unembeddable");
                     }
                 }
@@ -579,9 +617,16 @@ class RagSearch
     private function runSemanticPipeline(string $query, array $lexical, int $k, SemanticClient $client, ?string $topic = null): array
     {
         try {
-            $queryVec = $client->embed([$query])[0] ?? null;
+            // 查询向量缓存（Redis + 进程内，ai.rag.semanticCache）：命中则零
+            // embedding API 调用。键含模型指纹，切换模型后自然失效。
+            $cache = new SemanticCache($client->describe());
+            $queryVec = $cache->get($query);
             if ($queryVec === null) {
-                throw new \RuntimeException('empty query embedding');
+                $queryVec = $client->embed([$query])[0] ?? null;
+                if ($queryVec === null) {
+                    throw new \RuntimeException('empty query embedding');
+                }
+                $cache->set($query, $queryVec);
             }
 
             // 向量召回：与全库嵌入算余弦，补足词法漏掉的同义表述；
@@ -664,11 +709,21 @@ class RagSearch
             if (!is_array($p) || ($p['baseUrl'] ?? '') === '') {
                 continue;
             }
+            $model = (string) ($p['embeddingModel'] ?? ($cfg['embeddingModel'] ?? 'bge-m3'));
+            if (($p['type'] ?? '') === 'ollama') {
+                // 本地 Ollama（type=ollama）：loopback 免鉴权，/api/embeddings 协议
+                $providers[] = SemanticClient::ollama(
+                    (string) ($p['name'] ?? $p['baseUrl']),
+                    (string) $p['baseUrl'],
+                    $model,
+                );
+                continue;
+            }
             $providers[] = SemanticClient::provider(
                 (string) ($p['name'] ?? $p['baseUrl']),
                 (string) $p['baseUrl'],
                 (string) ($p['apiKey'] ?? ''),
-                (string) ($p['embeddingModel'] ?? ($cfg['embeddingModel'] ?? 'bge-m3')),
+                $model,
             );
         }
 
