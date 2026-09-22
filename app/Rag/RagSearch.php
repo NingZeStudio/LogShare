@@ -443,6 +443,14 @@ class RagSearch
             // 向量召回：与全库嵌入算余弦，补足词法漏掉的同义表述；
             // topic 模式下过滤下推到召回 SQL（源头限定目录，无需扩量放大）
             $vectorHits = (new VectorIndex($this->pdo))->topByCosine($queryVec, max(20, $k * 4), $topic);
+
+            // rerank 开关开启：走 RetrievalPipeline（RRF 融合 + LLM 精排）。
+            // 关闭时保持既有「向量优先、词法补充」的截断合并，逐字节不变。
+            if (self::rerankEnabled()) {
+                $pipeline = new RetrievalPipeline(self::rerankerFromConfig());
+                return $pipeline->retrieve($query, $lexical, $vectorHits, $k)['results'];
+            }
+
             $seen = [];
             $out = [];
             foreach (array_merge($vectorHits, $lexical) as $result) {
@@ -462,6 +470,35 @@ class RagSearch
             \App\Syslog::error('RAG', 'semantic pipeline failed, falling back to lexical: ' . $e->getMessage());
             return array_slice($lexical, 0, $k);
         }
+    }
+
+    /** ai.rag.rerank.enabled —— RRF + LLM 精排总开关，默认关闭（保持旧排序）。 */
+    public static function rerankEnabled(): bool
+    {
+        try {
+            return (\App\Config::Get('ai')['rag']['rerank']['enabled'] ?? false) === true;
+        } catch (\Throwable) {
+            return false;
+        }
+    }
+
+    /**
+     * 构造精排器：有可用 AI 密钥时返回 LLMReranker，否则 Noop（仅 RRF）。
+     */
+    private static function rerankerFromConfig(): Rerank\RerankInterface
+    {
+        $ai = [];
+        try {
+            $ai = (array) \App\Config::Get('ai');
+        } catch (\Throwable) {
+            $ai = [];
+        }
+        $hasKeys = !empty($ai['apiKeys']) || !empty($ai['apiKey']);
+        if (!$hasKeys) {
+            return new Rerank\NoopReranker();
+        }
+        $max = (int) ($ai['rag']['rerank']['maxCandidates'] ?? 30);
+        return new Rerank\LLMReranker(max(2, min($max, 50)));
     }
 
     /**

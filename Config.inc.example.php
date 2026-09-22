@@ -159,6 +159,14 @@ return [
             // 分块策略：heading（默认，与旧版索引逐字节一致）/ sliding / token / hybrid。
             // 切换后需重跑 rag:build；hybrid 保留父块并对超长块二次切分。
             'chunker' => 'heading',
+            // RRF 融合 + LLM 精排：开启后语义检索改走 RetrievalPipeline（词法+向量
+            // 排名倒数融合，再交 LLM 单次 listwise 精排）。默认关闭时保持既有
+            // 「向量优先、词法补充」合并，排序逐字节不变。无 AI 密钥时自动降级
+            // 为仅 RRF（Noop 精排）。
+            'rerank' => [
+                'enabled' => false,
+                'maxCandidates' => 30,
+            ],
         ],
         'mcp' => [
             'webSearch' => [
