@@ -53,7 +53,7 @@ abstract class AbstractTool implements ToolInterface
     {
         return [
             'type' => 'object',
-            'properties' => $properties === [] ? new \stdClass() : $properties,
+            'properties' => $properties,
             'required' => array_values($required),
         ];
     }
