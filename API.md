@@ -75,7 +75,7 @@ POST /v1/log
 |------|------|------|------|
 | `content` | string | 是* | 日志内容（多文件上传时可为空，见下） |
 | `files` | array | 否 | 附加文件数组，每个元素 `{name, content}` |
-| `metadata[]` | array | 否 | 元数据，每项 `{key, value, label?, visible?}`；`value` 为字符串时直接存储，其他类型会 JSON 序列化；单项最长 value 1024 / label 128 / key 64 字符 |
+| `metadata[]` | array | 否 | 元数据，每项 `{key, value, label?, visible?}`；`value` 为字符串时直接存储，其他类型会 JSON 序列化；单项最长 value 1024 / label 128 / key 64 字符。服务端会在落库前用日志识别结果自动补写 `version`（Minecraft 版本）与 `loader`（fabric / neoforge / forge / vanilla 等）两项元数据，客户端已提交同名键时以客户端值为准，不受影响 |
 | `source` | string | 否 | 来源标识（最长 64 字符），建议填写，格式如 `fcl/1.2.0`、`pojavlauncher/3.4.1`。知识库按启动器生态组织了问题案例（FCL/ZL2/PGW/Amethyst/MobileGlues），该字段用于让 AI 分析优先匹配对应来源的案例 |
 
 \* 当提供 `files` 时 `content` 可省略，主文件取 `files[0]`。
@@ -915,10 +915,11 @@ GET /v1/admin/analytics/trends?days=7
 ```
 
 参数：
-- `days`: 统计天数（1-30，默认 7）
+- `days`: 统计天数（1-90，默认 7）
 
 响应：
-- `trends`: 按日走势列表（`date`, `count`, `bytes`）
+- `trends`: 按日走势列表（`date`, `count`, `bytes`），固定为最近 `days` 个自然日（起点为最早统计日的本地零点，无数据的日期补 0）
+- `bytes`: 按时间窗内取样得到的平均单篇体积估算，非逐条精确求和（避免全表读取大字段）
 
 ### 24. 存储健康度与底层资源诊断
 
@@ -1187,11 +1188,14 @@ GET /v1/admin/event-queue/stats
     "maxAttempts": 3,
     "backlog": 0,
     "pending": 0,
-    "streamLength": 12,
+    "streamLength": 0,
+    "entriesRead": 1420,
+    "consumers": 2,
     "deadLetters": 0,
     "counters": {
         "dispatched": 1420,
-        "processed_success": 1419,
+        "processed_success": 1400,
+        "processed_blocked": 19,
         "processed_failed": 1
     },
     "registeredEvents": {
@@ -1208,6 +1212,8 @@ GET /v1/admin/event-queue/stats
     }
 }
 ```
+
+指标口径说明：消费者处理完成后立即执行 `XACK` 与 `XDEL`，稳态下 `streamLength` 与 `backlog` 恒为 0，属设计而非故障；累计吞吐看 `entriesRead`（消费组自创建以来的投递条数，需 Redis 7.0+，低版本无该字段时为 0）与 `counters` 各计数。`counters.processed_blocked` 是异步安全审核命中违规并完成日志删除与来源封禁的拦截数，属预期治理结果，与真正的处理失败 `processed_failed` 分列统计。
 
 ### 45. 分页获取死信任务列表
 
