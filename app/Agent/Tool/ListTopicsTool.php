@@ -24,7 +24,7 @@ final class ListTopicsTool extends AbstractConfiguredTool
     {
         return [
             'type' => 'object',
-            'properties' => new \stdClass(),
+            'properties' => [],
         ];
     }
 

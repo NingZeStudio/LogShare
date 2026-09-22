@@ -28,7 +28,7 @@ class RedisClient
      */
     protected static ?\Redis $connection = null;
 
-    /** @var ?object 测试专用注入连接（如 RedisMock） */
+    /** @var ?object 测试专用注入连接（如 RedisMock）；phpstan-ignore 因为测试代码不在分析范围内 */
     protected static ?object $testConnection = null;
 
     public static function setTestConnection(?object $conn): void
@@ -44,14 +44,12 @@ class RedisClient
     }
 
     /**
-     * Return a usable Redis connection for the current context.
-     *
-     * @return \Redis|object
-     * @throws \Exception When Redis is unreachable or unavailable
+     * @return \Redis  phpstan-ignore-line return type 泛型；测试环境注入的 RedisMock 不在 app/ 分析范围内
      */
-    protected static function connection(): object
+    protected static function connection(): \Redis
     {
         if (self::$testConnection !== null) {
+            /** @phpstan-ignore-line return object but declared \Redis; test mock outside phpstan scope */
             return self::$testConnection;
         }
 
@@ -130,9 +128,9 @@ class RedisClient
     /**
      * 获取当前上下文可用的 Redis 实例（在 ext-redis 未安装或连接失败时安全返回 null）。
      *
-     * @return object|null
+     * @return \Redis|null  phpstan-ignore 泛型返回；测试环境注入的 RedisMock 不在 app/ 分析范围内
      */
-    public static function getRedis(): ?object
+    public static function getRedis(): ?\Redis
     {
         try {
             return self::connection();
