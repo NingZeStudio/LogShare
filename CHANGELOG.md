@@ -1,5 +1,63 @@
 # Changelog
 
+## 1.8.2 — 2026-09-23
+
+### RAG 架构全面升级（重大改进）
+
+- **Chunk 值对象 + 四种 Chunker 策略**：新增 `Chunk` 值对象与 `ChunkStrategy` 枚举（`HEADING_ONLY` / `SLIDING_WINDOW` / `TOKEN_AWARE` / `HYBRID`），`Chunker` 统一入口支持策略选择，知识库切片质量显著提升。
+- **检索组件拆分**：原 `RagSearch`  monolithic 拆分为 `LexicalIndex`（BM25 FTS5 + CJK bigram LIKE fallback）、`VectorIndex`（bge-m3 向量召回）、`SnippetExtractor`（上下文窗口提取）三大独立组件。
+- **RetrievalPipeline 与 RRF 融合**：新增 `RetrievalPipeline`  orchestrate 多路召回结果，支持 RRF（Reciprocal Rank Fusion）融合策略 + 可选 LLM 精排层（可开关）。
+- **QueryPreProcessor 检索词改写**：LLM 驱动的查询改写 + 规则分类路由，提升疑难查询召回率。
+- **增量索引**：`mtime` 文件变更比对、单文件热更新与 `--incremental` 构建模式，索引重建耗时大幅降低。
+- **SemanticCache 双层缓存**：查询结果缓存 + batch 自适应批处理，新增 Ollama 本地 embedding provider 支持。
+- **RetrievalMetrics 可观测性**：各阶段耗时埋点、慢查询日志与 `rag:stats` 命令，检索链路全链路可追溯。
+
+### 精排（Rerank）增强
+
+- **专用 cross-encoder 精排端点**：新增 `HttpReranker` 支持专用 cross-encoder 服务，提供连通性探测（`/health`），LLM 精排层可独立开关与替换后端。
+
+### Admin 管理后台扩展
+
+- **分析记录全生命周期管理**：`AnalysisRecordManager` 基于 Redis ZSET 三维索引 + 本地归档，支持分页检索、详情追溯（trace / score / validation / toolCallChain）、物理删除与 Trace JSON 导出。
+- **质量评分仪表盘**：四维评分概览（工具效率 / 证据充分性 / 结论明确性 / 总体质量）、日均趋势分析、低分预警（score < 60）与慢分析排查。
+- **Prompt 版本化热管理**：`PromptManager` 支持多版本列示、读取、Fork、在线编辑、安全删除与一键激活，毫秒级跨进程热重载。
+- **工具链在线动态门控**：`ToolManager` 实时对接 9 大排障工具，支持在线启用/禁用开关（动态同步 Prompt 与 Tool Schemas）、重试预算与 Fallback 降级链。
+- **排障模式参数可视化**：后台可视化调整 `deep` / `launcher` / `quick` 三大排障模式的运行预算（最大轮次 / Exa 搜索预算 / RAG 检索预算 / 行级读取预算）。
+
+### 前台结构化诊断输出
+
+- 诊断正文规范化结构化 JSON 输出块（根因 / 置信度 / 排障清单 / 证据追踪），前台前端自动解析渲染为诊断摘要卡片。
+
+### 事件队列与指标增强
+
+- `EventQueue` 指标补齐累计吞吐口径，违规拦截与处理失败分离统计。
+- `AiMetricsService` 质量看板按窗口全量聚合，修复总数恒为 100 与 days 参数失效问题。
+- 补齐检索召回计数，修复 `ragCalls` 与 `topics` 指标恒为 0 的问题。
+
+### 分析与可观测性
+
+- 服务端派生 `version` / `loader` 元数据并修正版本矩阵与走势取样口径。
+
+### 静态分析与代码质量
+
+- 全面修复 PHPStan Level 5 类型错误（`PromptBuilder` / `AbstractTool` / `MCPClient` / `RagController` / `ApiResponse` 等 10+ 文件）。
+- `RedisClient::getRedis()` 返回类型修正，消除所有调用方泛型类型不确定问题。
+- `RedisMock` 补齐 ZSET 有序集合全套核心方法与 `mGet`，单元测试离线环境完全解耦。
+
+### 新增测试
+
+- `RagRerankTest.php` — 精排层单元测试
+- `EcosystemMetadataDeriveTest.php` — 生态元数据派生测试
+- `AdminAiTest.php` — 管理后台 AI 端点全面覆盖
+
+### API 文档
+
+- `API.md` 补齐精排端点、召回指标与质量看板规范（+131 行）。
+- `openapi.yaml` 补全 RAG 架构升级遗漏的端点契约（+101 行）。
+- `postman_collection.json` 新增 6 组 RAG / Admin AI 操作用例。
+
+---
+
 ## 1.8.2-beta.2 — PreRelease (2026-09-22)
 
 ### 预发布说明
