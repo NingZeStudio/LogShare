@@ -151,25 +151,30 @@ class Log
             return $metadata;
         }
 
+        /** @var array<string, array{value: string, label: string}> $derived */
         $derived = [];
 
         $version = $this->log->getVersion();
         if (is_string($version) && $version !== '') {
-            $derived['version'] = $version;
+            $derived['version'] = ['value' => $version, 'label' => 'Minecraft 版本'];
         }
 
         // getNameId() 给出稳定小写标识（fabric / neoforge / vanilla），避免同名不同写法拉散分组
         $loader = $this->log->getNameId();
         if (is_string($loader) && $loader !== '') {
-            $derived['loader'] = $loader;
+            $derived['loader'] = ['value' => $loader, 'label' => '模组加载器'];
         }
 
         foreach ($metadata as $entry) {
             unset($derived[$entry->getKey()]);
         }
 
-        foreach ($derived as $key => $value) {
-            $entry = (new MetadataEntry())->setKey($key)->setValue($value)->setLabel($key);
+        // label 仅供展示，聚合与查询一律按 key，改文案不影响统计口径
+        foreach ($derived as $key => $item) {
+            $entry = (new MetadataEntry())
+                ->setKey($key)
+                ->setValue($item['value'])
+                ->setLabel($item['label']);
             if ($entry->isValid()) {
                 $metadata[] = $entry;
             }
