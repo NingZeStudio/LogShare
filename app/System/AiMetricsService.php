@@ -96,6 +96,42 @@ final class AiMetricsService
     }
 
     /**
+     * 记录一次知识库检索调用：rag_calls 计数 + 本次命中所属主题目录分布。
+     *
+     * 由 RagController 在 rag_search 落点调用，而非 AnalysisScorer/控制器层：
+     * 只有检索层知道命中条目实际落在哪些目录，且该口径同时覆盖 Agent 内联与
+     * 队列两条执行路径。$topicsHit 传命中结果的目录（可为空数组）。
+     *
+     * @param array<int, string> $topicsHit
+     */
+    public static function recordRetrieval(array $topicsHit): void
+    {
+        $redis = RedisClient::getRedis();
+        if ($redis === null) {
+            return;
+        }
+        $dateKey = date('Ymd');
+        try {
+            $hashKey = self::METRICS_PREFIX . 'summary:' . $dateKey;
+            $redis->hIncrBy($hashKey, 'rag_calls', 1);
+            $redis->expire($hashKey, 3024000);
+
+            if (!empty($topicsHit)) {
+                $topicKey = self::METRICS_PREFIX . 'topics:' . $dateKey;
+                foreach (array_unique($topicsHit) as $tp) {
+                    $tp = trim((string) $tp);
+                    if ($tp !== '') {
+                        $redis->hIncrBy($topicKey, $tp, 1);
+                    }
+                }
+                $redis->expire($topicKey, 3024000);
+            }
+        } catch (\Throwable $e) {
+            \App\Syslog::error('AiMetrics', 'Redis retrieval record failed: ' . $e->getMessage());
+        }
+    }
+
+    /**
      * 读取运营指标大盘。
      *
      * @param int $days 查询天数（1-30，默认 7）

@@ -177,6 +177,13 @@ class RagController extends AbstractController
                     $k = isset($arguments['k']) ? (int) $arguments['k'] : 5;
                     $results = $rag->search($query, $k, $topic);
 
+                    // 召回命中口径按实际返回条目的所属目录统计，而非模型传入的 topic
+                    // 限定（多数检索不带 topic，按入参统计会恒为空）。
+                    \App\System\AiMetricsService::recordRetrieval(array_map(
+                        static fn(array $r): string => RagSearch::topicOfSource((string) $r['source']),
+                        $results
+                    ));
+
                     $text = self::formatResults($results, $rag->stats(), $topic);
                     $response['result'] = [
                         'content' => [
