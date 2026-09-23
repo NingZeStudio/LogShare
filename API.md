@@ -1024,9 +1024,9 @@ GET /v1/admin/ai/metrics?days=7
 - `days`: 统计天数（1-30，默认 7）
 
 响应：
-- `summary`: 核心运营总览（总分析请求数、成功/失败数、成功率、平均耗时、P50/P90/P99 耗时、Token 输入/输出/总计预估、RAG 检索调用次数）
+- `summary`: 核心运营总览（总分析请求数、成功/失败数、成功率、平均耗时、P50/P90/P99 耗时、Token 输入/输出/总计预估）；其中 `ragCalls` 按 `rag_search` 实际执行次数累加，计数点在 RAG 服务落点，内联与队列两条分析路径同口径
 - `trends`: 按日分析吞吐量与平均耗时走势
-- `topics`: 知识库 Top 命中 Topic 排行及占比
+- `topics`: 知识库 Top 命中排行及占比（`[{ topic, count, percentage }]`）。按每次检索**实际返回条目所属目录**统计，而非模型传入的 `topic` 限定——多数检索不带该参数，按入参会恒为空；当日无检索时为空数组
 - `durationDistribution`: 响应耗时分布区间统计（极速、正常、较长、深度推理）
 
 ### 35. AI 微队列深层探查
@@ -1306,7 +1306,7 @@ GET /v1/admin/ai/scoreboard/slow
 GET /v1/admin/ai/scoreboard/low-score
 ```
 
-- `GET /v1/admin/ai/scoreboard`：四维质量评分概览与日均趋势（支持 `days` 参数，默认 7 天），聚合分析总数、平均总分、工具效率分、证据充分性分及评级分布。
+- `GET /v1/admin/ai/scoreboard`：四维质量评分概览与日均趋势（支持 `days` 参数，默认 7 天），聚合分析总数、平均总分、工具效率分、证据充分性分及评级分布。统计覆盖时间窗内**全部**留存记录：分析记录保留 7 天（`TTL_SECONDS`）、索引条目上限 5000（`MAX_INDEX_ENTRIES`），因此 `days` 超过 7 不会看到更早数据，记录数触顶时按最新 5000 条聚合。
 - `GET /v1/admin/ai/scoreboard/slow`：慢分析耗时排查列表（参数 `limit`, `minDurationMs` 默认 15000ms）。
 - `GET /v1/admin/ai/scoreboard/low-score`：低分诊断预警列表（参数 `limit`, `maxScore` 默认 60）。
 
@@ -1364,7 +1364,10 @@ PUT /v1/admin/rag/config
 ```json
 {
   "chunker": "heading",
-  "rerank": { "enabled": false, "maxCandidates": 30 },
+  "rerank": {
+    "enabled": false, "maxCandidates": 30, "type": "llm",
+    "baseUrl": "", "model": "", "apiKey": "", "timeout": 10, "allowLoopback": false
+  },
   "queryRewrite": { "enabled": false },
   "incrementalBuild": false,
   "semanticCache": true,
@@ -1372,9 +1375,13 @@ PUT /v1/admin/rag/config
 }
 ```
 
-`PUT` 接受上述结构的任意子集，按白名单校验后局部合并写入 `runtime/dynamic_config.json`，跨常驻进程热生效，无需重启；响应体为更新后的完整快照（与 `GET` 一致）。
+`rerank.type` 决定精排器实现：`llm` 复用 `ai.apiKeys`/`ai.model` 指向的对话模型，对候选池做一次 listwise 重排；`http` 调用专用 cross-encoder 排序端点，请求为 `POST {baseUrl}/rerank`，请求体 `{"model","query","documents","top_n"}`，与 Cohere Rerank、Jina、SiliconFlow bge-reranker、vLLM、Xinference 等网关的约定一致。响应解析兼容 `{"results":[{"index","relevance_score"}]}` 与裸数组 `[{"index","score"}]`，带分值时按分值降序重排。
 
-取值约束：`chunker` 限 `heading` / `sliding` / `token` / `hybrid`，非法值返回 422；`rerank.maxCandidates` 收敛到 2~50；`telemetry.slowMs` 下限 1。未识别任何字段时返回 400。`chunker` 仅影响后续索引构建，切换后需重跑构建才会作用于既有切片。
+`PUT` 接受上述结构的任意子集，按白名单校验后局部合并写入 `runtime/dynamic_config.json`，跨常驻进程热生效，无需重启；响应体为更新后的完整快照（与 `GET` 一致）。`rerank` 为逐字段合并，只提交 `enabled` 不会抹掉已配置的端点参数。
+
+取值约束：`chunker` 限 `heading` / `sliding` / `token` / `hybrid`；`rerank.type` 限 `llm` / `http`，取 `http` 时 `baseUrl` 与 `model` 必须齐备，否则 422；`rerank.timeout` 收敛到 1~60 秒；`rerank.maxCandidates` 收敛到 2~50；`telemetry.slowMs` 下限 1。`baseUrl` 只接受 http/https，私网地址一律拒绝，本机自托管端点须显式置 `allowLoopback: true`（仅放行 `localhost`/`127.0.0.1`/`::1`）。`rerank.apiKey` 读取时只回显掩码形态（`sk-1****abcd`），提交时原样回传掩码即沿用已存密钥，填入新值则覆盖。未识别任何字段时返回 400。`chunker` 仅影响后续索引构建，切换后需重跑构建才会作用于既有切片。
+
+精排失败不影响检索：端点不可达、超时、HTTP ≥ 400 或响应无法解析时一律回退 RRF 融合顺序，细节写 `Syslog::error('RAG', ...)`；配置非法而退回 `llm` 形态时同样有日志记录。
 
 ### 54. 知识库索引差异预览
 
@@ -1430,6 +1437,27 @@ GET /v1/admin/rag/telemetry[?date=YYYY-MM-DD&slow=1&slowLimit=10]
 ```
 
 `summary` 为 Redis hash 原样透出，值均为字符串；未启用的阶段不产生对应键（`rewrite_ms:*` 依赖 queryRewrite、`reranked` 依赖 rerank、`result_cache` 依赖 semanticCache），消费方须把「键缺失」与「计数为零」区分渲染。Redis 不可用或当日零检索时 `summary` 为 `null` 且 `available: false`。遥测写入全程 fail-open，采集失败不影响检索链路。
+
+### 57. 精排端点连通性探测
+
+```
+POST /v1/admin/rag/test-rerank
+```
+
+向 `{baseUrl}/rerank` 投递两条固定测试文档，校验协议、鉴权与响应形态，供面板在保存前确认端点可用。请求体字段全部可选：
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `baseUrl` | string | 缺省时取已存配置 |
+| `model` | string | 缺省时取已存配置 |
+| `apiKey` | string | 留空或传掩码值时自动换成已存真值 |
+| `allowLoopback` | bool | 缺省时取已存配置 |
+
+```json
+{ "success": true, "latencyMs": 214, "httpCode": 200, "model": "BAAI/bge-reranker-v2-m3", "order": [0, 1] }
+```
+
+探测失败不算接口错误，仍返回 200 并在 `data` 中给出 `success: false`、`httpCode` 与 `error` 文本；只有入参非法（`baseUrl` 协议不合、命中私网、未开回环开关却指向回环、`model` 缺失）才返回 4xx。`order` 为两条测试文档按相关性重排后的 0-based 索引序列，响应形态无法解析时该字段缺席并给出期望格式提示。
 
 ---
 

@@ -5731,7 +5731,7 @@
                         ],
                         "body": {
                             "mode": "raw",
-                            "raw": "{\"chunker\":\"heading\",\"rerank\":{\"enabled\":true,\"maxCandidates\":30},\"telemetry\":{\"enabled\":true,\"slowMs\":500}}",
+                            "raw": "{\"chunker\":\"heading\",\"rerank\":{\"enabled\":true,\"maxCandidates\":30,\"type\":\"http\",\"baseUrl\":\"https://api.example.cn/v1\",\"model\":\"BAAI/bge-reranker-v2-m3\",\"apiKey\":\"\",\"timeout\":10,\"allowLoopback\":false},\"telemetry\":{\"enabled\":true,\"slowMs\":500}}",
                             "options": {
                                 "raw": {
                                     "language": "json"
@@ -5739,6 +5739,52 @@
                             }
                         },
                         "method": "PUT"
+                    }
+                },
+                {
+                    "name": "Test RAG rerank endpoint (Admin)",
+                    "request": {
+                        "name": "Test RAG rerank endpoint (Admin)",
+                        "description": {
+                            "content": "Probe the cross-encoder rerank endpoint with two fixed documents. Omitted fields fall back to the stored ai.rag.rerank config and a masked apiKey is replaced by the stored one. Transport and HTTP failures still return 200 with success=false",
+                            "type": "text/plain"
+                        },
+                        "url": {
+                            "path": [
+                                "v1",
+                                "admin",
+                                "rag",
+                                "test-rerank"
+                            ],
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "query": []
+                        },
+                        "header": [
+                            {
+                                "key": "Authorization",
+                                "value": "Bearer {{adminToken}}"
+                            },
+                            {
+                                "key": "Accept",
+                                "value": "application/json"
+                            },
+                            {
+                                "key": "Content-Type",
+                                "value": "application/json"
+                            }
+                        ],
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\"baseUrl\":\"https://api.example.cn/v1\",\"model\":\"BAAI/bge-reranker-v2-m3\",\"allowLoopback\":false}",
+                            "options": {
+                                "raw": {
+                                    "language": "json"
+                                }
+                            }
+                        },
+                        "method": "POST"
                     }
                 },
                 {
