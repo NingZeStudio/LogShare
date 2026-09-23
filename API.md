@@ -75,7 +75,7 @@ POST /v1/log
 |------|------|------|------|
 | `content` | string | 是* | 日志内容（多文件上传时可为空，见下） |
 | `files` | array | 否 | 附加文件数组，每个元素 `{name, content}` |
-| `metadata[]` | array | 否 | 元数据，每项 `{key, value, label?, visible?}`；`value` 为字符串时直接存储，其他类型会 JSON 序列化；单项最长 value 1024 / label 128 / key 64 字符。服务端会在落库前用日志识别结果自动补写 `version`（Minecraft 版本）与 `loader`（fabric / neoforge / forge / vanilla 等）两项元数据，客户端已提交同名键时以客户端值为准，不受影响 |
+| `metadata[]` | array | 否 | 元数据，每项 `{key, value, label?, visible?}`；`value` 为字符串时直接存储，其他类型会 JSON 序列化；单项最长 value 1024 / label 128 / key 64 字符。服务端会在落库前用日志识别结果自动补写 `version`（Minecraft 版本）与 `loader`（fabric / neoforge / forge / vanilla 等）两项元数据，客户端已提交同名键时以客户端值为准，不受影响；补写项的 `label` 固定为 `Minecraft 版本` 与 `模组加载器`，`visible` 为默认 true |
 | `source` | string | 否 | 来源标识（最长 64 字符），建议填写，格式如 `fcl/1.2.0`、`pojavlauncher/3.4.1`。知识库按启动器生态组织了问题案例（FCL/ZL2/PGW/Amethyst/MobileGlues），该字段用于让 AI 分析优先匹配对应来源的案例 |
 
 \* 当提供 `files` 时 `content` 可省略，主文件取 `files[0]`。

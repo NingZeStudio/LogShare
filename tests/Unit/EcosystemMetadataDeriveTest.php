@@ -45,3 +45,22 @@ test('client submitted metadata keys are never overwritten or duplicated', funct
 test('non minecraft logs gain no ecosystem metadata', function () {
     expect(ecosystemDerivePairs(PLAIN_LOG))->toBe([]);
 });
+
+test('derived entries carry display labels the clients render directly', function () {
+    $log = new Log();
+    (new ReflectionProperty(Log::class, 'data'))->setValue($log, FABRIC_LOG);
+    $log->analyse();
+
+    /** @var MetadataEntry[] $entries */
+    $entries = (new ReflectionMethod(Log::class, 'deriveEcosystemMetadata'))->invoke($log, []);
+
+    $labels = [];
+    foreach ($entries as $entry) {
+        $labels[(string) $entry->getKey()] = $entry->getLabel();
+    }
+
+    expect($labels)->toBe([
+        'version' => 'Minecraft 版本',
+        'loader' => '模组加载器',
+    ]);
+});
