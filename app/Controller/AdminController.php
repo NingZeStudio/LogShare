@@ -945,6 +945,104 @@ class AdminController extends AbstractController
     }
 
     /**
+     * 精排端点连通性探测：向 {baseUrl}/rerank 投两条固定文档，验证协议、鉴权
+     * 与响应形态。面板据此在保存前确认端点可用，避免线上静默回退 RRF 顺序。
+     */
+    #[PostMapping(path: 'rag/test-rerank')]
+    public function testRagRerank(): ResponseInterface
+    {
+        $body = $this->getParsedBody();
+        $stored = (array) (Config::all()['ai']['rag']['rerank'] ?? []);
+
+        $baseUrl = trim((string) ($body['baseUrl'] ?? ''));
+        $model = trim((string) ($body['model'] ?? ''));
+        $apiKey = trim((string) ($body['apiKey'] ?? ''));
+        $allowLoopback = ($body['allowLoopback'] ?? ($stored['allowLoopback'] ?? false)) === true;
+
+        if ($baseUrl === '') {
+            $baseUrl = (string) ($stored['baseUrl'] ?? '');
+        }
+        if ($model === '') {
+            $model = (string) ($stored['model'] ?? '');
+        }
+        // 面板回填的是掩码值，探测时用已存真值替换
+        if ($apiKey === '' || str_contains($apiKey, '****') || $apiKey === '********') {
+            $apiKey = (string) ($stored['apiKey'] ?? '');
+        }
+
+        try {
+            $baseUrl = \App\Rag\Rerank\HttpReranker::normalizeEndpoint($baseUrl, $allowLoopback);
+        } catch (\InvalidArgumentException $e) {
+            throw new ApiError(422, $e->getMessage());
+        }
+        if ($model === '') {
+            throw new ApiError(400, 'model is required for rerank endpoint test');
+        }
+
+        $documents = ['Java 21 与旧版 Mod 的 class version 冲突', '手机物理内存不足导致进程被 LMK 回收'];
+        $payload = ['model' => $model, 'query' => 'class version 65 expected 61', 'documents' => $documents, 'top_n' => 2];
+        $start = microtime(true);
+        $ch = curl_init($baseUrl . '/rerank');
+        try {
+            curl_setopt_array($ch, [
+                CURLOPT_POST => true,
+                CURLOPT_POSTFIELDS => json_encode($payload, JSON_UNESCAPED_UNICODE),
+                CURLOPT_HTTPHEADER => array_filter([
+                    'Content-Type: application/json',
+                    $apiKey !== '' ? 'Authorization: Bearer ' . $apiKey : null,
+                ]),
+                CURLOPT_RETURNTRANSFER => true,
+                CURLOPT_TIMEOUT => 20,
+                CURLOPT_CONNECTTIMEOUT => 5,
+                CURLOPT_FORBID_REUSE => true,
+            ]);
+
+            $response = curl_exec($ch);
+            $latencyMs = (int) round((microtime(true) - $start) * 1000);
+            $httpCode = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+            $curlError = curl_error($ch);
+
+            if ($curlError !== '') {
+                return $this->respondSuccess([
+                    'success' => false,
+                    'latencyMs' => $latencyMs,
+                    'httpCode' => $httpCode,
+                    'error' => 'cURL error: ' . $curlError,
+                ], 'Rerank endpoint test failed');
+            }
+            if ($httpCode < 200 || $httpCode >= 300) {
+                return $this->respondSuccess([
+                    'success' => false,
+                    'latencyMs' => $latencyMs,
+                    'httpCode' => $httpCode,
+                    'error' => is_string($response) ? mb_substr($response, 0, 200) : 'empty response',
+                ], 'Rerank endpoint test failed');
+            }
+
+            $decoded = is_string($response) ? json_decode($response, true) : null;
+            $order = is_array($decoded) ? \App\Rag\Rerank\HttpReranker::parseOrder($decoded, count($documents)) : null;
+            if ($order === null) {
+                return $this->respondSuccess([
+                    'success' => false,
+                    'latencyMs' => $latencyMs,
+                    'httpCode' => $httpCode,
+                    'error' => '响应中未能解析出 results[].index / relevance_score（期望 {"results":[{"index","relevance_score"}]} 或裸数组 [{"index","score"}]）',
+                ], 'Rerank endpoint responded in an unrecognized shape');
+            }
+
+            return $this->respondSuccess([
+                'success' => true,
+                'latencyMs' => $latencyMs,
+                'httpCode' => $httpCode,
+                'model' => $model,
+                'order' => $order,
+            ], 'Rerank endpoint responded successfully');
+        } finally {
+            $ch = null;
+        }
+    }
+
+    /**
      * RAG 能力开关快照（chunker / rerank / queryRewrite / incrementalBuild /
      * semanticCache / telemetry）。只读，供管理面板渲染当前生效配置。
      */
@@ -957,6 +1055,15 @@ class AdminController extends AbstractController
             'rerank' => [
                 'enabled' => (bool) ($rag['rerank']['enabled'] ?? false),
                 'maxCandidates' => (int) ($rag['rerank']['maxCandidates'] ?? 30),
+                'type' => (string) ($rag['rerank']['type'] ?? 'llm'),
+                'baseUrl' => (string) ($rag['rerank']['baseUrl'] ?? ''),
+                'model' => (string) ($rag['rerank']['model'] ?? ''),
+                // 密钥只回显掩码形态；回填时由 Config::restoreMaskedSecrets() 还原真值
+                'apiKey' => (string) ($rag['rerank']['apiKey'] ?? '') !== ''
+                    ? Config::maskSecret((string) $rag['rerank']['apiKey'])
+                    : '',
+                'timeout' => (int) ($rag['rerank']['timeout'] ?? 10),
+                'allowLoopback' => (bool) ($rag['rerank']['allowLoopback'] ?? false),
             ],
             'queryRewrite' => [
                 'enabled' => (bool) ($rag['queryRewrite']['enabled'] ?? false),
@@ -991,10 +1098,64 @@ class AdminController extends AbstractController
             $ragUpdate['chunker'] = $chunker;
         }
         if (isset($body['rerank']) && is_array($body['rerank'])) {
-            $ragUpdate['rerank'] = [
-                'enabled' => (bool) ($body['rerank']['enabled'] ?? false),
-                'maxCandidates' => max(2, min(50, (int) ($body['rerank']['maxCandidates'] ?? 30))),
-            ];
+            // 逐字段局部合并：面板只改 enabled 时不得把已配置的端点参数抹掉
+            $current = (array) (Config::all()['ai']['rag']['rerank'] ?? []);
+            $patch = $body['rerank'];
+            $rerankUpdate = [];
+
+            if (array_key_exists('enabled', $patch)) {
+                $rerankUpdate['enabled'] = (bool) $patch['enabled'];
+            }
+            if (isset($patch['maxCandidates'])) {
+                $rerankUpdate['maxCandidates'] = max(2, min(50, (int) $patch['maxCandidates']));
+            }
+            if (isset($patch['type'])) {
+                $type = strtolower(trim((string) $patch['type']));
+                if (!in_array($type, ['llm', 'http'], true)) {
+                    throw new ApiError(422, 'Invalid rerank type; expected llm|http');
+                }
+                $rerankUpdate['type'] = $type;
+            }
+            if (array_key_exists('allowLoopback', $patch)) {
+                $rerankUpdate['allowLoopback'] = (bool) $patch['allowLoopback'];
+            }
+            if (isset($patch['timeout'])) {
+                $rerankUpdate['timeout'] = max(1, min(60, (int) $patch['timeout']));
+            }
+            if (array_key_exists('apiKey', $patch)) {
+                $apiKey = trim((string) $patch['apiKey']);
+                if ($apiKey !== '' && (str_contains($apiKey, '****') || $apiKey === '********') && (string) ($current['apiKey'] ?? '') === '') {
+                    throw new ApiError(422, 'Masked rerank apiKey submitted without a stored key; send the real key');
+                }
+                $rerankUpdate['apiKey'] = $apiKey;
+            }
+
+            $effectiveType = $rerankUpdate['type'] ?? (string) ($current['type'] ?? 'llm');
+            if ($effectiveType === 'http') {
+                if (array_key_exists('baseUrl', $patch)) {
+                    $baseUrl = trim((string) $patch['baseUrl']);
+                    if ($baseUrl !== '') {
+                        $baseUrl = \App\Rag\Rerank\HttpReranker::normalizeEndpoint(
+                            $baseUrl,
+                            (bool) ($rerankUpdate['allowLoopback'] ?? ($current['allowLoopback'] ?? false))
+                        );
+                    }
+                    $rerankUpdate['baseUrl'] = $baseUrl;
+                }
+                if (isset($patch['model'])) {
+                    $rerankUpdate['model'] = trim((string) $patch['model']);
+                }
+                // 提前拒绝半成品配置，否则只能等运行时静默回退 LLM 精排、面板看不出原因
+                $effectiveBaseUrl = $rerankUpdate['baseUrl'] ?? (string) ($current['baseUrl'] ?? '');
+                $effectiveModel = $rerankUpdate['model'] ?? (string) ($current['model'] ?? '');
+                if ($effectiveBaseUrl === '' || $effectiveModel === '') {
+                    throw new ApiError(422, 'rerank type=http requires both baseUrl and model');
+                }
+            }
+
+            if ($rerankUpdate !== []) {
+                $ragUpdate['rerank'] = $rerankUpdate;
+            }
         }
         if (isset($body['queryRewrite']) && is_array($body['queryRewrite'])) {
             $ragUpdate['queryRewrite'] = ['enabled' => (bool) ($body['queryRewrite']['enabled'] ?? false)];

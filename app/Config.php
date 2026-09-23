@@ -461,6 +461,7 @@ class Config
             ['cache', 'redis', 'password'],
             ['storage', 'mariadb', 'password'],
             ['ai', 'mcp', 'rag', 'authToken'],
+            ['ai', 'rag', 'rerank', 'apiKey'],
             ['github', 'token'],
         ];
         foreach ($secretFields as $path) {
@@ -575,6 +576,9 @@ class Config
                 }
             }
             unset($p);
+        }
+        if (isset($masked['ai']['rag']['rerank']['apiKey']) && (string) $masked['ai']['rag']['rerank']['apiKey'] !== '') {
+            $masked['ai']['rag']['rerank']['apiKey'] = self::maskSecret((string) $masked['ai']['rag']['rerank']['apiKey']);
         }
 
         if (isset($masked['security']['contentRules']['keywords']) && is_array($masked['security']['contentRules']['keywords'])) {
