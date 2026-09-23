@@ -118,10 +118,12 @@ final class AnalysisRecordManager
      * @param array<string, mixed> $filters
      * @return array{total: int, page: int, pageSize: int, items: array<int, mixed>}
      */
-    public static function list(array $filters = [], int $page = 1, int $pageSize = 20): array
+    public static function list(array $filters = [], int $page = 1, int $pageSize = 20, int $maxPageSize = 100): array
     {
         $page = max(1, $page);
-        $pageSize = max(1, min(100, $pageSize));
+        // $maxPageSize 供内部聚合调用方（getScoreboard）放宽；HTTP 侧一律走默认 100，
+        // 不得把请求参数透传进来，否则单次请求可拖全量记录解码。
+        $pageSize = max(1, min($maxPageSize, $pageSize));
 
         $redis = RedisClient::getRedis();
         if ($redis === null) {
@@ -309,7 +311,11 @@ final class AnalysisRecordManager
         if ($days > 0) {
             $filters['since'] = time() - ($days * 86400);
         }
-        $listRes = self::list($filters, 1, 1000);
+        // 聚合口径必须覆盖窗口内全量记录：早先传 pageSize=1000，但 list() 默认把页
+        // 大小夹到 100，于是 totalAnalyses 恒为 100、各项均值只统计最新 100 条，
+        // 且 days=1/7/30 返回同一批数据。索引本身被 MAX_INDEX_ENTRIES 封顶，
+        // 这里按同一上限取数即可拿全，均值分母与遍历条数因此始终一致。
+        $listRes = self::list($filters, 1, self::MAX_INDEX_ENTRIES, self::MAX_INDEX_ENTRIES);
         $items = $listRes['items'];
         $total = count($items);
 

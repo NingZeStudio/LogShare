@@ -79,6 +79,42 @@ test('AnalysisRecordManager records and lists analyses with filtering', function
     expect($deleted)->toBeTrue();
 });
 
+test('scoreboard aggregates every record in the window, not just the first page', function () {
+    // 回归：getScoreboard() 曾以 pageSize=1000 调 list()，而 list() 默认把页大小夹到
+    // 100，导致 totalAnalyses 恒为 100、均值只统计最新 100 条，days 参数形同失效。
+    $emitter = new class implements \App\Sse\AnalysisEmitter {
+        public function begin(): void {}
+        public function emit(string $event, string $data): void {}
+        public function finish(string $event, string $data): void {}
+    };
+
+    $seeded = 105;
+    foreach (range(1, $seeded) as $i) {
+        $key = 'regression_scoreboard_' . $i;
+        $ctx = new AgentContext('log content', $key, null, $emitter, AnalysisMode::DEEP, 'v1');
+        AnalysisRecordManager::record(new AnalysisResult(
+            cacheKey: $key,
+            success: true,
+            rounds: 1,
+            toolCallChain: [],
+            metrics: ['durationMs' => 1000],
+            validation: [],
+            // 全部低分且互不相同：均值与低分计数都能区分「聚合全量」与「只看 100 条」
+            score: ['overall' => 10, 'toolEfficiency' => 10, 'evidenceSufficiency' => 10, 'conclusionClarity' => 10],
+            fullAnswer: 'low',
+            trace: ['model' => 'test-model', 'startedAt' => date('c')]
+        ), $ctx);
+    }
+
+    $scoreboard = AnalysisRecordManager::getScoreboard(7);
+    expect($scoreboard['totalAnalyses'])->toBeGreaterThanOrEqual($seeded);
+    expect($scoreboard['lowScoreCount'])->toBeGreaterThanOrEqual($seeded);
+
+    foreach (range(1, $seeded) as $i) {
+        AnalysisRecordManager::delete('regression_scoreboard_' . $i);
+    }
+});
+
 test('PromptManager manages prompt versions and lifecycle', function () {
     $prompts = PromptManager::listPrompts();
     expect($prompts)->toBeArray();
