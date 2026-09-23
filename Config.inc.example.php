@@ -156,6 +156,47 @@ return [
             'enabled' => false,
             'timeout' => 30,
             'providers' => [],
+
+            // 分块策略：heading（按标题层级）| sliding（滑窗重叠）| token（定长切分）| hybrid（混合）。
+            // 改动只影响后续构建，须重跑 rag:build 才落到索引上。
+            'chunker' => 'heading',
+
+            // 查询改写：检索前用一次轻量模型调用扩展/归一查询词。默认关闭。
+            'queryRewrite' => [
+                'enabled' => false,
+            ],
+
+            // 精排（对 RRF 融合后的候选池重排序）。任何失败都回退融合顺序，不影响检索可用性。
+            'rerank' => [
+                'enabled' => false,
+                // 送入精排的候选数，取值 2–50
+                'maxCandidates' => 30,
+                // llm = 复用主分析模型做 listwise 重排（无需额外配置）；
+                // http = 调用专用 cross-encoder 端点（Cohere / Jina / SiliconFlow bge-reranker / vLLM / Xinference）
+                'type' => 'llm',
+                // type=http 时必填：POST {baseUrl}/rerank，请求体 {"model","query","documents","top_n"}
+                'baseUrl' => '',
+                'model' => '',
+                // 端点独立密钥，留空则不带 Authorization 头（本地无鉴权服务可用）
+                'apiKey' => '',
+                'timeout' => 10,
+                // 仅当精排服务就在本机（如 TEI / xinference 监听 127.0.0.1）时开启；
+                // 只放行回环地址，私网网段一律拒绝。
+                'allowLoopback' => false,
+            ],
+
+            // 查询向量缓存（Redis + 进程内 LRU）：同一查询重复检索时零 embedding 调用。
+            'semanticCache' => true,
+
+            // 增量构建：只重索引 mtime 变化的文件，配合 GET /rag/build/stale 与 POST /rag/build/incremental。
+            'incrementalBuild' => false,
+
+            // 检索链路遥测：按自然日累计各阶段耗时与命中，供 GET /rag/telemetry 读取。
+            'telemetry' => [
+                'enabled' => true,
+                // 超过该毫秒数的查询进入慢查询明细
+                'slowMs' => 500,
+            ],
         ],
         'mcp' => [
             'webSearch' => [

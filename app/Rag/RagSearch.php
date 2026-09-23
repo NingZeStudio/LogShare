@@ -502,6 +502,16 @@ class RagSearch
     }
 
     /**
+     * 由结果 source 路径反推所属主题目录，分组规则与 topics() 一致（首段为目录，
+     * 无目录归入根目录）。供指标统计等调用方复用，避免两处口径漂移。
+     */
+    public static function topicOfSource(string $source): string
+    {
+        $parts = explode('/', trim($source, '/'));
+        return count($parts) > 1 ? $parts[0] : '(根目录)';
+    }
+
+    /**
      * Search the knowledge base.
      *
      * @param string $query
@@ -697,7 +707,9 @@ class RagSearch
     }
 
     /**
-     * 构造精排器：有可用 AI 密钥时返回 LLMReranker，否则 Noop（仅 RRF）。
+     * 构造精排器：按 ai.rag.rerank.type 分派 http（专用 cross-encoder 端点）
+     * 或 llm（复用主分析模型做 listwise 重排）；无 AI 密钥时返回 Noop（仅 RRF）。
+     * type=http 但端点配置非法或缺项时退回 llm，不让检索失败。
      */
     private static function rerankerFromConfig(): Rerank\RerankInterface
     {
@@ -707,12 +719,37 @@ class RagSearch
         } catch (\Throwable) {
             $ai = [];
         }
+        $rerank = (array) ($ai['rag']['rerank'] ?? []);
+        $max = max(2, min(50, (int) ($rerank['maxCandidates'] ?? 30)));
+        $type = strtolower(trim((string) ($rerank['type'] ?? 'llm')));
+
+        if ($type === 'http') {
+            try {
+                $baseUrl = Rerank\HttpReranker::normalizeEndpoint(
+                    (string) ($rerank['baseUrl'] ?? ''),
+                    ($rerank['allowLoopback'] ?? false) === true
+                );
+                $model = trim((string) ($rerank['model'] ?? ''));
+                if ($baseUrl !== '' && $model !== '') {
+                    return new Rerank\HttpReranker(
+                        $baseUrl,
+                        trim((string) ($rerank['apiKey'] ?? '')),
+                        $model,
+                        $max,
+                        max(1, min(60, (int) ($rerank['timeout'] ?? 10)))
+                    );
+                }
+                \App\Syslog::error('RAG', 'rerank type=http but baseUrl/model unset, falling back to LLM rerank');
+            } catch (\Throwable $e) {
+                \App\Syslog::error('RAG', 'invalid rerank endpoint config, falling back to LLM rerank: ' . $e->getMessage());
+            }
+        }
+
         $hasKeys = !empty($ai['apiKeys']) || !empty($ai['apiKey']);
         if (!$hasKeys) {
             return new Rerank\NoopReranker();
         }
-        $max = (int) ($ai['rag']['rerank']['maxCandidates'] ?? 30);
-        return new Rerank\LLMReranker(max(2, min($max, 50)));
+        return new Rerank\LLMReranker($max);
     }
 
     /**
