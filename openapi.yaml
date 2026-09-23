@@ -1425,6 +1425,26 @@ paths:
           description: No recognized switch provided
         '422':
           description: Invalid switch value
+  /v1/admin/rag/test-rerank:
+    post:
+      tags: [Admin]
+      summary: Probe the cross-encoder rerank endpoint (Admin)
+      description: >-
+        Posts two fixed documents to {baseUrl}/rerank to verify protocol, auth and
+        response shape. Omitted fields fall back to the stored ai.rag.rerank config;
+        a masked apiKey is replaced by the stored one. Transport and HTTP failures still
+        return 200 with success=false.
+      operationId: adminTestRagRerank
+      security:
+        - AdminBearerAuth: []
+        - AdminHeaderAuth: []
+      responses:
+        '200':
+          description: OK
+        '400':
+          description: model missing
+        '422':
+          description: Invalid baseUrl (non-HTTP scheme, private address, or loopback without allowLoopback)
   /v1/admin/rag/build/stale:
     get:
       tags: [Admin]
