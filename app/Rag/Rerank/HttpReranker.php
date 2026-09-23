@@ -38,6 +38,11 @@ final class HttpReranker implements RerankInterface
         return true;
     }
 
+    public function maxCandidates(): int
+    {
+        return $this->maxCandidates;
+    }
+
     /**
      * @param array<int, array{title: string, body: string, source: string, score: mixed, snippet: string}> $candidates
      * @return array<int, array> 按相关性分值重排后的候选（池外条目保持原顺序接在尾部）

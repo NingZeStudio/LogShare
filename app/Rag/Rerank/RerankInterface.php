@@ -17,6 +17,14 @@ interface RerankInterface
     public function isActive(): bool;
 
     /**
+     * 精排器一次能处理的候选条数上限（ai.rag.rerank.maxCandidates 的生效值）。
+     *
+     * 融合管道据此决定候选池大小——配置的容量必须传导到池尺寸，否则精排永远
+     * 只收到 max(20, k*4) 条。无容量概念的实现（Noop）返回 null。
+     */
+    public function maxCandidates(): ?int;
+
+    /**
      * @param string $query 原始查询（供 LLM 相关性判断）
      * @param array<int, array{title: string, body: string, source: string, score: mixed, snippet: string}> $candidates
      * @return array<int, array{title: string, body: string, source: string, score: mixed, snippet: string}> 重排后的候选

@@ -22,7 +22,7 @@ test('RagManager lists topics and documents correctly', function () {
 });
 
 test('RagManager CRUD cycle for knowledge document', function () {
-    $topic = 'tools'; // tools is an existing registered test directory
+    $topic = 'format'; // 任一已登记 TOPIC_DESCRIPTIONS 的目录均可（原 tools 已移出知识库）
     $filename = 'pest_test_doc_' . bin2hex(random_bytes(4)) . '.md';
     $testContent = "# 自动化测试文档\n\n这是通过单元测试生成的文档内容。";
 
@@ -62,7 +62,7 @@ test('RagManager CRUD cycle for knowledge document', function () {
 });
 
 test('RagManager uploadDoc enforces size limits and saves content', function () {
-    $topic = 'tools';
+    $topic = 'format';
     $filename = 'upload_test_' . bin2hex(random_bytes(4)) . '.md';
     $tmpFile = sys_get_temp_dir() . '/' . $filename;
     file_put_contents($tmpFile, "# 上传测试文档\n通过临时文件上传测试。");
@@ -85,19 +85,19 @@ test('RagManager strictly blocks path traversal and dangerous extensions', funct
     // 1. Traversal sequences
     expect(fn() => RagManager::resolveSafePath('../etc/passwd'))
         ->toThrow(\InvalidArgumentException::class);
-    expect(fn() => RagManager::resolveSafePath('tools/../../Config.inc.php'))
+    expect(fn() => RagManager::resolveSafePath('format/../../Config.inc.php'))
         ->toThrow(\InvalidArgumentException::class);
-    expect(fn() => RagManager::resolveSafePath('tools/..\\something.md'))
+    expect(fn() => RagManager::resolveSafePath('format/..\\something.md'))
         ->toThrow(\InvalidArgumentException::class);
 
     // 2. Null byte injection
-    expect(fn() => RagManager::resolveSafePath("tools/test\0.md"))
+    expect(fn() => RagManager::resolveSafePath("format/test\0.md"))
         ->toThrow(\InvalidArgumentException::class);
 
     // 3. Disallowed extensions
-    expect(fn() => RagManager::resolveSafePath('tools/malicious.php'))
+    expect(fn() => RagManager::resolveSafePath('format/malicious.php'))
         ->toThrow(\InvalidArgumentException::class);
-    expect(fn() => RagManager::resolveSafePath('tools/evil.sh'))
+    expect(fn() => RagManager::resolveSafePath('format/evil.sh'))
         ->toThrow(\InvalidArgumentException::class);
 
     // 4. Unregistered topic directory
@@ -151,7 +151,7 @@ test('AdminController RAG doc endpoints work properly', function () {
     $filename = 'ctrl_test_' . bin2hex(random_bytes(4)) . '.md';
     $saveReq = (new \Hyperf\HttpMessage\Server\Request('POST', '/v1/admin/rag/docs/save'))
         ->withParsedBody([
-            'topic' => 'tools',
+            'topic' => 'format',
             'filename' => $filename,
             'content' => '# 控制器接口测试文档',
             'isNew' => true,
@@ -177,7 +177,7 @@ test('AdminController RAG doc endpoints work properly', function () {
     // 5. POST rag/docs/upload (JSON mode)
     $uploadJsonReq = (new \Hyperf\HttpMessage\Server\Request('POST', '/v1/admin/rag/docs/upload'))
         ->withParsedBody([
-            'topic' => 'tools',
+            'topic' => 'format',
             'filename' => 'json_upload_' . bin2hex(random_bytes(4)) . '.md',
             'content' => '# JSON 批量上传测试',
         ]);

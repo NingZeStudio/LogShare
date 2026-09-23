@@ -230,7 +230,7 @@ php bin/hyperf.php rag:build   # 扫描 rag/knowledge/ 构建 SQLite FTS5 索引
 
 索引构建使用临时数据库，完成后原子替换正式索引，失败时保留旧索引；Docker 部署时 hyperf 容器启动命令会自动执行（幂等）。数据库路径由 `ai.mcp.rag.db` 指定，默认 `rag/index.db`。
 
-知识库文档分两类维护：Forge/NeoForge 开发者文档用 `scripts/download_modloader_docs.sh` 刷新；PaperMC、Purpur、Geyser 等服务端文档用 `scripts/download_server_docs.sh` 刷新。两个脚本拉取后会自动执行清洗（剥离 frontmatter、MDX、admonition 与 HTML 噪声，fenced code 完整保留）。新增机器拉取的知识库目录时，需要同步登记到 `scripts/clean_knowledge_docs.php` 的 `UPSTREAM_DIRS` 白名单；手工维护的目录不受元文件删除规则影响。语义 RAG 开启后需重新执行 `rag:build` 生成分块向量。
+知识库为手工维护的诊断资产（`日志分析`/`patterns`/`format`/`android-native-lib`/`mobile_launcher` 五个目录），易过期的启动器实战与各 ModLoader/服务端开发文档已移除，由 LogAgent 的 GitHub 实时排障工具链提供动态支撑；站点运营文案与测试素材位于索引之外。检索切块单元是 `## ` 二级标题，无标题的大文件须手工分段。新增知识目录须同步登记 `RagSearch::TOPIC_DESCRIPTIONS`。召回质量以金标集验收：`php scripts/rag_eval.php`（口径与指标见 `rag/README.md`）。语义 RAG 开启后需重新执行 `rag:build` 生成分块向量。
 
 ## 许可证
 

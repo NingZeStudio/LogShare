@@ -7,6 +7,9 @@ java.lang.NoSuchMethodError: 'net.minecraft.class_1234 net.minecraft.client....'
 java.lang.NoSuchFieldError: ...
 java.lang.NoClassDefFoundError: com/example/some/Class
 java.lang.AbstractMethodError
+java.lang.IllegalAccessError / java.lang.IncompatibleClassChangeError  （两个 Mod 改了同一个类/方法）
+java.lang.LinkageError  （接口/抽象类在不同 Mod 间版本不一致）
+net.minecraftforge.fml.loading.EarlyLoadingException  （Forge 版本与 MC 版本不匹配，启动即崩）
 ```
 堆栈帧常落在 Mod 包名或 `...mixin...` 之后。
 
@@ -20,13 +23,15 @@ Mod A 调用了 Mod B（或 MC 本体）的某个方法/类，但运行时该符
 2. 两个 Mod 依赖同一库的不同大版本，装了旧的那个
 3. 只更新了前置没更新依赖它的本体（或反之）
 4. 整合包里混入了用户手动加的旧 Mod
+5. Forge 版本与 MC 版本不对应，或 Mod 不兼容当前 Forge 版本（EarlyLoadingException，看版本推荐日志里的不兼容列表）
 
 ## 修复步骤
 
 1. 从堆栈第一个非 minecraft/JDK 包名帧确定肇事 Mod。
 2. 确认它标注的支持版本与当前游戏+加载器一致，不一致 → 重下。
 3. 版本一致仍炸 → 检查它依赖的库（Fabric API、Kotlin for Forge 等）是否同步更新。
-4. 无法定位时二分法：移除一半 Mod 启动验证。
+4. LinkageError/AbstractMethodError → 把相关 Mod 家族统一到同一版本线（如 Create 家族模组必须互相对应版本）。
+5. 无法定位时二分法：移除一半 Mod 启动验证。
 
 ## 置信度线索
 

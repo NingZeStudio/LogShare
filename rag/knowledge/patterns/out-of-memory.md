@@ -31,6 +31,7 @@ hs_err 或 dmesg 中：Out of memory: Killed process ... (java)
 1. **先看宿主机总内存**再定堆：`-Xmx ≈ 总内存 × 0.5~0.6`（还要留给系统+native）。
 2. Android/FCL：设备物理内存小，建议 2~4G 且开启启动器的自动分配；不要照抄 PC 整合包的 8G 配置。
 3. heap space 但宿主内存充裕 → 调大 Xmx；伴随 GC 日志暴涨 → 排查泄漏 Mod（二分）。
+4. Metaspace → 加 JVM 参数 `-XX:MaxMetaspaceSize=512m`（大量模组动态生成类所致）。
 
 ## 置信度线索
 
