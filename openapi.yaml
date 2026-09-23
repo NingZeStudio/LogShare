@@ -1400,6 +1400,87 @@ paths:
       responses:
         '200':
           description: OK
+  /v1/admin/rag/config:
+    get:
+      tags: [Admin]
+      summary: Get RAG capability switches (Admin)
+      operationId: adminGetRagConfig
+      security:
+        - AdminBearerAuth: []
+        - AdminHeaderAuth: []
+      responses:
+        '200':
+          description: OK
+    put:
+      tags: [Admin]
+      summary: Update RAG capability switches (Admin)
+      operationId: adminUpdateRagConfig
+      security:
+        - AdminBearerAuth: []
+        - AdminHeaderAuth: []
+      responses:
+        '200':
+          description: OK
+        '400':
+          description: No recognized switch provided
+        '422':
+          description: Invalid switch value
+  /v1/admin/rag/build/stale:
+    get:
+      tags: [Admin]
+      summary: Preview knowledge files missing from or newer than the index (Admin)
+      operationId: adminGetRagStaleFiles
+      security:
+        - AdminBearerAuth: []
+        - AdminHeaderAuth: []
+      responses:
+        '200':
+          description: OK
+        '409':
+          description: Index not built yet
+  /v1/admin/rag/build/incremental:
+    post:
+      tags: [Admin]
+      summary: Trigger incremental index rebuild (Admin)
+      operationId: adminTriggerRagIncrementalBuild
+      security:
+        - AdminBearerAuth: []
+        - AdminHeaderAuth: []
+      responses:
+        '200':
+          description: OK
+  /v1/admin/rag/telemetry:
+    get:
+      tags: [Admin]
+      summary: Get per-stage retrieval telemetry (Admin)
+      operationId: adminGetRagTelemetry
+      security:
+        - AdminBearerAuth: []
+        - AdminHeaderAuth: []
+      parameters:
+        - in: query
+          name: date
+          schema:
+            type: string
+            format: date
+          description: Natural day to aggregate, defaults to today
+        - in: query
+          name: slow
+          schema:
+            type: integer
+          description: Include slow query details when non-zero
+        - in: query
+          name: slowLimit
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 10
+      responses:
+        '200':
+          description: OK
+        '400':
+          description: Invalid date format
   /v1/admin/rag/search:
     post:
       tags: [Admin]

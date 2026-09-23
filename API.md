@@ -1352,6 +1352,87 @@ PUT /v1/admin/ai/modes/{mode}
 
 ---
 
+### 53. RAG 检索链路能力开关
+
+```
+GET /v1/admin/rag/config
+PUT /v1/admin/rag/config
+```
+
+`GET` 返回当前生效的开关快照：
+
+```json
+{
+  "chunker": "heading",
+  "rerank": { "enabled": false, "maxCandidates": 30 },
+  "queryRewrite": { "enabled": false },
+  "incrementalBuild": false,
+  "semanticCache": true,
+  "telemetry": { "enabled": true, "slowMs": 500 }
+}
+```
+
+`PUT` 接受上述结构的任意子集，按白名单校验后局部合并写入 `runtime/dynamic_config.json`，跨常驻进程热生效，无需重启；响应体为更新后的完整快照（与 `GET` 一致）。
+
+取值约束：`chunker` 限 `heading` / `sliding` / `token` / `hybrid`，非法值返回 422；`rerank.maxCandidates` 收敛到 2~50；`telemetry.slowMs` 下限 1。未识别任何字段时返回 400。`chunker` 仅影响后续索引构建，切换后需重跑构建才会作用于既有切片。
+
+### 54. 知识库索引差异预览
+
+```
+GET /v1/admin/rag/build/stale
+```
+
+按文件 mtime 与索引内 `chunk_meta` 记录比对，只读不写入：
+
+```json
+{ "changed": ["patterns/xxx.md"], "missing": ["format/yyy.md"], "unchanged": 61 }
+```
+
+索引尚未构建或缺少 mtime 记录时返回 409；后者会导致全部文件被判为待重建，增量入口因此安全退化为全量。
+
+### 55. 触发增量构建
+
+```
+POST /v1/admin/rag/build/incremental
+```
+
+仅重索引 `changed` 与 `missing` 清单中的文件，其余切片保持不动。与全量 `POST /v1/admin/rag/build` 共用状态文件与 `building` 防重入锁，响应 `{ success, status, message }`，进度仍由 `GET /v1/admin/rag/build/status` 轮询。
+
+### 56. RAG 检索遥测
+
+```
+GET /v1/admin/rag/telemetry[?date=YYYY-MM-DD&slow=1&slowLimit=10]
+```
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `date` | string | 否 | 查询指定自然日，格式 `Y-m-d`，默认当日；格式非法返回 400 |
+| `slow` | int | 否 | 非 0 时附带慢查询明细 |
+| `slowLimit` | int | 否 | 明细条数（1~100，默认 10） |
+
+```json
+{
+  "date": "2026-09-23",
+  "available": true,
+  "summary": {
+    "queries": "53", "zero_results": "0", "slow": "8",
+    "total_ms:sum": "19189.11", "total_ms:max": "942.87",
+    "lexical_ms:sum": "56.01", "lexical_ms:max": "3.36",
+    "semantic_ms:sum": "19127.48", "semantic_ms:max": "940.79",
+    "vector_searches": "53", "vector_hits_sum": "1020",
+    "embed_api_calls": "53", "embed_cache_hits": "0"
+  },
+  "slowQueries": [
+    { "at": 1790138276, "query": "Registry is already frozen", "k": 5, "topic": "patterns",
+      "total_ms": 674.26, "lexical_ms": 0.46, "semantic_ms": 673.74, "vector_hits": 20, "reranked": false }
+  ]
+}
+```
+
+`summary` 为 Redis hash 原样透出，值均为字符串；未启用的阶段不产生对应键（`rewrite_ms:*` 依赖 queryRewrite、`reranked` 依赖 rerank、`result_cache` 依赖 semanticCache），消费方须把「键缺失」与「计数为零」区分渲染。Redis 不可用或当日零检索时 `summary` 为 `null` 且 `available: false`。遥测写入全程 fail-open，采集失败不影响检索链路。
+
+---
+
 ## 通用响应格式
 
 **成功：**

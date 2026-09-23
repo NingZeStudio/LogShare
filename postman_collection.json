@@ -5663,6 +5663,202 @@
                     }
                 },
                 {
+                    "name": "Get RAG capability config (Admin)",
+                    "request": {
+                        "name": "Get RAG capability config (Admin)",
+                        "description": {
+                            "content": "Read chunker, rerank, query rewrite, incremental build, semantic cache and telemetry switches",
+                            "type": "text/plain"
+                        },
+                        "url": {
+                            "path": [
+                                "v1",
+                                "admin",
+                                "rag",
+                                "config"
+                            ],
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "query": []
+                        },
+                        "header": [
+                            {
+                                "key": "Authorization",
+                                "value": "Bearer {{adminToken}}"
+                            },
+                            {
+                                "key": "Accept",
+                                "value": "application/json"
+                            }
+                        ],
+                        "method": "GET"
+                    }
+                },
+                {
+                    "name": "Update RAG capability config (Admin)",
+                    "request": {
+                        "name": "Update RAG capability config (Admin)",
+                        "description": {
+                            "content": "Whitelisted partial merge of ai.rag switches, hot reloaded across resident processes",
+                            "type": "text/plain"
+                        },
+                        "url": {
+                            "path": [
+                                "v1",
+                                "admin",
+                                "rag",
+                                "config"
+                            ],
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "query": []
+                        },
+                        "header": [
+                            {
+                                "key": "Authorization",
+                                "value": "Bearer {{adminToken}}"
+                            },
+                            {
+                                "key": "Accept",
+                                "value": "application/json"
+                            },
+                            {
+                                "key": "Content-Type",
+                                "value": "application/json"
+                            }
+                        ],
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\"chunker\":\"heading\",\"rerank\":{\"enabled\":true,\"maxCandidates\":30},\"telemetry\":{\"enabled\":true,\"slowMs\":500}}",
+                            "options": {
+                                "raw": {
+                                    "language": "json"
+                                }
+                            }
+                        },
+                        "method": "PUT"
+                    }
+                },
+                {
+                    "name": "Preview stale RAG index files (Admin)",
+                    "request": {
+                        "name": "Preview stale RAG index files (Admin)",
+                        "description": {
+                            "content": "Diff the knowledge base against the index by mtime; returns 409 while no index exists",
+                            "type": "text/plain"
+                        },
+                        "url": {
+                            "path": [
+                                "v1",
+                                "admin",
+                                "rag",
+                                "build",
+                                "stale"
+                            ],
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "query": []
+                        },
+                        "header": [
+                            {
+                                "key": "Authorization",
+                                "value": "Bearer {{adminToken}}"
+                            },
+                            {
+                                "key": "Accept",
+                                "value": "application/json"
+                            }
+                        ],
+                        "method": "GET"
+                    }
+                },
+                {
+                    "name": "Trigger incremental RAG build (Admin)",
+                    "request": {
+                        "name": "Trigger incremental RAG build (Admin)",
+                        "description": {
+                            "content": "Re-index only changed and missing knowledge files; progress is polled from the build status endpoint",
+                            "type": "text/plain"
+                        },
+                        "url": {
+                            "path": [
+                                "v1",
+                                "admin",
+                                "rag",
+                                "build",
+                                "incremental"
+                            ],
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "query": []
+                        },
+                        "header": [
+                            {
+                                "key": "Authorization",
+                                "value": "Bearer {{adminToken}}"
+                            },
+                            {
+                                "key": "Accept",
+                                "value": "application/json"
+                            }
+                        ],
+                        "method": "POST"
+                    }
+                },
+                {
+                    "name": "Get RAG retrieval telemetry (Admin)",
+                    "request": {
+                        "name": "Get RAG retrieval telemetry (Admin)",
+                        "description": {
+                            "content": "Per-stage retrieval latency and hit aggregates for one natural day, plus slow query details",
+                            "type": "text/plain"
+                        },
+                        "url": {
+                            "path": [
+                                "v1",
+                                "admin",
+                                "rag",
+                                "telemetry"
+                            ],
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "query": [
+                                {
+                                    "key": "date",
+                                    "value": "2026-09-23",
+                                    "description": "YYYY-MM-DD, defaults to today"
+                                },
+                                {
+                                    "key": "slow",
+                                    "value": "1",
+                                    "description": "Include slow query details when non-zero"
+                                },
+                                {
+                                    "key": "slowLimit",
+                                    "value": "10",
+                                    "description": "Slow query rows, 1-100"
+                                }
+                            ]
+                        },
+                        "header": [
+                            {
+                                "key": "Authorization",
+                                "value": "Bearer {{adminToken}}"
+                            },
+                            {
+                                "key": "Accept",
+                                "value": "application/json"
+                            }
+                        ],
+                        "method": "GET"
+                    }
+                },
+                {
                     "name": "List RAG topics (Admin)",
                     "request": {
                         "name": "List RAG topics (Admin)",
