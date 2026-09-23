@@ -21,24 +21,25 @@ app/Command/
 └── RagBuildCommand.php        建索引命令（php bin/hyperf.php rag:build）
 rag/
 ├── index.db                   SQLite 索引（构建生成，路径由 ai.mcp.rag.db 指定，勿提交）
-├── knowledge/                 知识库正文（Markdown / TXT，按主题分目录，见下）
-│   ├── forge/                 Forge 官方文档与常见崩溃解析
-│   ├── neoforge/              NeoForge 模组开发与排错文档
-│   ├── papermc/               PaperMC / Purpur 服务端配置与优化
-│   ├── fabric/                Fabric 模组生态与报错指引
-│   ├── mobile_launcher/       移动端启动器（PojavLauncher / FCL 等）特性与渲染排错
-│   └── vanilla/               原版崩溃报告与 JVM 异常指引
-└── public/                    文档站静态资源（图片等，不参与索引）
+└── knowledge/                 知识库正文（Markdown / TXT / LOG，按主题分目录，手工维护）
+    ├── 日志分析/              KB 编号报错条目库（现象-原因-解决方案），按异常类型归类
+    ├── patterns/              崩溃与故障模式诊断卡（签名-含义-常见触发-修复步骤-置信度）
+    ├── format/                crash-report / hs_err_pid / latest.log 三大日志格式速查
+    ├── android-native-lib/    Android 原生库（lib 型 mod）加载问题
+    └── mobile_launcher/       手机启动器渲染器体系与 Minecraft 版本对应关系
 ```
+
+知识库为手工维护：易过期的启动器实战与各 ModLoader/服务端开发文档已移除，改由 LogAgent 的 GitHub 实时排障工具链提供动态支撑（见 AGENTS.md）。运营文案（隐私政策/服务条款/站点公告）与测试素材不参与索引——前者在 `docs/site/`，后者在 `tests/Fixtures/rag_tools/`。
 
 ## 知识库文档规范
 
 `knowledge/` 直接存放检索正文（按主题分目录），`rag:build` 递归索引其中所有 `.md` / `.txt` / `.log` 文件。
 
-- **检索切块单元**：每个 `## ` 二级标题作为一个检索单元（切块），标题权重高于正文，标题应精准包含检索关键词。
+- **检索切块单元**：每个 `## ` 二级标题作为一个检索单元（切块），标题权重高于正文，标题应精准包含检索关键词。**硬约束**：没有 `## ` 标题的文件整体成为一个 chunk——大表格/长清单类文件（如版本对应表）必须手工按主题段加 `## ` 分段，否则一个平均向量要代表全文，语义召回与命中后的上下文截取同时失效（2026-09 治理前 `Minecraft版本.txt` 17KB 仅 1 块即此成因）。
 - **内容净化**：文档来源于 Markdown，索引前应保持纯净，剔除非标准容器（如 VitePress `::: info`）、HTML 标签及大图链接等干扰字符。
 - **排错优化**：引用具体错误类名、Mod ID、配置键名或崩溃堆栈关键字时检索命中率最高。
-- **目录注册**：所有新增的一级知识目录必须在 `RagSearch::TOPIC_DESCRIPTIONS` 中登记对应描述，否则会被架构一致性测试拦截。
+- **目录注册**：所有新增的一级知识目录必须在 `RagSearch::TOPIC_DESCRIPTIONS` 中登记定性描述（禁写会漂移的数量），否则被 `topic descriptions cover all knowledge directories` 双向一致性测试拦截。
+- **内容取舍**：只收模型不具备的增量事实（驱动/芯片与渲染器的具体搭配、具体版本号门槛、反直觉的行为校正）；模型已知的通用常识（OOM 加 -Xmx、NoSuchMethodError 换前置等）与 `patterns/` 诊断卡重复的条目不单独收录，需要补签名时并入对应诊断卡。
 
 ## 使用与配置
 
@@ -79,9 +80,13 @@ curl https://api.logshare.cn/v1/admin/rag/build/status \
 
 ### 3. 检索策略
 
-- **向量语义召回（优先）**：若配置了 Embedding 模型，先计算 Query 向量，在 SQLite `embeddings` 表中计算余弦相似度召回 Top K 相关片段。
-- **词法全文匹配（FTS5 BM25）**：针对英文 Token、崩溃类名、Mod ID 进行 BM25 打分检索，标题权重 10，正文权重 1。
-- **中文子串兜底（LIKE）**：对未命中的自然语言关键词进行 LIKE 兜底，与 FTS5/向量结果合并去重并保持相关性排序。
+双路召回 → 融合 → （可选）精排 → 截断到 k：
+
+- **向量语义召回**：Embedding 模型计算 Query 向量，对 SQLite `doc_embeddings` 全库 packed float32 算余弦取 top-pool；topic 约束下推到召回 SQL。
+- **词法全文召回**：FTS5 BM25（标题权重 10、正文 1）；未命中的自然语言关键词走 LIKE 兜底。
+- **RRF 融合（`ai.rag.rerank.enabled=true` 时）**：`score = Σ 路权重 / (16 + rank)`，语义路权重 1.2；平局按「余弦降序 → BM25 升序 → 键名字典序」三级裁决（不依赖插入顺序）；候选池按 `rerank.maxCandidates` 扩量，进入精排池前施加同源配额 3（防单文件多小节垄断）。
+- **精排（可选）**：`type=http` 走专用 cross-encoder 端点，`type=llm` 复用主分析模型 listwise；任何失败回退 RRF 顺序。
+- **rerank 关闭时**：保持既有的「向量优先、词法补足」截断合并——该分支与历史实现逐字节一致。
 - **上下文截取与平滑**：短正文（≤ 1600 字符）完整返回；长正文围绕命中核心按句子边界向前向后截取上下文窗口（约 800 字符）。
 
 ## 管理端点（CMS）
@@ -98,6 +103,16 @@ curl https://api.logshare.cn/v1/admin/rag/build/status \
 ## 测试
 
 ```bash
-php vendor/bin/pest tests/Unit/RagSearchTest.php
+php vendor/bin/pest tests/Unit/RagSearchTest.php   # 词法/topic 契约
+php vendor/bin/pest tests/Unit/RagFusionTest.php   # RRF 融合与精排接线（纯计算，进 CI）
 ```
+
+召回质量验收口径为金标集离线评测（不进 CI，依赖在线 embedding）：
+
+```bash
+php scripts/rag_eval.php                    # base（改动前）vs k16w12q3（现码）A/B
+php scripts/rag_eval.php --variant=all      # 全变体阶梯；--offline 只吃查询向量缓存
+```
+
+指标含分档 hit@1/3/5、MRR、单源垄断度与向量 top1 存活率；金标集在 `tests/Fixtures/rag_gold_set.json`（signature = 报错摘要原文防回退，paraphrase = 口语化描述考验语义通道）。知识库内容或排序逻辑改动后须复跑，paraphrase hit@5 回退即失败（exit 1）。
 

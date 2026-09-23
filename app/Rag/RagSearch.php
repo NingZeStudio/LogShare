@@ -17,9 +17,9 @@ class RagSearch
      * 知识库主题目录的人工描述，是 list_topics / 系统提示词主题地图的可读性来源。
      *
      * 模型根据这段描述决定检索方向：目录名本身不可读的（如 mg-issues、zl2-issues）
-     * 必须写清楚内容与诊断价值；运营类内容标注「通常不必检索」以免模型空跑。
-     * 新增知识库目录时必须在此登记（与 scripts/clean_knowledge_docs.php 的
-     * UPSTREAM_DIRS 白名单约定并行）；未登记目录回退为文件名样本展示（见 topics()）。
+     * 必须写清楚内容与诊断价值。新增知识库目录时必须在此登记，否则主题地图对该
+     * 目录没有描述；与 rag/knowledge/ 实际目录的双向一致性由
+     * `topic descriptions cover all knowledge directories` 单测守门。
      *
      * 描述文本纪律：只写定性内容，禁止写入会随知识库更新漂移的量化数字；
      * 数量信息由 topics() 返回的动态 count 承载。
@@ -32,11 +32,6 @@ class RagSearch
         'android-native-lib' => 'Android 原生库（lib 型 mod）加载问题：动态库缺失与插件系统',
         // ── 手机启动器常识与版本列表 ──
         'mobile_launcher' => '手机启动器常识：渲染器选择与 Minecraft 版本更新列表对应关系',
-        // ── 其他 ──
-        'tools' => '样例崩溃报告（测试素材）',
-        // ── 运营内容（明确标注低价值，防止模型空跑）──
-        'zl_about' => 'Zalith 站点信息：关于本站、隐私政策、服务条款（运营内容，通常不必检索）',
-        'zl_announcement' => 'Zalith 站点公告（如 Discord 停运公告；运营内容，诊断价值低，通常不必检索）',
     ];
 
     /**
@@ -547,8 +542,10 @@ class RagSearch
             $m['rewritten'] = $pre['rewritten'];
         }
 
-        // 候选池：语义精排前多召回一些；纯词法路径仍只输出 k 条
-        $pool = max(20, $k * 4);
+        // 候选池：语义精排前多召回一些；纯词法路径仍只输出 k 条。
+        // 启用精排时按精排器实际容量（ai.rag.rerank.maxCandidates）扩量，
+        // 否则配置的 30 永远只喂到 20；未启用返回 null，池尺寸逐字节不变。
+        $pool = RetrievalPipeline::poolSize($k, self::rerankMaxCandidates());
 
         $tLex = microtime(true);
         $results = (new LexicalIndex($this->pdo))->search($pre['query'], self::splitTerms($pre['query']), $pool, $topic);
@@ -560,7 +557,7 @@ class RagSearch
         // 扩大语义截断量到 pool、偏置后再截 k；默认路径仍按 k 截断，缓存键不变。
         $biasable = $topic === null && $pre['weights'] !== [];
         $tSem = microtime(true);
-        $final = $this->applySemanticEnhancement($originalQuery, $results, $biasable ? $pool : $k, $topic, $m);
+        $final = $this->applySemanticEnhancement($originalQuery, $results, $biasable ? $pool : $k, $pool, $topic, $m);
         $m['semantic_ms'] = round((microtime(true) - $tSem) * 1000, 2);
 
         if ($biasable) {
@@ -591,7 +588,7 @@ class RagSearch
     private const SEMANTIC_CACHE_MAX = 64;
     private const SEMANTIC_CACHE_MAX_BYTES = 1048576;
 
-    private function applySemanticEnhancement(string $query, array $lexical, int $k, ?string $topic = null, array &$metrics = []): array
+    private function applySemanticEnhancement(string $query, array $lexical, int $k, int $pool, ?string $topic = null, array &$metrics = []): array
     {
         $client = self::semanticClientFromConfig();
         if ($client === null || !$client->isConfigured()) {
@@ -599,7 +596,9 @@ class RagSearch
         }
 
         // 缓存键必须含 topic：不同目录同名 query 的结果不可互串
-        $cacheKey = 'semantic-v2:' . md5($query) . ':' . $k . ':' . ($topic ?? '');
+        // v3：融合排序去偏（RRF_K/权重/同源配额）后顺序变化，避免常驻 Worker 部署后
+        // TTL 内混用旧顺序的结果
+        $cacheKey = 'semantic-v3:' . md5($query) . ':' . $k . ':' . ($topic ?? '');
         $cached = self::$semanticCache[$cacheKey] ?? null;
         if ($cached !== null && $cached['expires'] > time()) {
             $metrics['result_cache'] = 1;
@@ -607,7 +606,7 @@ class RagSearch
         }
 
         try {
-            $results = $this->runSemanticPipeline($query, $lexical, $k, $client, $topic, $metrics);
+            $results = $this->runSemanticPipeline($query, $lexical, $k, $pool, $client, $topic, $metrics);
         } catch (\Throwable $e) {
             $metrics['semantic_error'] = $e->getMessage();
             \App\Syslog::error('RAG', 'semantic enhancement failed, falling back to lexical: ' . $e->getMessage());
@@ -639,10 +638,11 @@ class RagSearch
      * Vector-recall candidates are primary and lexical results supplement them. Any failure logs and returns the
      * lexical-only slice — semantic search must never break retrieval.
      *
+     * @param int $pool 融合候选池下限（见 search()：启用精排时按精排器容量扩量）
      * @param array<int, array{title: string, body: string, source: string, score: mixed, snippet: string}> $lexical
      * @return array<int, array{title: string, body: string, source: string, score: mixed, snippet: string}>
      */
-    private function runSemanticPipeline(string $query, array $lexical, int $k, SemanticClient $client, ?string $topic = null, array &$metrics = []): array
+    private function runSemanticPipeline(string $query, array $lexical, int $k, int $pool, SemanticClient $client, ?string $topic = null, array &$metrics = []): array
     {
         try {
             // 查询向量缓存（Redis + 进程内，ai.rag.semanticCache）：命中则零
@@ -662,7 +662,7 @@ class RagSearch
 
             // 向量召回：与全库嵌入算余弦，补足词法漏掉的同义表述；
             // topic 模式下过滤下推到召回 SQL（源头限定目录，无需扩量放大）
-            $vectorHits = (new VectorIndex($this->pdo))->topByCosine($queryVec, max(20, $k * 4), $topic);
+            $vectorHits = (new VectorIndex($this->pdo))->topByCosine($queryVec, max($pool, $k * 4), $topic);
             $metrics['vector_hits'] = count($vectorHits);
 
             // rerank 开关开启：走 RetrievalPipeline（RRF 融合 + LLM 精排）。
@@ -707,6 +707,44 @@ class RagSearch
     }
 
     /**
+     * 精排器一次能处理的候选条数上限；未启用精排时返回 null。
+     *
+     * 融合候选池必须据此扩量（见 RetrievalPipeline::poolSize），否则配置的 30
+     * 永远只喂到历史默认的 20；禁用态不读该字段，保证「默认关闭即行为不变」。
+     */
+    public static function rerankMaxCandidates(): ?int
+    {
+        return self::rerankEnabled() ? self::configuredMaxCandidates() : null;
+    }
+
+    /** ai.rag.rerank.maxCandidates 缺省值。 */
+    private const DEFAULT_RERANK_MAX_CANDIDATES = 30;
+
+    /**
+     * 读取并校验 ai.rag.rerank.maxCandidates：合法区间 [2, 50]，越界退回默认并告警。
+     *
+     * 旧的 `max(2, min(50, $v))` 会把 0/1 这类明显笔误静默夹成 2，精排池莫名缩到
+     * 历史默认之下；视为配置错误按默认处理更重要。
+     */
+    private static function configuredMaxCandidates(): int
+    {
+        try {
+            $rerank = (array) (\App\Config::Get('ai')['rag']['rerank'] ?? []);
+        } catch (\Throwable) {
+            return self::DEFAULT_RERANK_MAX_CANDIDATES;
+        }
+        $raw = $rerank['maxCandidates'] ?? self::DEFAULT_RERANK_MAX_CANDIDATES;
+        $max = is_numeric($raw) ? (int) $raw : -1;
+        if ($max < 2 || $max > 50) {
+            \App\Syslog::error('RAG', 'invalid ai.rag.rerank.maxCandidates='
+                . (is_scalar($raw) ? (string) $raw : gettype($raw))
+                . ', falling back to ' . self::DEFAULT_RERANK_MAX_CANDIDATES);
+            return self::DEFAULT_RERANK_MAX_CANDIDATES;
+        }
+        return $max;
+    }
+
+    /**
      * 构造精排器：按 ai.rag.rerank.type 分派 http（专用 cross-encoder 端点）
      * 或 llm（复用主分析模型做 listwise 重排）；无 AI 密钥时返回 Noop（仅 RRF）。
      * type=http 但端点配置非法或缺项时退回 llm，不让检索失败。
@@ -720,7 +758,7 @@ class RagSearch
             $ai = [];
         }
         $rerank = (array) ($ai['rag']['rerank'] ?? []);
-        $max = max(2, min(50, (int) ($rerank['maxCandidates'] ?? 30)));
+        $max = self::configuredMaxCandidates();
         $type = strtolower(trim((string) ($rerank['type'] ?? 'llm')));
 
         if ($type === 'http') {
@@ -747,6 +785,7 @@ class RagSearch
 
         $hasKeys = !empty($ai['apiKeys']) || !empty($ai['apiKey']);
         if (!$hasKeys) {
+            \App\Syslog::error('RAG', 'rerank enabled but no AI credentials configured, falling back to RRF order only');
             return new Rerank\NoopReranker();
         }
         return new Rerank\LLMReranker($max);

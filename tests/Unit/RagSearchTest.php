@@ -395,7 +395,7 @@ test('formatTopics output length bounded', function () {
     $desc = (new ReflectionClass(RagSearch::class))->getConstant('TOPIC_DESCRIPTIONS');
     $method = new ReflectionMethod(\App\Controller\RagController::class, 'formatTopics');
 
-    // fixture 对齐当前真实索引形态（28 目录、描述表全量、样本 2×24B 略高于实测均值）；
+    // fixture 按描述表全部键构造（主题目录增删会等比放大输出）；样本 2×24B 略高于实测均值。
     // 知识库增长（新目录/描述变长）超预算时此用例失败，强制显式决策
     $topics = [];
     foreach (array_keys($desc) as $dir) {

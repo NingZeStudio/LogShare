@@ -19,6 +19,11 @@ Mod file ... is not a valid mod file
 invalid distance too far back
 ```
 
+或注册冲突类（多见于不同版本的同类型模组共存）：
+```
+IllegalArgumentException: ID already registered: xxx
+```
+
 ## 含义
 
 - **重复**：同一个 Mod id 出现多个 jar（常见：新旧版本共存、jar 与解压目录并存）。
@@ -28,7 +33,8 @@ invalid distance too far back
 
 1. 重复：进 `mods/` 按 id 排序，**只留一个最新版**；注意 `.jar.disabled` 之外的隐藏副本。
 2. 损坏：删除报错指名的 jar，重新下载；校验文件大小是否与发布页一致。
-3. 整合包用户：优先用启动器"验证/重装整合包"功能而不是手动补。
+3. ID already registered：找到重复注册同一 ID 的两个模组，移除其一或寻找替代模组。
+4. 整合包用户：优先用启动器"验证/重装整合包"功能而不是手动补。
 
 ## 置信度线索
 

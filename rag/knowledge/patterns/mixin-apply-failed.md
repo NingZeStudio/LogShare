@@ -7,6 +7,7 @@ org.spongepowered.asm.mixin.transformer.throwables.MixinTransformerError
 Mixin apply failed: {mixin类} -> {目标类}
 org.spongepowered.asm.mixin.injection.throwables.InjectionError
 Critical injection failure
+Failed to apply patch / Cannot apply transform  （Forge patch 系统与模组 mixin 冲突）
 ```
 
 ## 含义
@@ -25,6 +26,7 @@ Mixin 在字节码层往 MC 类里注入代码。目标类结构变了（版本�
 2. 若目标类是某 Mod 的：移除或更新该 Mod。
 3. 若是两个优化/增强 Mod 同场（如 Sodium 系 vs OptiFine 系）→ 二选一。
 4. Fabric 下先确认 Fabric API 与 Loader 都是当前游戏版本的最新构建。
+5. Forge 下 `Failed to apply patch` → 更新 Forge 到该 MC 版本的最新推荐版，再更新冲突模组。
 
 ## 置信度线索
 

@@ -14,6 +14,11 @@ final class NoopReranker implements RerankInterface
         return false;
     }
 
+    public function maxCandidates(): ?int
+    {
+        return null;
+    }
+
     public function rerank(string $query, array $candidates): array
     {
         return $candidates;

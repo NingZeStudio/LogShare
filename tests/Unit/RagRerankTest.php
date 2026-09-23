@@ -2,6 +2,8 @@
 
 use App\Rag\RagSearch;
 use App\Rag\Rerank\HttpReranker;
+use App\Rag\Rerank\LLMReranker;
+use App\Rag\Rerank\NoopReranker;
 
 /* ─── 响应形态解析 ──────────────────────────────────────── */
 
@@ -86,6 +88,26 @@ test('rerank passes through when fewer than two candidates', function () {
 
 test('isActive is true so the pipeline marks results as reranked', function () {
     expect((new HttpReranker('https://example.invalid', '', 'm'))->isActive())->toBeTrue();
+});
+
+/* ─── 候选容量传导给融合池 ──────────────────────────────── */
+
+test('http reranker exposes the configured candidate capacity', function () {
+    expect((new HttpReranker('https://example.invalid', '', 'm'))->maxCandidates())->toBe(30)
+        ->and((new HttpReranker('https://example.invalid', '', 'm', 5, 3))->maxCandidates())->toBe(5);
+});
+
+test('llm reranker exposes the configured candidate capacity', function () {
+    expect((new LLMReranker())->maxCandidates())->toBe(30)
+        ->and((new LLMReranker(12))->maxCandidates())->toBe(12);
+});
+
+test('noop reranker has no capacity and stays inactive', function () {
+    $noop = new NoopReranker();
+
+    // null 让 RetrievalPipeline 回退到历史池尺寸 max(20, k*4)，不因为空实现扩量
+    expect($noop->maxCandidates())->toBeNull()
+        ->and($noop->isActive())->toBeFalse();
 });
 
 /* ─── 命中目录归属 ──────────────────────────────────────── */

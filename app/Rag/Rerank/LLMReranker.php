@@ -35,6 +35,11 @@ final class LLMReranker implements RerankInterface
         return true;
     }
 
+    public function maxCandidates(): int
+    {
+        return $this->maxCandidates;
+    }
+
     public function rerank(string $query, array $candidates): array
     {
         if (count($candidates) < 2) {
