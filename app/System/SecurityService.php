@@ -878,7 +878,11 @@ final class SecurityService
     }
 
     /**
-     * 联动同步封禁至 OpenLiteWaf 快照（若可写）。
+     * 联动同步封禁至 OpenLiteWaf 快照（仅裸机部署可用：要求应用进程能写 WAF 数据目录）。
+     *
+     * 容器化部署下该目录在 hyperf 侧是只读挂载，本方法直接返回；且 shared dict 才是
+     * 封禁的权威状态、worker 0 每 60 秒用 dict 全量覆盖快照文件，改文件不会即时生效。
+     * 边缘封禁只由 WAF 规则产生，应用层封禁由 isIpBanned / 限流中间件负责。
      */
     private static function syncBanToWaf(string $ip, int $expiresAt): void
     {
@@ -917,33 +921,56 @@ final class SecurityService
     }
 
     /**
-     * 联动从 OpenLiteWaf 快照中解除封禁（若可写）。
+     * 联动解除 OpenLiteWaf 的边缘封禁：容器内直连 Nginx 的运维端点。
+     *
+     * 为什么不改写 snapshot.json：封禁的权威状态在 ngx shared dict（跨 worker 共享），
+     * worker 0 每 60 秒用 dict 全量覆盖快照文件 —— 改文件既解不掉正在生效的封禁，也会被
+     * 回写冲掉；而 WAF 侧还需连同封禁槽位一起清理，否则重启时 init 会据快照复活封禁。
+     * 走 HTTP 由 Lua 自己清键并立即落盘，一次调用即最终一致。
+     *
+     * 未配置 OPENLITEWAF_ADMIN_TOKEN 时静默跳过：应用层封禁（Redis / 文件）已解除，
+     * 边缘封禁等 TTL 自然到期（WAF 端点未配置令牌时一律 404，fail-closed）。
      */
     private static function syncUnbanToWaf(string $ip): void
     {
-        $path = self::getWritableWafSnapshotPath();
-        if ($path === null) {
+        $token = trim((string) (getenv('OPENLITEWAF_ADMIN_TOKEN') ?: ''));
+        if ($token === '' || filter_var($ip, FILTER_VALIDATE_IP) === false) {
             return;
         }
-        $raw = @file_get_contents($path);
-        if ($raw === false || $raw === '') {
-            return;
-        }
-        $data = json_decode($raw, true);
-        if (!is_array($data) || !isset($data['bans']) || !is_array($data['bans'])) {
-            return;
-        }
-        $filtered = [];
-        foreach ($data['bans'] as $key => $b) {
-            $bIp = is_array($b) ? ($b['ip'] ?? '') : (is_string($key) ? $key : '');
-            if ($bIp !== $ip) {
-                $filtered[] = $b;
+
+        $ch = null;
+        try {
+            // 与 loadWafData() 同一形态：容器网内直连 nginx，证书是为公网域名签发的，
+            // 故关闭校验；令牌走请求头，不进 query，避免落入 access_log
+            $ch = curl_init('https://nginx/security/unban?ip=' . rawurlencode($ip));
+            if ($ch !== false) {
+                curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+                curl_setopt($ch, CURLOPT_CUSTOMREQUEST, 'POST');
+                curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, 1);
+                curl_setopt($ch, CURLOPT_TIMEOUT, 3);
+                curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
+                curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, 0);
+                curl_setopt($ch, CURLOPT_HTTPHEADER, [
+                    'Host: api.logshare.cn',
+                    'X-OpenLiteWaf-Token: ' . $token,
+                ]);
+                curl_setopt($ch, CURLOPT_FORBID_REUSE, true);
+                $res = curl_exec($ch);
+                if (!is_string($res) || !str_contains($res, '"ok":true')) {
+                    \App\Syslog::error('SecurityService', 'OpenLiteWaf unban sync failed for ' . $ip);
+                }
             }
+        } catch (\Throwable $e) {
+            \App\Syslog::error('SecurityService', 'OpenLiteWaf unban sync error for ' . $ip . ': ' . $e->getMessage());
+        } finally {
+            // 常驻协程进程：显式释放句柄，避免 FD 累积（EMFILE）
+            $ch = null;
         }
-        $data['bans'] = $filtered;
-        @file_put_contents($path, json_encode($data, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
     }
 
+    /**
+     * OpenLiteWaf 快照文件的可写路径探测（仅裸机部署可用，见 syncBanToWaf 说明）。
+     */
     private static function getWritableWafSnapshotPath(): ?string
     {
         $candidates = [
