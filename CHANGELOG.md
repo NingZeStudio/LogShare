@@ -1,5 +1,21 @@
 # Changelog
 
+## 1.8.3 — 未发布
+
+### 修复
+
+- **边缘防护误封治理（子模块更新）**：
+  - `OpenLiteWaf` v1.3.0：攻击特征规则新增「匹配对象作用域」，路径形态的探测规则（含敏感文件扩展名）不再作用于请求体与 User-Agent——前端遥测上报的 `endpoint` 字段里出现 `main.log`、`config.yml` 曾让整个客户端 IP 被封 600 秒，期间上传与查看日志一律 403；敏感文件扩展名规则同时收窄到请求路径本身（`?file=latest.log` 一类正常业务参数不再判探测），并从通用扩展名中剔除 `json` / `xml`（本站无静态 JSON/XML 敏感资产，误伤方为 `/sitemap.xml` 与前端附件名），改由具名敏感文件规则精确覆盖；新增只作用于请求体的 multipart 上传文件名规则补齐收窄后的检测缺口；请求体豁免清单补入遥测与管理端前缀（`/v1|/1/telemetry`、`/v1|/1/admin`），管理员保存含反引号与 `curl` 的知识库正文不再被拦。
+  - `OpenLiteWaf`：CC 超限改返回 429 + `Retry-After` 且不再封禁 IP（固定窗口计数天然跨窗口恢复，CGNAT 出口不再被整片封掉）；特征命中改为「窗口内累计 `sig_strikes`（默认 3）次才封禁」，把单次误判的爆炸半径从「该 IP 全站 403 十分钟」压缩为「一次 403」。
+  - `OpenLiteWaf`：攻击日志与封禁记录新增命中规则序号（`rule`）与匹配对象（`via`），`/security/stats` 新增 `ban_reasons` 封禁原因分布；命中片段与请求体内容一律不记录，公开页隐私口径不变。
+  - `OpenLiteWaf`：新增特权运维端点 `GET /security/bans` 与 `POST /security/unban`（令牌 `OPENLITEWAF_ADMIN_TOKEN` 走请求头，未配置时 404 fail-closed），解封同时清除封禁键、命中计数、CC 窗口计数与封禁槽位并立即重写快照，`docker restart` 不再复活误封。后台「解封」此前对边缘层完全无效（`syncUnbanToWaf` 只改快照文件，而该目录在应用容器内是只读挂载），现改走内部 HTTPS 调用，应用容器的 `OpenLiteWaf/data` 维持只读。
+- **站点访问统计口径修正（子模块更新）**：`OpenLiteStats` v1.1.0 将遥测上报（`/v1|/1/telemetry`）与管理后台（`/v1|/1/admin`）排除出全部计数——线上热门端点榜首曾是 `/v1/telemetry/report`（占环形窗口近半），且每个上报方都占一个独立 IP 位；同时不再计入 CORS `OPTIONS` 预检；热门端点聚合键按后端 `TelemetryService::cleanEndpoint` 同口径做路径模板化（`/v1/raw/{id}/main.log` → `/v1/raw/:id/main.log`，长十六进制 cacheKey → `:hash`），`recent` 列表保留原始路径。排除前缀改为按路径段边界判定并拒绝空前缀（此前 `/v1/administrator` 也会被排除，而列表里混入空串会静默停掉全站统计）。
+
+### 协议与文档
+
+- 边缘层生效方式统一表述为 `docker compose -f docker/compose.yaml restart nginx`（容器内 `nginx -s reload` 在本部署不可靠），并更正「统计页重启后清零」的旧描述——计数与封禁自 v1.2.0 起随快照持久化。
+- `OpenLiteWaf/README.md` 新增「运维端点」章节与误封判读指引；`.env.example` 增加 `OPENLITEWAF_ADMIN_TOKEN`。
+
 ## 1.8.2 — 2026-09-23
 
 ### LogAgent 完整化重构（重大架构升级）
