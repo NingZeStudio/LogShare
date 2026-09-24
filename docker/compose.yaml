@@ -12,6 +12,10 @@ services:
     # 版本固定，升级时同步检查 OpenLiteWaf/nginx/nginx.conf 与镜像内置配置的差异
     image: openresty/openresty:1.27.1.2-alpine
     container_name: logshare-nginx
+    environment:
+      # /security/unban 与 /security/bans 的运维令牌。
+      # 需配合 OpenLiteWaf/nginx/nginx.conf 的 `env` 指令才会出现在 Lua 的 os.getenv 里
+      OPENLITEWAF_ADMIN_TOKEN: ${OPENLITEWAF_ADMIN_TOKEN:-}
     ports:
       - "80:80"
       - "443:443"
@@ -97,6 +101,9 @@ services:
       AI_HEADERS: ${AI_HEADERS:-}
       AI_RAG_ENABLED: ${AI_RAG_ENABLED:-false}
       AI_RAG_PROVIDERS: ${AI_RAG_PROVIDERS:-}
+      # 边缘 WAF 解封令牌的调用方（Admin 后台点"解封"时内部调用 https://nginx/security/unban）。
+      # OpenLiteWaf/data 保持只读挂载：应用容器不需要、也不应有权改写 nginx 的权威状态文件
+      OPENLITEWAF_ADMIN_TOKEN: ${OPENLITEWAF_ADMIN_TOKEN:-}
     depends_on:
       mariadb:
         condition: service_healthy
