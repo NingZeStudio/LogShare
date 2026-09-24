@@ -428,6 +428,46 @@ if ($testWaf) {
         }
     });
 
+    runCheck('OpenLiteWaf 遥测上报放行（body 含日志文件名不得判探测）', function () use ($baseUrl) {
+        // 回归 2026-09 线上误封：前端遥测 SDK 拦截 fetch/XHR 后把每个请求 URL 原样写进
+        // endpoint 上报，探针扩展名规则曾在 body 里命中 main.log 而封掉整个客户端 IP
+        $payload = json_encode([
+            'items' => [
+                ['type' => 'api', 'endpoint' => 'https://logshare.cn/v1/raw/qKSA1QU/main.log', 'method' => 'GET', 'duration' => 8.1, 'status' => 200],
+                ['type' => 'error', 'message' => 'cannot read config.yml', 'stack' => 'at read (/data/user/0/cn.logshare/files/latest.log:1)', 'url' => 'https://logshare.cn/log/qKSA1QU'],
+                ['type' => 'web_vitals', 'name' => 'LCP', 'value' => 2600, 'rating' => 'good'],
+            ],
+        ]);
+        $res = httpRequest('POST', "{$baseUrl}/v1/telemetry/report", ['Content-Type' => 'application/json'], $payload);
+        if ($res['status'] === 403 || $res['status'] === 429) {
+            throw new RuntimeException("OpenLiteWaf 误拦截遥测上报，状态: {$res['status']}");
+        }
+    });
+
+    runCheck('OpenLiteWaf 管理端请求体放行（含反引号与 curl 的正常书写）', function () use ($baseUrl, $adminToken) {
+        // 用只读路由发 POST：断言的是边缘层不拦，不关心应用层返回什么（405/404 均可）
+        $payload = json_encode([
+            'content' => "# 排障速查\n执行 `whoami` 或 curl https://piston-meta.mojang.com/xxx 下载失败，"
+                . "读 ../../config.yml 报 java.lang.IllegalStateException，检查 /etc/hosts 与 Thread.sleep(Native Method)\n",
+        ]);
+        $res = httpRequest('POST', "{$baseUrl}/v1/admin/logs", [
+            'Content-Type' => 'application/json',
+            'Authorization' => "Bearer {$adminToken}",
+        ], $payload);
+        if ($res['status'] === 403 || $res['status'] === 429) {
+            throw new RuntimeException("OpenLiteWaf 误拦截管理端请求体，状态: {$res['status']}");
+        }
+    });
+
+    runCheck('OpenLiteWaf 常见静态路径不误判探测（/sitemap.xml 与 /robots.txt）', function () use ($baseUrl) {
+        foreach (['/sitemap.xml', '/robots.txt', '/favicon.ico'] as $path) {
+            $res = httpRequest('GET', "{$baseUrl}{$path}");
+            if ($res['status'] === 403) {
+                throw new RuntimeException("OpenLiteWaf 将 {$path} 判为探测（403），扩展名规则应收窄到请求路径");
+            }
+        }
+    });
+
     runCheck('OpenLiteWaf 真实恶意攻击拦截 (SQL 注入 / 路径遍历)', function () use ($baseUrl) {
         // 尝试发送典型路径遍历请求
         $attackRes = httpRequest('GET', "{$baseUrl}/v1/log?id=../../../../etc/passwd");
@@ -438,7 +478,65 @@ if ($testWaf) {
         // 尝试发送典型 SQL 注入请求
         $sqliRes = httpRequest('GET', "{$baseUrl}/v1/limits?union=SELECT%201,version()");
         if ($sqliRes['status'] !== 403) {
-            throw new RuntimeException("OpenLiteWaf 未拦截 SQL 注入攻击，状态: {$sqliRes['status']}");
+            throw new RuntimeException("OpenLiteWaf 未拦截 SQL 注入请求，状态: {$sqliRes['status']}");
+        }
+    });
+
+    runCheck('OpenLiteWaf 敏感文件与扫描器 UA 仍判探测', function () use ($baseUrl) {
+        foreach (['/.env', '/db.backup.sql', '/latest.log', '/web.config', '/cgi-bin/test.cgi'] as $path) {
+            $res = httpRequest('GET', "{$baseUrl}{$path}");
+            if ($res['status'] !== 403) {
+                throw new RuntimeException("OpenLiteWaf 未拦截敏感文件探测 {$path}，状态: {$res['status']}");
+            }
+        }
+        foreach (['sqlmap/1.7.11#stable', 'gobuster/3.6', 'Nikto/2.5.0'] as $ua) {
+            $res = httpRequest('GET', "{$baseUrl}/v1/limits", ['User-Agent' => $ua]);
+            if ($res['status'] !== 403) {
+                throw new RuntimeException("OpenLiteWaf 未拦截扫描器 UA {$ua}，状态: {$res['status']}");
+            }
+        }
+    });
+
+    // 顺序纪律：以下用例会累积 strike 计数并封禁 CI 出口 IP，必须排在全部正向断言之后
+    runCheck('OpenLiteWaf 特征命中累计封禁与运行时解封', function () use ($baseUrl) {
+        for ($i = 0; $i < 3; $i++) {
+            httpRequest('GET', "{$baseUrl}/v1/limits?union=SELECT%201,version()");
+        }
+        $banned = httpRequest('GET', "{$baseUrl}/v1/limits");
+        if ($banned['status'] !== 403) {
+            throw new RuntimeException("累计三次特征命中后未封禁出口 IP，状态: {$banned['status']}");
+        }
+
+        $token = trim((string) (getenv('OPENLITEWAF_ADMIN_TOKEN') ?: ''));
+        if ($token === '') {
+            fwrite(STDOUT, "  · 未配置 OPENLITEWAF_ADMIN_TOKEN，跳过解封自检（封禁等 TTL 自然到期）\n");
+            return;
+        }
+        $bans = httpRequest('GET', "{$baseUrl}/security/bans", ['X-OpenLiteWaf-Token' => $token]);
+        if ($bans['status'] === 404) {
+            throw new RuntimeException('运维端点返回 404：nginx 未把 OPENLITEWAF_ADMIN_TOKEN 透传给 Lua（检查 env 指令与 compose 注入）');
+        }
+        $list = json_decode($bans['body'], true);
+        $victims = [];
+        foreach ((array) ($list['bans'] ?? []) as $entry) {
+            if (!empty($entry['ip'])) {
+                $victims[] = (string) $entry['ip'];
+            }
+        }
+        if ($victims === []) {
+            throw new RuntimeException('/security/bans 未列出刚产生的封禁，封禁原因或槽位写入有问题');
+        }
+        foreach ($victims as $ip) {
+            $res = httpRequest('POST', "{$baseUrl}/security/unban?ip=" . rawurlencode($ip), [
+                'X-OpenLiteWaf-Token' => $token,
+            ]);
+            if (!str_contains($res['body'], '"ok":true')) {
+                throw new RuntimeException("解封 {$ip} 失败: {$res['status']} {$res['body']}");
+            }
+        }
+        $after = httpRequest('GET', "{$baseUrl}/v1/limits");
+        if ($after['status'] === 403) {
+            throw new RuntimeException('解封后出口 IP 仍被拦：shared dict 封禁键或槽位未清干净');
         }
     });
 }

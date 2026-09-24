@@ -81,6 +81,23 @@ test('SecurityService ban, unban, and isIpBanned lifecycle', function () {
     expect(SecurityService::isIpBanned($testIp))->toBeFalse();
 });
 
+test('SecurityService unban leaves the OpenLiteWaf snapshot file untouched', function () {
+    // 封禁的权威状态是 nginx shared dict（跨 worker 共享），worker 0 每 60 秒用 dict 全量
+    // 覆盖快照文件：应用层改文件既解不掉正在生效的封禁，也会被回写冲掉，历史上因此
+    // 在生产完全失效（OpenLiteWaf/data 在应用容器里是只读挂载）。解封改走
+    // POST /security/unban（Lua 侧 T28 覆盖），这里守住反面：绝不改写 WAF 数据文件。
+    putenv('OPENLITEWAF_ADMIN_TOKEN');
+    $snap = $this->tmpDir . '/waf-snapshot.json';
+    $payload = json_encode(['bans' => [['slot' => 0, 'exp' => time() + 600, 'ip' => '203.0.113.7']]]);
+    file_put_contents($snap, $payload);
+    putenv('WAF_SNAPSHOT_PATH=' . $snap);
+
+    expect(SecurityService::unbanIp('203.0.113.7'))->toBeTrue();
+
+    expect(file_get_contents($snap))->toBe($payload, '解封不得改写 OpenLiteWaf 快照文件');
+    putenv('WAF_SNAPSHOT_PATH');
+});
+
 test('SecurityService content rules validation and rejection', function () {
     SecurityService::saveContentRules([
         'enabled' => true,
