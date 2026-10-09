@@ -6,17 +6,39 @@ use App\Data\MetadataEntry;
 use App\Data\Token;
 use Hyperf\DbConnection\Db;
 
+/**
+ * MariaDB 存储后端。
+ *
+ * 表结构为按 created 的天级 RANGE 分区（见 docker/mariadb-init.sql）。
+ * 两点必须记住：
+ *   1. 分区表不支持外键，原 ON DELETE CASCADE 已移除，所有级联删除
+ *      都由本类显式完成，漏删任何一张表都会留下孤儿行。
+ *   2. 清理走 DROP PARTITION 而非 DELETE：只有前者能真正把磁盘空间
+ *      归还操作系统（DELETE 只会让 .ibd 文件内部出现永远不会被回收的空洞）。
+ */
 class MariaDbStorage implements StorageInterface
 {
     protected const TABLE_LOGS = 'logs';
     protected const TABLE_FILES = 'log_files';
     protected const TABLE_METADATA = 'log_metadata';
 
-    /** 单次 CleanupExpired 最多删除的日志数，限制请求路径内的清理工作量 */
-    private const CLEANUP_BATCH = 500;
+    /** 单次 CleanupExpired 最多丢弃的分区数上限，限制请求路径内的清理工作量 */
+    private const CLEANUP_BATCH = 60;
 
     public static function Put(string $data, ?Token $token = null, array $metadata = [], ?string $source = null, ?array $files = null): ?\App\Id
     {
+        $normalizedSource = ($source !== null && trim($source) !== '')
+            ? substr(trim($source), 0, 64)
+            : '未指定';
+
+        // 内容指纹：正文 + 附加文件 + 来源。命中已有指纹说明同一份内容被重复
+        // 上传，直接复用既有 ID，不再占用新的分区空间。
+        $fingerprint = self::fingerprint($data, $files, $normalizedSource);
+        $existingId = self::findByFingerprint($fingerprint);
+        if ($existingId !== null) {
+            return new \App\Id($existingId);
+        }
+
         $id = new \App\Id();
         $id->setStorage('s');
 
@@ -29,8 +51,8 @@ class MariaDbStorage implements StorageInterface
             } while (self::idExists($id->getRaw()));
 
             try {
-                Db::transaction(function () use ($id, $data, $token, $metadata, $source, $files) {
-                    self::insertLog($id->getRaw(), $data, $token, $metadata, $source, $files);
+                Db::transaction(function () use ($id, $data, $token, $metadata, $normalizedSource, $files, $fingerprint) {
+                    self::insertLog($id->getRaw(), $data, $token, $metadata, $normalizedSource, $files, $fingerprint);
                 });
                 break;
             } catch (\Throwable $e) {
@@ -43,10 +65,67 @@ class MariaDbStorage implements StorageInterface
         return $id;
     }
 
+    /**
+     * 计算内容指纹。
+     *
+     * 采用 xxh128（非加密哈希，速度约为 SHA-256 的十倍量级），10MB 正文的
+     * 计算开销在毫秒级，对上传延迟无感知。附加文件按名称排序后参与计算，使
+     * 同一批文件无论上传顺序如何都能得到相同指纹。
+     */
+    public static function fingerprint(string $data, ?array $files, string $source): string
+    {
+        $context = hash_init('xxh128');
+        hash_update($context, $source);
+        hash_update($context, "\0");
+        hash_update($context, $data);
+
+        if (!empty($files)) {
+            $parts = [];
+            foreach ($files as $file) {
+                $parts[] = [(string) ($file['name'] ?? ''), (string) ($file['data'] ?? '')];
+            }
+            usort($parts, static fn(array $a, array $b): int => strcmp($a[0], $b[0]));
+            foreach ($parts as [$name, $content]) {
+                hash_update($context, "\0");
+                hash_update($context, $name);
+                hash_update($context, "\0");
+                hash_update($context, $content);
+            }
+        }
+
+        return hash_final($context);
+    }
+
+    /**
+     * 按指纹查找已存在的日志 ID。
+     *
+     * 走 idx_fingerprint 的等值匹配，成本是一次 B-tree 定位，与日志总量无关，
+     * 因此可以安全地放在每次上传的关键路径上。
+     *
+     * 返回最新的一条：最接近当前时间的那条剩余 TTL 最长，交还给客户端的 ID
+     * 不至于马上失效。
+     */
+    private static function findByFingerprint(string $fingerprint): ?string
+    {
+        try {
+            $raw = Db::table(self::TABLE_LOGS)
+                ->where('fingerprint', $fingerprint)
+                ->orderByDesc('created')
+                ->value('id');
+        } catch (\Throwable $e) {
+            // 旧库尚未补齐 fingerprint 列时静默降级为不去重，绝不阻断上传
+            \App\Syslog::error('MariaDbStorage', 'fingerprint lookup failed: ' . $e->getMessage());
+            return null;
+        }
+
+        return $raw === null ? null : \App\Id::fromRaw('s', (string) $raw)->get();
+    }
+
     public static function Update(\App\Id $id, string $data, ?array $files = null): bool
     {
         $rawId = $id->getRaw();
-        return Db::transaction(function () use ($rawId, $data, $files) {
+        $created = self::currentCreated($rawId);
+        return Db::transaction(function () use ($rawId, $created, $data, $files) {
             $updated = Db::table(self::TABLE_LOGS)->where('id', $rawId)->update(['data' => $data]);
             if ($files !== null) {
                 Db::table(self::TABLE_FILES)->where('log_id', $rawId)->delete();
@@ -59,6 +138,7 @@ class MariaDbStorage implements StorageInterface
                             'name' => $file['name'] ?? '',
                             'data' => $fileData,
                             'size' => isset($file['size']) ? (int) $file['size'] : strlen($fileData),
+                            'created' => $created,
                         ];
                     }
                     Db::table(self::TABLE_FILES)->insert($rows);
@@ -68,21 +148,35 @@ class MariaDbStorage implements StorageInterface
         });
     }
 
-    private static function insertLog(string $rawId, string $data, ?Token $token, array $metadata, ?string $source, ?array $files): void
+    /**
+     * 读取日志当前的 created 值。
+     *
+     * Update 会重写 log_files 的行，而子表主键包含 created，只有沿用父表当前
+     * 的 created 才能保证子表行落在与父表一致的分区里，便于随父表一同被
+     * DROP PARTITION 回收。
+     */
+    private static function currentCreated(string $rawId): int
     {
+        $created = Db::table(self::TABLE_LOGS)->where('id', $rawId)->value('created');
+        return $created === null ? time() : (int) $created;
+    }
+
+    private static function insertLog(string $rawId, string $data, ?Token $token, array $metadata, string $source, ?array $files, string $fingerprint): void
+    {
+        // 子表的 created 必须与父表一致：分区回收按同一 created 边界进行，
+        // 若两者不一致，父表分区被丢弃后子表会留下永久无法回收的孤儿数据。
+        $created = time();
         $document = [
             'id' => $rawId,
             'data' => $data,
-            'created' => time(),
+            'created' => $created,
+            'source' => $source,
+            'fingerprint' => $fingerprint,
         ];
 
         if ($token !== null) {
             $document['token'] = $token->get();
         }
-
-        $document['source'] = ($source !== null && trim($source) !== '')
-            ? substr(trim($source), 0, 64)
-            : '未指定';
 
         Db::table(self::TABLE_LOGS)->insert($document);
 
@@ -101,6 +195,7 @@ class MariaDbStorage implements StorageInterface
                     'value' => is_string($value) ? $value : (is_null($value) ? null : json_encode($value, JSON_UNESCAPED_UNICODE)),
                     'label' => $serialized['label'] ?? null,
                     'visible' => (int) ($serialized['visible'] ?? true),
+                    'created' => $created,
                 ];
             }
             if (!empty($rows)) {
@@ -116,6 +211,7 @@ class MariaDbStorage implements StorageInterface
                     'name' => $file['name'],
                     'data' => $file['data'],
                     'size' => strlen($file['data']),
+                    'created' => $created,
                 ];
             }
             Db::table(self::TABLE_FILES)->insert($rows);
@@ -201,11 +297,28 @@ class MariaDbStorage implements StorageInterface
         ];
     }
 
-    public static function Renew(\App\Id $id): bool
+    /**
+ * 续期：把日志的过期时刻重置到现在。
+ *
+ * 父表 created 变化后 InnoDB 会把该行物理移动到目标分区（分区表的正常
+ * 行为）。子表的 created 必须同步更新，否则父子行会落在不同分区，
+ * 之后 DROP PARTITION 只能删掉父表，子表残留成为永久无法回收的孤儿数据。
+ */
+public static function Renew(\App\Id $id): bool
     {
-        return Db::table(self::TABLE_LOGS)
-            ->where('id', $id->getRaw())
-            ->update(['created' => time()]) > 0;
+        $rawId = $id->getRaw();
+        $now = time();
+
+        return Db::transaction(function () use ($rawId, $now) {
+            $updated = Db::table(self::TABLE_LOGS)
+                ->where('id', $rawId)
+                ->update(['created' => $now]);
+
+            Db::table(self::TABLE_METADATA)->where('log_id', $rawId)->update(['created' => $now]);
+            Db::table(self::TABLE_FILES)->where('log_id', $rawId)->update(['created' => $now]);
+
+            return $updated > 0;
+        });
     }
 
     public static function Delete(\App\Id $id): bool
@@ -219,36 +332,40 @@ class MariaDbStorage implements StorageInterface
     }
 
     /**
-     * Delete expired logs whose `created` timestamp is older than
-     * `storage.storageTime`. Deletes at most self::CLEANUP_BATCH logs per
-     * call to bound the work done inside a request; remaining expired rows
-     * are picked up by subsequent calls.
-     *
-     * @return int Number of deleted logs
-     */
-    public static function CleanupExpired(): int
+ * 回收已过期的日志。
+ *
+ * 实现方式与旧版截然不同：旧版用 DELETE 逐行删除，而 InnoDB 的 DELETE 只是
+ * 把页标记为空洞留在 .ibd 文件内部等待后续复用，磁盘占用只增不减，这正是
+ * 服务器空间爆满的根因。改为按天 RANGE 分区后，这里直接 DROP PARTITION，
+ * 操作系统层面的空间在同一时刻被真正归还，且该操作是元数据级的瞬时动作，
+ * 不产生逐行扫描与 purge 压力。
+ *
+ * 三张表的分区边界一致，可一次性丢弃。若某张表的分区因历史原因缺失，
+ * 分区回收失败，此时回退到按行 DELETE，保证「过期日志一定会被删掉」这一
+ * 语义在所有情况下都成立。
+ *
+ * @return int 本次丢弃的分区数（按表计）
+ */
+public static function CleanupExpired(): int
     {
         $config = \App\Config::Get('storage');
         $storageTime = (int) ($config['storageTime'] ?? (7 * 24 * 60 * 60));
         $expireBefore = time() - $storageTime;
 
-        return Db::transaction(function () use ($expireBefore) {
-            $expiredIds = Db::table(self::TABLE_LOGS)
-                ->where('created', '<', $expireBefore)
-                ->limit(self::CLEANUP_BATCH)
-                ->pluck('id')
-                ->all();
+        // 先补齐分区：向前补齐让兜底分区中的过期数据被切进具名分区（随后才可被
+// DROP 回收），向后补齐避免清理间隔内新写入的行无处安放
+        \App\System\LogPartitionManager::ensureFallbackPartition();
+        \App\System\LogPartitionManager::ensurePartitions();
 
-            if (empty($expiredIds)) {
-                return 0;
-            }
+        $dropped = \App\System\LogPartitionManager::dropExpiredPartitions($expireBefore);
 
-            Db::table(self::TABLE_METADATA)->whereIn('log_id', $expiredIds)->delete();
-            Db::table(self::TABLE_FILES)->whereIn('log_id', $expiredIds)->delete();
+        // 分区回收后理论上不该再有残留的过期行；这里做一次兜底行级清理，
+        // 覆盖分区缺失、分区边界异常等退化场景。
+        $leftover = \App\System\LogPartitionManager::cleanupStrays($expireBefore, self::CLEANUP_BATCH);
 
-            return Db::table(self::TABLE_LOGS)->whereIn('id', $expiredIds)->delete();
-        });
+        return $dropped + $leftover;
     }
+
 
     public static function List(int $limit = 20, int $offset = 0, ?string $source = null, ?int $since = null, ?int $until = null, ?string $keyword = null): array
     {

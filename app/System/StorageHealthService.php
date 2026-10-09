@@ -148,15 +148,18 @@ final class StorageHealthService
 
             $totalDataBytes = 0;
             $totalIndexBytes = 0;
+            $totalDataFree = 0;
             $totalRows = 0;
             $tableDetails = [];
 
             foreach ($tables as $t) {
                 $d = (int) $t->data_bytes;
                 $i = (int) $t->index_bytes;
+                $f = (int) $t->data_free;
                 $r = (int) $t->row_count;
                 $totalDataBytes += $d;
                 $totalIndexBytes += $i;
+                $totalDataFree += $f;
                 $totalRows += $r;
 
                 $tableDetails[] = [
@@ -175,11 +178,87 @@ final class StorageHealthService
                 'totalIndexBytes' => $totalIndexBytes,
                 'totalBytes' => $totalDataBytes + $totalIndexBytes,
                 'tables' => $tableDetails,
+                // 分区表特有指标：碎片率反映「DELETE 未归还空间」的占比，
+                // 分区列表反映当前可回收空间的时间跨度。分区化之后，正常情况下
+                // dataFree 应接近 0；持续偏高说明有写入绕过了分区维护。
+                'dataFreeBytes' => $totalDataFree,
+                'fragmentationRatio' => ($totalDataBytes + $totalIndexBytes) > 0
+                    ? round($totalDataFree / ($totalDataBytes + $totalIndexBytes), 4)
+                    : 0.0,
+                'partitions' => self::getPartitionSummary(),
             ];
         } catch (\Throwable $e) {
             return [
                 'error' => 'MariaDB metrics unavailable: ' . $e->getMessage(),
             ];
+        }
+    }
+
+    /**
+     * 汇总三张日志表的分区状态。
+     *
+     * 磁盘空间只能通过丢弃整日分区归还，因此运维需要看到每个分区覆盖的时间
+     * 跨度与实际占用，才能判断「什么时候会回收多少空间」。
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    private static function getPartitionSummary(): array
+    {
+        try {
+            $rows = Db::select(
+                "SELECT TABLE_NAME as t, PARTITION_NAME as p, PARTITION_DESCRIPTION as d,
+                        TABLE_ROWS as r,
+                        (DATA_LENGTH + INDEX_LENGTH) as bytes
+                 FROM information_schema.PARTITIONS
+                 WHERE TABLE_SCHEMA = DATABASE()
+                   AND TABLE_NAME IN ('logs','log_files','log_metadata')
+                   AND PARTITION_NAME IS NOT NULL
+                 ORDER BY TABLE_NAME, PARTITION_ORDINAL_POSITION"
+            );
+
+            $summary = [];
+            foreach ($rows as $row) {
+                $table = (string) $row->t;
+                $name = (string) $row->p;
+                $isFallback = strtoupper(trim((string) $row->d)) === 'MAXVALUE';
+
+                if (!isset($summary[$table])) {
+                    $summary[$table] = [
+                        'table' => $table,
+                        'fallbackPartition' => null,
+                        'totalBytes' => 0,
+                        'dayPartitions' => 0,
+                        'oldestBoundary' => null,
+                        'newestBoundary' => null,
+                    ];
+                }
+
+                $bytes = (int) $row->bytes;
+                $summary[$table]['totalBytes'] += $bytes;
+
+                if ($isFallback) {
+                    // 兜底分区承载所有未被日期分区覆盖的行，任何情况下都不能丢弃
+                    $summary[$table]['fallbackPartition'] = [
+                        'name' => $name,
+                        'rows' => (int) $row->r,
+                        'bytes' => $bytes,
+                    ];
+                    continue;
+                }
+
+                $summary[$table]['dayPartitions']++;
+                $boundary = (int) $row->d;
+                if ($summary[$table]['oldestBoundary'] === null || $boundary < $summary[$table]['oldestBoundary']) {
+                    $summary[$table]['oldestBoundary'] = $boundary;
+                }
+                if ($summary[$table]['newestBoundary'] === null || $boundary > $summary[$table]['newestBoundary']) {
+                    $summary[$table]['newestBoundary'] = $boundary;
+                }
+            }
+
+            return array_values($summary);
+        } catch (\Throwable $e) {
+            return [];
         }
     }
 

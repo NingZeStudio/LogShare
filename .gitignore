@@ -15,3 +15,4 @@ coverage/
 /rag/index.db
 /rag/public/
 scripts/__pycache__/
+/.qoder/

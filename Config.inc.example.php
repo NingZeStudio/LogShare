@@ -16,6 +16,10 @@ return [
             'f' => ['name' => 'Filesystem',  'class' => '\\App\\Storage\\FilesystemStorage',  'enabled' => false],
         ],
         'storageId' => 's',
+        // 日志保留时长（秒）。MariaDB 后端按 created 的天级 RANGE 分区存储，
+        // 到期由 MariaDB Event cleanup_expired_logs 丢弃整日分区，
+        // 磁盘空间会被真正归还操作系统（DELETE 只会留下永不回收的空洞）。
+        // 修改后需执行 php scripts/sync_mariadb_events.php 并重启 mariadb-events 容器生效。
         'storageTime' => 7 * 24 * 60 * 60,
         'maxLength' => 10 * 1024 * 1024,
         'maxLines' => 50_000,

@@ -26,35 +26,49 @@ class MariaDbStorageTest extends HttpTestCase
         }
     }
 
-    private function ensureSchema(): void
+    /**
+ * 建立与 docker/mariadb-init.sql 一致的分区表结构。
+ *
+ * 三张表均按 created 做天级 RANGE 分区，主键包含分区键，且不声明外键
+ * （MariaDB 分区表不支持外键，级联删除由 MariaDbStorage 显式完成）。
+ */
+private function ensureSchema(): void
     {
         Db::statement("CREATE TABLE IF NOT EXISTS logs (
-            id CHAR(6) PRIMARY KEY,
+            id CHAR(6) NOT NULL,
             data LONGTEXT NOT NULL,
             token VARCHAR(64) NULL,
             source VARCHAR(64) NULL,
             created INT UNSIGNED NOT NULL,
-            KEY idx_created (created)
-        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+            fingerprint CHAR(32) NULL,
+            PRIMARY KEY (id, created),
+            KEY idx_created (created),
+            KEY idx_fingerprint (fingerprint)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        PARTITION BY RANGE (created) (PARTITION p_future VALUES LESS THAN (MAXVALUE))");
 
         Db::statement("CREATE TABLE IF NOT EXISTS log_files (
-            id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
             log_id CHAR(6) NOT NULL,
             name VARCHAR(512) NOT NULL,
             data LONGTEXT NOT NULL,
             size INT UNSIGNED NOT NULL,
-            KEY idx_log_files_log_id (log_id)
-        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+            created INT UNSIGNED NOT NULL,
+            PRIMARY KEY (log_id, name, created),
+            KEY idx_log_files_created (created)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        PARTITION BY RANGE (created) (PARTITION p_future VALUES LESS THAN (MAXVALUE))");
 
         Db::statement("CREATE TABLE IF NOT EXISTS log_metadata (
-            id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
             log_id CHAR(6) NOT NULL,
             `key` VARCHAR(64) NOT NULL,
             `value` TEXT NULL,
             `label` VARCHAR(128) NULL,
             `visible` TINYINT(1) NOT NULL DEFAULT 1,
-            KEY idx_log_metadata_log_id (log_id)
-        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+            created INT UNSIGNED NOT NULL,
+            PRIMARY KEY (log_id, `key`, created),
+            KEY idx_log_metadata_created (created)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        PARTITION BY RANGE (created) (PARTITION p_future VALUES LESS THAN (MAXVALUE))");
     }
 
     private function requireDb(): void
@@ -106,6 +120,146 @@ class MariaDbStorageTest extends HttpTestCase
         expect($after['created'])->toBeGreaterThanOrEqual($before['created']);
 
         MariaDbStorage::Delete($id);
+    }
+
+    /**
+     * 相同内容的重复上传必须复用既有 ID，而不是产生新行。
+     *
+     * 这是空间控制的一部分：客户端重试、重复提交是日志表膨胀的主要来源之一。
+     */
+    public function testDuplicateContentReusesExistingId(): void
+    {
+        $this->requireDb();
+
+        $first = MariaDbStorage::Put('duplicate content', new Token(), [], 'src-a');
+        $second = MariaDbStorage::Put('duplicate content', new Token(), [], 'src-a');
+
+        expect($second->get())->toBe($first->get());
+
+        $count = Db::table('logs')
+            ->where('fingerprint', MariaDbStorage::fingerprint('duplicate content', null, 'src-a'))
+            ->count();
+        expect((int) $count)->toBe(1);
+
+        MariaDbStorage::Delete($first);
+    }
+
+    /**
+     * 指纹判定范围为「正文 + 附加文件 + source」，任一项不同都应视为不同日志。
+     */
+    public function testFingerprintDistinguishesContentSourceAndFiles(): void
+    {
+        $this->requireDb();
+
+        $base = MariaDbStorage::fingerprint('body', null, 'src');
+
+        // source 不同 → 指纹不同
+        expect(MariaDbStorage::fingerprint('body', null, 'other'))->not->toBe($base);
+        // 正文不同 → 指纹不同
+        expect(MariaDbStorage::fingerprint('body2', null, 'src'))->not->toBe($base);
+        // 附加文件不同 → 指纹不同
+        $withFile = MariaDbStorage::fingerprint('body', [['name' => 'a.log', 'data' => 'x']], 'src');
+        expect($withFile)->not->toBe($base);
+
+        // 附件顺序不同但内容相同 → 指纹相同（排序保证顺序无关）
+        $f1 = MariaDbStorage::fingerprint('body', [
+            ['name' => 'a.log', 'data' => 'x'],
+            ['name' => 'b.log', 'data' => 'y'],
+        ], 'src');
+        $f2 = MariaDbStorage::fingerprint('body', [
+            ['name' => 'b.log', 'data' => 'y'],
+            ['name' => 'a.log', 'data' => 'x'],
+        ], 'src');
+        expect($f2)->toBe($f1);
+    }
+
+    /**
+     * 三张表必须存在具名日期分区与 p_future 兜底分区：
+     * 缺少具名分区则过期日志无法被 DROP 回收，缺少兜底分区则新写入直接失败。
+     */
+    public function testAllLogTablesArePartitionedWithFallback(): void
+    {
+        $this->requireDb();
+
+        \App\System\LogPartitionManager::ensurePartitions();
+
+        // DDL 之后 information_schema 在同一连接内可能返回陈旧视图，
+        // 用独立 PDO 连接读取可拿到最新分区布局。
+        $dsn = sprintf(
+            'mysql:host=%s;port=%s;dbname=%s',
+            (string) (getenv('DB_HOST') ?: '127.0.0.1'),
+            (string) (getenv('DB_PORT') ?: '3306'),
+            (string) (getenv('DB_DATABASE') ?: 'logshare')
+        );
+        $pdo = new \PDO($dsn, (string) (getenv('DB_USERNAME') ?: 'root'), (string) (getenv('DB_PASSWORD') ?: ''));
+        $pdo->setAttribute(\PDO::ATTR_ERRMODE, \PDO::ERRMODE_EXCEPTION);
+
+        foreach (\App\System\LogPartitionManager::TABLES as $table) {
+            $stmt = $pdo->prepare(
+                'SELECT PARTITION_NAME FROM information_schema.PARTITIONS
+                 WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND PARTITION_NAME IS NOT NULL'
+            );
+            $stmt->execute([$table]);
+            $names = $stmt->fetchAll(\PDO::FETCH_COLUMN);
+
+            expect($names)->toContain('p_future');
+            expect(count($names))->toBeGreaterThan(1, "{$table} must have named day partitions");
+        }
+    }
+
+    /**
+     * 子表的 created 必须与父表一致：分区回收按同一 created 边界进行，
+     * 两者错位会导致父表分区被丢弃后子表残留成为永久无法回收的孤儿数据。
+     */
+    public function testChildTablesShareParentCreatedValue(): void
+    {
+        $this->requireDb();
+
+        $id = MariaDbStorage::Put('parent sync', new Token(), [
+            \App\Data\MetadataEntry::fromArray(['key' => 'version', 'value' => '1.20.1', 'label' => 'v', 'visible' => true]),
+        ], 'sync-src', [
+            ['name' => 'extra.log', 'data' => 'extra body'],
+        ]);
+
+        try {
+            $parentCreated = (int) Db::table('logs')->where('id', $id->getRaw())->value('created');
+
+            $fileCreated = Db::table('log_files')->where('log_id', $id->getRaw())->value('created');
+            expect((int) $fileCreated)->toBe($parentCreated);
+
+            $metaCreated = Db::table('log_metadata')->where('log_id', $id->getRaw())->value('created');
+            expect((int) $metaCreated)->toBe($parentCreated);
+        } finally {
+            MariaDbStorage::Delete($id);
+        }
+    }
+
+    /**
+     * Renew 必须同步推进子表的 created，否则父子行会落入不同分区。
+     */
+    public function testRenewKeepsChildTablesInSync(): void
+    {
+        $this->requireDb();
+
+        $id = MariaDbStorage::Put('renew sync', new Token(), [
+            \App\Data\MetadataEntry::fromArray(['key' => 'version', 'value' => '1.20.1', 'label' => 'v', 'visible' => true]),
+        ], 'renew-src', [
+            ['name' => 'extra.log', 'data' => 'extra body'],
+        ]);
+
+        try {
+            Db::table('logs')->where('id', $id->getRaw())->update(['created' => time() - 99999999]);
+            Db::table('log_files')->where('log_id', $id->getRaw())->update(['created' => time() - 99999999]);
+            Db::table('log_metadata')->where('log_id', $id->getRaw())->update(['created' => time() - 99999999]);
+
+            expect(MariaDbStorage::Renew($id))->toBeTrue();
+
+            $parentCreated = (int) Db::table('logs')->where('id', $id->getRaw())->value('created');
+            expect((int) Db::table('log_files')->where('log_id', $id->getRaw())->value('created'))->toBe($parentCreated);
+            expect((int) Db::table('log_metadata')->where('log_id', $id->getRaw())->value('created'))->toBe($parentCreated);
+        } finally {
+            MariaDbStorage::Delete($id);
+        }
     }
 
     public function testCleanupExpiredRemovesOnlyExpired(): void
