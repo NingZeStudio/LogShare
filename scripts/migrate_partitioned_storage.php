@@ -25,21 +25,21 @@ if (!in_array('--yes', $argv, true)) {
     exit(1);
 }
 
-// 复用应用的数据库配置（含 DB_* 环境变量覆盖），避免在此处重复连接参数
-require $root . '/core.php';
+// 本脚本只用 PDO 直连，不依赖应用运行时，因此不 require core.php ——
+// 线上 PHP 代码构建在镜像内且可能仍是旧版本，宿主 / 临时容器挂载环境下
+// vendor/ 未必存在，引入 core.php 反而会让脚本无法执行。
 
-// 连接参数来自 Hyperf 的 databases 配置（config/autoload/databases.php），
-// 该文件已支持 DB_* 环境变量覆盖，与容器/本机部署方式保持一致。
-// 注意不能用 App\Config::Get()：那读的是 Config.inc.php，不含数据库连接信息。
-$dbConfig = require $root . '/config/autoload/databases.php';
-$config = $dbConfig['default'] ?? [];
+// 连接参数直接读环境变量，与 config/autoload/databases.php 的 DB_* 约定一致，
+// 但不 require 该文件：它依赖 Hyperf 的 env() 辅助函数，需要 vendor/ 存在，
+// 而线上 PHP 构建在镜像内，宿主与临时容器挂载环境下未必可用。
+$env = static fn(string $key, string $default): string => (string) (getenv($key) !== false ? getenv($key) : $default);
 
-$host = (string) ($config['host'] ?? '127.0.0.1');
-$port = (int) ($config['port'] ?? 3306);
-$database = (string) ($config['database'] ?? 'logshare');
-$username = (string) ($config['username'] ?? 'root');
-$password = (string) ($config['password'] ?? '');
-$charset = (string) ($config['charset'] ?? 'utf8mb4');
+$host = $env('DB_HOST', '127.0.0.1');
+$port = (int) $env('DB_PORT', '3306');
+$database = $env('DB_DATABASE', 'logshare');
+$username = $env('DB_USERNAME', 'root');
+$password = $env('DB_PASSWORD', '');
+$charset = $env('DB_CHARSET', 'utf8mb4');
 
 try {
     $pdo = new PDO(
