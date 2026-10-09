@@ -98,6 +98,7 @@ POST /v1/log
 - 上限：文件数 ≤ 200，解压后累计 ≤ 12MB（`storage.uploadFiles`）
 - ZIP 条目名会做路径遍历防护（拒绝 `../`、绝对路径）
 - **极速解耦与异步事件流**：上传时系统仅执行轻量级 Codex 特征探测并即刻持久化入库，毫秒级直接响应结果；随后派发 `log.uploaded` 事件，由后台常驻队列 Worker 异步执行内容敏感规则审核与 SpinYarn 堆栈反混淆。若异步审核命中违规规则，该日志将被物理清除并自动封禁非私网来源 IP。
+- **内容去重**：服务端按「正文 + 附加文件（按文件名排序，顺序无关）+ `source`」计算内容指纹。指纹命中既有日志时**不写入新行，直接返回既有日志的 ID**，响应结构与首次上传完全相同。这可避免客户端重试、重复提交造成的存储膨胀。
 
 **响应：**
 
@@ -115,6 +116,8 @@ POST /v1/log
 > `/v1/log` 返回格式相同，`raw` URL 指向 `/v1/raw/`。
 
 `token` 是删除该日志的唯一凭证，请自行保存。
+
+> **去重命中时的 token 语义**：命中已有指纹时返回的 `token` 是本次请求新生成的，它并未写入存储，因此**不能用于删除该日志**（删除凭证仍属于首次上传者）。若你需要删除能力，请使用首次上传时保存的 token。
 
 ---
 
@@ -929,6 +932,14 @@ GET /v1/admin/system/storage-health
 
 返回 MariaDB 表数据与索引大小、文件系统磁盘剩余容量、Redis 内存占用与 Key 数量。
 
+MariaDB 部分额外返回分区状态，用于判断磁盘压力来源：
+
+| 字段 | 说明 |
+| --- | --- |
+| `dataFreeBytes` | 三张表 `DATA_FREE` 之和。InnoDB 空洞总量，磁盘未归还的空间 |
+| `fragmentationRatio` | `dataFreeBytes / (数据 + 索引)`。分区化之后应接近 0；持续偏高说明有写入绕过了分区维护 |
+| `partitions[]` | 各表分区概览：`dayPartitions`（日分区数量）、`oldestBoundary` / `newestBoundary`（覆盖的时间边界，UTC 秒级）、`totalBytes`、`fallbackPartition`（兜底分区 `p_future` 的行数与占用） |
+
 ### 25. 手动触发过期日志清理
 
 ```
@@ -936,6 +947,8 @@ POST /v1/admin/system/cleanup-expired
 ```
 
 立即执行底层的 `CleanupExpired()`，返回回收条数与耗时。
+
+MariaDB 后端按天级 RANGE 分区存储，清理通过丢弃整日分区完成，磁盘空间会被真正归还操作系统；返回值是丢弃的分区数与兜底按行清理的条数之和（两者语义不同，前者是分区数、后者是行数）。
 
 ### 26. Redis 缓存按需清空
 
@@ -987,13 +1000,18 @@ POST /v1/admin/security/unban
 请求体：
 - `ip`: 目标 IP 地址（必填）
 
+响应 `data`：
+- `ip`: 被解封的 IP
+- `unbanned`: 应用层封禁（Redis 与本地封禁文件）是否已解除
+- `waf_sync`: 边缘 WAF 封禁的同步结果，取值 `ok`（已解除）/ `skipped`（未配置 `OPENLITEWAF_ADMIN_TOKEN`）/ `failed`（调用 Nginx 运维端点失败）/ `invalid`（IP 非法）。WAF 封禁按 IP 生效且随快照持久化，`unbanned: true` 不代表该来源已能正常访问；为 `skipped` 或 `failed` 时边缘仍会在封禁 TTL 内返回 403
+
 ### 31. 边缘防御概览与分类拦截统计
 
 ```
 GET /v1/admin/security/overview
 ```
 
-返回 OpenLiteWaf 拦截大盘数据，包括累计拦截次数、当前封禁 IP 总量、分类拦截计数（CC、SQL 注入、XSS、目录穿越、RCE/探针等）。
+返回 OpenLiteWaf 拦截大盘数据，包括累计请求与拦截次数、当前封禁 IP 总量、分类拦截计数（CC、SQL 注入、XSS、目录穿越、RCE/探针等）、来源 IP Top、逐分钟趋势，以及 `ban_reasons`——按「类目#规则序号」（如 `probe#57`、`cc`）归因的生效中封禁，用于判断是否有单条规则在批量误封；旧版 WAF 未上报该字段时为空对象。
 
 ### 32. 获取违规内容过滤规则
 
@@ -1297,6 +1315,8 @@ DELETE /v1/admin/ai/analyses/{cacheKey}
 - `GET /v1/admin/ai/analyses/{cacheKey}`：获取单条分析完整详情，包含多轮工具调用链（`toolCallChain`）、四维评分（`score`）、结构化验证结果（`validation`）与元数据。
 - `GET /v1/admin/ai/analyses/{cacheKey}/trace`：导出该次分析的全生命周期 Trace JSON 数据（含逐轮耗时、模型名称、提示词版本与错误堆栈）。
 - `DELETE /v1/admin/ai/analyses/{cacheKey}`：物理删除分析记录并同步清空对应结果缓存。
+
+`{cacheKey}` 形如 `ai:analysis:<日志ID>` 或 `ai:analysis:hash:<sha256>`，含冒号。调用方通常按 RFC 3986 把它 percent-encode 成 `ai%3Aanalysis%3A…` 再放进路径，服务端会先解码再查库（FastRoute 本身不解码路径参数），因此编码与未编码两种形态都可访问；响应与审计日志中回显的是解码后的原始形态。
 
 ### 49. 质量评分仪表盘（Scoreboard）
 

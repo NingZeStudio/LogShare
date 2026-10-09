@@ -2,7 +2,26 @@
 
 ## 1.8.3 — 未发布
 
+### 新增
+
+- **MariaDB 改为按 `created` 天级 RANGE 分区，空间可真正归还操作系统**：`logs` / `log_files` / `log_metadata` 三表均按天分区，清理过期日志由逐行 `DELETE` 改为丢弃整日分区。这是磁盘占用只增不减的根治手段——InnoDB 的 `DELETE` 只在 `.ibd` 文件内部留下空洞并等待复用，永不把空间还给操作系统（实测删除 171MB 数据后磁盘占用纹丝不动）；`DROP PARTITION` 则直接删除分区的 `.ibd` 文件，是元数据级的瞬时操作。实测 238MB 数据在分区回收后降至 6MB。
+- **日志内容去重**：上传时对「正文 + 附加文件 + source」计算 `xxh128` 指纹并落库建索引，命中既有指纹时直接返回同一 ID，不再写入新行。指纹计算在应用侧完成（10MB 正文开销在毫秒级），查重是一次与日志总量无关的 B-tree 定位，低压力；附加文件按名称排序参与计算，使同一批文件无论上传顺序如何都能命中。
+- **`GET /v1/admin/system/storage-health` 增强**：新增 `dataFreeBytes`、`fragmentationRatio` 与 `partitions`（各表日分区数、覆盖的时间边界、兜底分区占用），用于判断磁盘压力来源与分区维护是否正常运行。
+- **一次性迁移脚本 `scripts/migrate_partitioned_storage.php`**：把旧版非分区表重建为分区结构，带 `--yes` 确认保护与幂等判据。
+
+### 变更
+
+- **表结构不兼容**：主键追加分区键（`(id, created)` / `(log_id, name, created)` / `(log_id, key, created)`）；因 MariaDB 分区表不支持外键（ERROR 1506），原 `ON DELETE CASCADE` 约束全部移除，级联删除改由应用层显式完成。旧库需清空重建，见迁移脚本。
+- **`scripts/sync_mariadb_events.php` 改为生成存储过程** `logshare_cleanup_expired()`，分区名按天动态生成，无法用静态 SQL 表达；`cleanup_expired_logs` 事件名与 `ENABLED` 状态不变，健康检查与既有测试不受影响。修改 `storage.storageTime` 后需重新执行该脚本并重启 `mariadb-events` 容器。
+
 ### 修复
+
+- **过期日志的空间从未真正归还**：MariaDB 后端原先按行 `DELETE` 过期日志，InnoDB 只回收 `.ibd` 文件内部的空闲页，磁盘占用随运行时长单调递增直至爆满。现按天分区并丢弃整日分区，空间在丢弃瞬间归还操作系统，空间回收最多滞后一天（跨越过期时刻当天的分区会保留到次日，属刻意的保守设计）。
+- **`Renew()` 导致父子表分区错位**：续期会更新父表 `created`，InnoDB 随之把行移动到新分区，而子表 `created` 未同步，父子行落入不同分区，父表分区被丢弃后子表残留成为永久无法回收的孤儿数据。现同步更新子表。
+- **存储过程中有符号/无符号类型提升导致清理静默失效**：`information_schema.PARTITIONS.PARTITION_DESCRIPTION` 是无符号列，与有符号的过期时刻比较时负值被提升为巨大无符号数，使「没有任何分区可丢弃」且不报任何错误。现统一按 `SIGNED` 比较。
+- **分区维护的死循环与静默失败**：运行期补建历史分区会与幸存的较新分区重名（ERROR 1517），形成「丢弃→重建→冲突」循环；批量拼接分区列表会因 `information_schema` 陈旧视图混入已丢弃的分区名而使整条语句失败（ERROR 1064）。现改为历史分区仅在安装时铺设一次、运行期只增量补未来分区，DROP 逐个执行并设循环上限。
+- **分析记录详情与 Trace 拉不到数据**：分析键形如 `ai:analysis:<日志ID>`，控制台按 RFC 3986 将冒号编码为 `%3A` 放进路径，而 FastRoute 不解码路径参数（实测控制器拿到的仍是 `ai%3Aanalysis%3A…`），于是查库必然 404 —— 表现为列表正常、详情抽屉 / Trace 导出 / 删除全部失败。控制器统一还原后再查库，编码与未编码两种形态均可访问，并补 `AdminAiTest` 回归。
+- **后台"解封"提示与真实状态不符**：应用层封禁（Redis / 本地文件）与边缘 WAF 封禁是两件事，未配置 `OPENLITEWAF_ADMIN_TOKEN` 时前者解除成功而后者仍在 TTL 内 403，接口此前一律返回 `unbanned: true`。现回传 `waf_sync`（`ok` / `skipped` / `failed` / `invalid`），控制台按结果区分提示；`security/overview` 透传 `ban_reasons`（按「类目#规则序号」归因生效中的封禁），后台新增封禁归因展示，旧版 WAF 无该字段时整块不渲染。WAF 自动封禁条目的理由也不再是笼统文案，而是快照里的真实命中规则。
 
 - **边缘防护误封治理（子模块更新）**：
   - `OpenLiteWaf` v1.3.0：攻击特征规则新增「匹配对象作用域」，路径形态的探测规则（含敏感文件扩展名）不再作用于请求体与 User-Agent——前端遥测上报的 `endpoint` 字段里出现 `main.log`、`config.yml` 曾让整个客户端 IP 被封 600 秒，期间上传与查看日志一律 403；敏感文件扩展名规则同时收窄到请求路径本身（`?file=latest.log` 一类正常业务参数不再判探测），并从通用扩展名中剔除 `json` / `xml`（本站无静态 JSON/XML 敏感资产，误伤方为 `/sitemap.xml` 与前端附件名），改由具名敏感文件规则精确覆盖；新增只作用于请求体的 multipart 上传文件名规则补齐收窄后的检测缺口；请求体豁免清单补入遥测与管理端前缀（`/v1|/1/telemetry`、`/v1|/1/admin`），管理员保存含反引号与 `curl` 的知识库正文不再被拦。
