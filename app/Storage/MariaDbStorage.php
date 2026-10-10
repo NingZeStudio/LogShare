@@ -340,11 +340,11 @@ public static function Renew(\App\Id $id): bool
  * 操作系统层面的空间在同一时刻被真正归还，且该操作是元数据级的瞬时动作，
  * 不产生逐行扫描与 purge 压力。
  *
- * 三张表的分区边界一致，可一次性丢弃。若某张表的分区因历史原因缺失，
- * 分区回收失败，此时回退到按行 DELETE，保证「过期日志一定会被删掉」这一
- * 语义在所有情况下都成立。
+ * 三张表各自治地丢弃自己确实拥有的过期分区，互不依赖；即使边界错位也不会
+ * 整轮作废。最后再按行回收滞留在兜底分区里的过期数据，保证「过期日志一定
+ * 会被删掉」这一语义在所有情况下都成立。
  *
- * @return int 本次丢弃的分区数（按表计）
+ * @return int 本次丢弃的分区数（按表计）与兜底行数之和
  */
 public static function CleanupExpired(): int
     {
@@ -352,10 +352,9 @@ public static function CleanupExpired(): int
         $storageTime = (int) ($config['storageTime'] ?? (7 * 24 * 60 * 60));
         $expireBefore = time() - $storageTime;
 
-        // 先补齐分区：向前补齐让兜底分区中的过期数据被切进具名分区（随后才可被
-// DROP 回收），向后补齐避免清理间隔内新写入的行无处安放
+        // 分区布局由安装期一次铺满，运行期只做丢弃、不做 REORGANIZE。
+        // 这里仅确保兜底分区存在（幂等、无副作用），避免极端情况下写入失败。
         \App\System\LogPartitionManager::ensureFallbackPartition();
-        \App\System\LogPartitionManager::ensurePartitions();
 
         $dropped = \App\System\LogPartitionManager::dropExpiredPartitions($expireBefore);
 

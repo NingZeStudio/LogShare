@@ -12,8 +12,8 @@
 --   3. 分区键必须包含在所有唯一键中，因此主键都追加了 created。
 -- 4. 保留 p_future 兜底分区（VALUES LESS THAN MAXVALUE）：它承接所有尚未被
 --      日期分区覆盖的行，保证写入永不因「Table has no partition for value」
---      失败；日期分区由此兜底分区 REORGANIZE 而来（见 App\System\LogPartitionManager）。
---      预先创建的实际日期分区由应用在启动与清理时补齐。
+--      失败；日期分区由事件安装过程铺设（见 scripts/sync_mariadb_events.php），
+--      运行期不补齐，只做丢弃。
 -- 5. 迁移提示：本结构与旧结构不兼容（主键变更 + 移除外键）。旧库需清空重建，
 --      新表结构以本文件为准。
 --

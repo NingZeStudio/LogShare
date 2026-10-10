@@ -181,7 +181,23 @@ private function ensureSchema(): void
     {
         $this->requireDb();
 
-        \App\System\LogPartitionManager::ensurePartitions();
+        // 安装期才铺具名分区，单元测试里按同样手法（REORGANIZE 兜底分区）
+        // 自建一个，避免依赖已删除的运行时补齐方法。
+        foreach (\App\System\LogPartitionManager::TABLES as $table) {
+            $exists = Db::selectOne(
+                'SELECT COUNT(*) AS c FROM information_schema.PARTITIONS
+                 WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND PARTITION_NAME = ?',
+                [$table, 'p_test']
+            );
+            if ((int) ($exists->c ?? 0) === 0) {
+                $boundary = (int) (floor((time() + 86400) / 86400) * 86400);
+                Db::statement(
+                    "ALTER TABLE `{$table}` REORGANIZE PARTITION `p_future` INTO ("
+                    . "PARTITION `p_test` VALUES LESS THAN ({$boundary}), "
+                    . 'PARTITION `p_future` VALUES LESS THAN (MAXVALUE))'
+                );
+            }
+        }
 
         // DDL 之后 information_schema 在同一连接内可能返回陈旧视图，
         // 用独立 PDO 连接读取可拿到最新分区布局。

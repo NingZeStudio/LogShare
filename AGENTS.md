@@ -131,11 +131,11 @@ php bin/hyperf.php start
 - **结构**：`logs` / `log_files` / `log_metadata` 三表均按 `created` 做**天级 RANGE 分区**（`docker/mariadb-init.sql`），另保留 `p_future`（`VALUES LESS THAN MAXVALUE`）兜底分区承接未覆盖的行——**缺少兜底分区会让新写入直接以 `Table has no partition for value` 失败**。
 - **分区表硬性约束**（MariaDB，违反即 ERROR 1506）：分区表不支持外键，原 `ON DELETE CASCADE` 已全部移除，**级联删除必须由 `MariaDbStorage` 显式完成**（先子表后父表），漏删任一张表都会留下孤儿行；所有唯一键（含主键）必须包含分区键，故主键为 `(id, created)` / `(log_id, name, created)` / `(log_id, key, created)`。
 - **子表 created 必须与父表一致**：分区回收按同一 `created` 边界进行。`Renew()` 已同步更新子表 `created`，否则父子行落入不同分区，父表分区被丢弃后子表残留成为永久无法回收的孤儿数据（`MariaDbStorageTest::testRenewKeepsChildTablesInSync` 守门）。
-- **历史分区只在安装时铺一次**：DDL 的分区边界必须是编译期常量，`scripts/sync_mariadb_events.php` 在**生成 SQL 时**把 `[今天-TTL, 今天]` 的边界固化成字面量并写入 `docker/mariadb-events.sql`。**运行期严禁重建历史窗口**——过期分区会被正常丢弃，此时补建会与幸存的较新分区重名（ERROR 1517），形成「丢弃→重建→冲突」死循环。运行期只增量补「今天起往后」的日期分区。
+- **历史分区只在安装时铺一次**：DDL 的分区边界必须是编译期常量，`scripts/sync_mariadb_events.php` 在**生成 SQL 时**把 `[今天-TTL, 今天]` 的边界固化成字面量并写入 `docker/mariadb-events.sql`。**运行期严禁重建历史窗口**——过期分区会被正常丢弃，此时补建会与幸存的较新分区重名（ERROR 1517），形成「丢弃→重建→冲突」死循环。运行期不再做任何 REORGANIZE，只做 DROP；跨天延伸靠重跑生成脚本并重装事件（mariadb-events 容器重建即重装）。
 - **分区名哨兵判据**：判断历史区间是否已建过时，用「最靠近今天的那个历史分区」是否存在，**不要用分区计数**——过期分区被丢弃后计数必然少于期望值，会被误判为「未建过」而触发重名冲突。
 - **有符号比较陷阱**：`information_schema.PARTITIONS.PARTITION_DESCRIPTION` 是无符号列，与有符号 `cutoff` 比较会发生类型提升，负 cutoff 被提升为巨大无符号数，导致「没有任何分区可丢弃」且**不报任何错误**，清理静默失效。存储过程与 SQL 侧一律写 `CAST(PARTITION_DESCRIPTION AS SIGNED) <= v_cutoff`；`v_cutoff` 也必须声明为 `BIGINT SIGNED`。
 - **DROP 必须逐个执行**：同一会话内 `information_schema.PARTITIONS` 在 DDL 之后可能返回陈旧视图，批量拼接的分区列表会混入已被丢弃的分区名，使整条 `ALTER` 语法失败（ERROR 1064）并作废该表本次清理。存储过程因此逐个分区「查一个丢一个」，并设 400 次上限防止陈旧视图导致的无界循环卡死 Event Scheduler。
-- **两层清理路径**：`MariaDbStorage::CleanupExpired()`（Admin 手动触发）与存储过程 `logshare_cleanup_expired()`（`cleanup_expired_logs` 事件，每小时）共用同一套逻辑——先补分区、再 `DROP PARTITION`、最后 `cleanupStrays()` 按行回收滞留在 `p_future` 的过期数据（兜底分区无法按子区间 DROP；这批数据通常极少，仅分区维护中断期间写入）。
+- **两层清理路径**：`MariaDbStorage::CleanupExpired()`（Admin 手动触发）与存储过程 `logshare_cleanup_expired()`（`cleanup_expired_logs` 事件，每小时）共用同一套逻辑——直接 `DROP PARTITION`、最后 `cleanupStrays()` 按行回收滞留在 `p_future` 的过期数据（兜底分区无法按子区间 DROP；这批数据通常极少，仅分区维护中断期间写入）。
 - **分区只按整日回收**：`DROP` 条件是分区上界 ≤ cutoff，因此跨越 cutoff 当天的分区会保留到次日。这是刻意的保守设计（分区可能仍含未过期数据），代价是空间回收有最多一天的滞后。
 - **部署迁移**：结构不兼容（主键变更 + 移除外键），旧库需清空重建：`php scripts/migrate_partitioned_storage.php --yes`，随后 `php scripts/sync_mariadb_events.php` 并重启 `mariadb-events` 容器。脚本带 `--yes` 保护与幂等判据（已是分区结构且含 `fingerprint` 列则直接退出）。
 - **改 `storage.storageTime` 后**必须重新执行 `scripts/sync_mariadb_events.php` 并重启 `mariadb-events` 容器，否则历史分区窗口与清理边界仍是旧 TTL。

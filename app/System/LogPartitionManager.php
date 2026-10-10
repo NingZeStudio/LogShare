@@ -13,16 +13,25 @@ use Hyperf\DbConnection\Db;
  * 永远不会把空间归还操作系统，磁盘占用呈单调递增，最终爆满。
  * 唯一能立即归还空间的做法是 DROP PARTITION（删除 .ibd 文件本身）。
  *
- * 本类负责三张日志表的 RANGE 分区生命周期：
- *   - ensurePartitions()  按天创建/补齐未来分区（DDL 不支持表达式，
- *                          边界必须是编译期常量，故在运行时拼接）。
- *   - dropExpiredPartitions() 丢弃已过期的整日分区。
+ * 分区布局由安装期一次铺满（scripts/sync_mariadb_events.php 生成
+ * docker/mariadb-events.sql，其中的安装过程铺好历史与未来共约 22 个日分区），
+ * 运行期只负责丢弃，不做任何 REORGANIZE。这样取舍是被线上事故逼出来的：
+ * 运行期补齐需要 REORGANIZE，而 REORGANIZE 会与并发的 DROP 相互干扰
+ * （ERROR 1517 / 1507 / 1493），且 DDL 之后同会话内的 information_schema
+ * 返回陈旧视图，使「查一次改一次」的循环无法可靠收敛。
+ *
+ * 因此本类只承担两件事：
+ *   - dropExpiredPartitions() 丢弃已过期的整日分区，真正归还磁盘空间；
+ *   - cleanupStrays() 兜底回收滞留在兜底分区里的过期行。
+ *
+ * 跨天后的分区延伸由重新生成 SQL 并重装事件完成，不在本类职责内。
  *
  * 分区表约束（MariaDB 硬性限制，违反即 ERROR 1506）：
  *   - 分区表不支持外键，级联删除必须由应用层显式完成；
  *   - 所有唯一键（含主键）都必须包含分区键，因此主键形如 (id, created)。
  *
- * 三张表使用完全一致的分区边界，保证 DROP 可以在同一时刻安全作用于全部表。
+ * 三张表使用一致的分区边界；即便因故错位，本类也是各表自治地丢弃自己确实
+ * 拥有的过期分区，不会因「某张表缺该分区」而报错作废整轮清理。
  */
 final class LogPartitionManager
 {
@@ -37,45 +46,9 @@ final class LogPartitionManager
     /** 兜底分区名：承接所有尚未被具体日期分区覆盖的行，写入永不失败 */
     private const FALLBACK = 'p_future';
 
-    /**
-     * 未来分区天数，必须与 scripts/sync_mariadb_events.php 中的 $lookaheadDays 一致。
-     *
-     * 该窗口必须显著大于 storageTime（默认 7 天），否则 TTL 内的日志会长期
-     * 滞留在兜底分区里无法按日回收。
-     */
-    private const LOOKAHEAD_DAYS = 14;
-
     /** 单次清理允许丢弃的分区数上限，防止一次 DROP 过于激进 */
     private const MAX_DROP_PER_RUN = 60;
 
-    /**
-     * 计算未来分区边界列表（[今日 00:00, 今日+LOOKAHEAD 00:00)）。
-     *
-     * 只覆盖「今天起往后」：历史分区在事件安装时一次性铺好，随 TTL 到期被丢弃，
-     * 运行期不再重建（重建会与幸存的较新分区重名，报 ERROR 1517）。
-     *
-     * 边界一律取 UTC 整日，保证三张表与存储过程使用完全一致的切分点；分区名
-     * 由边界推导，三表同名，便于逐表同步维护。
-     *
-     * @return array<int, array{index:int, name:string, lessThan:int}>
-     */
-    public static function plannedPartitions(?int $now = null): array
-    {
-        $now ??= time();
-        $dayStart = (int) (floor($now / 86400) * 86400);
-
-        $partitions = [];
-        for ($i = 0; $i < self::LOOKAHEAD_DAYS; $i++) {
-            $start = $dayStart + ($i * 86400);
-            $partitions[] = [
-                'index' => $i,
-                'name' => self::partitionName($start),
-                'lessThan' => $start + 86400,
-            ];
-        }
-
-        return $partitions;
-    }
 
     /**
      * 分区名：p + 日期（UTC），便于按名字直接定位某个整日的分区。
@@ -85,40 +58,6 @@ final class LogPartitionManager
         return 'p' . gmdate('Ymd', $boundary);
     }
 
-    /**
-     * 补齐缺失的日期分区。
-     *
-     * 已存在的分区一律跳过；缺失的分区通过 REORGANIZE 从兜底分区切分，
-     * 这样可以保留兜底分区里已存在的历史行，不会因新增分区而移动或丢失数据。
-     *
-     * 只补「今天起往后」的未来分区，绝不重建历史窗口。历史分区由事件安装时
-     * 一次性铺好（日历边界是编译期常量，运行期无法安全重建），随 TTL 到期被
-     * 正常丢弃；此处若试图重建历史窗口，会与幸存的较新分区重名，报
-     * ERROR 1517，并形成「丢弃→重建→冲突」的死循环。
-     *
-     * 滞留在 p_future 中的过期历史数据由 cleanupStrays() 按行回收：兜底分区
-     * 无法按子区间 DROP，这部分数据量通常极小（仅分区维护中断期间的写入）。
-     *
-     * @return int 新建的分区数（按表计）
-     */
-    public static function ensurePartitions(?int $now = null): int
-    {
-        $now ??= time();
-        $created = 0;
-
-        foreach (self::TABLES as $table) {
-            $existing = self::existingPartitions()[$table] ?? [];
-            foreach (self::plannedPartitions($now) as $partition) {
-                if (isset($existing[$partition['name']])) {
-                    continue;
-                }
-                self::reorganizeFallback($table, $partition['name'], $partition['lessThan']);
-                $created++;
-            }
-        }
-
-        return $created;
-    }
 
     /**
      * 按行回收滞留在兜底分区中的过期数据。
@@ -226,20 +165,6 @@ final class LogPartitionManager
         return $result;
     }
 
-    private static function reorganizeFallback(string $table, string $partitionName, int $lessThan): void
-    {
-        try {
-            // REORGANIZE 会把边界内的行从兜底分区切走，边界外的行留在兜底分区，
-            // 因此这一操作对已有数据是安全的（不会像 DROP+ADD 那样丢数据）。
-            Db::statement(
-                "ALTER TABLE `{$table}` REORGANIZE PARTITION `" . self::FALLBACK . "` INTO ("
-                . "PARTITION `{$partitionName}` VALUES LESS THAN ({$lessThan}), "
-                . 'PARTITION `' . self::FALLBACK . '` VALUES LESS THAN (MAXVALUE))'
-            );
-        } catch (\Throwable $e) {
-            \App\Syslog::error('LogPartitionManager', "failed to reorganize {$table} for {$partitionName}: " . $e->getMessage());
-        }
-    }
 
     /**
      * @param array<string, int> $partitions 表的分区名 => 上界
