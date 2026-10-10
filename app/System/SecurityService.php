@@ -252,9 +252,13 @@ final class SecurityService
      * 解封指定 IP。
      *
      * @param string $ip
-     * @return bool
+    /**
+     * 解封指定 IP（应用层 Redis / 本地文件封禁）。
+     *
+     * @param string|null $wafSync 出参：边缘封禁的同步结果，
+     *                             ok / skipped（未配置令牌）/ failed / invalid
      */
-    public static function unbanIp(string $ip): bool
+    public static function unbanIp(string $ip, ?string &$wafSync = null): bool
     {
         $ip = trim($ip);
         if ($ip === '') {
@@ -271,7 +275,7 @@ final class SecurityService
         }
 
         self::removeFileBan($ip);
-        self::syncUnbanToWaf($ip);
+        $wafSync = self::syncUnbanToWaf($ip);
 
         return true;
     }
@@ -426,6 +430,9 @@ final class SecurityService
                 'blocked_total' => $blockedTotal,
                 'banned_active' => $bannedActive,
                 'categories' => $categories,
+                // WAF v1.3.0 起按 "probe#57" / "cc" 归因当前封禁，
+                // 后台据此一眼看出是哪条规则在批量封人；旧版 WAF 无此字段时为空表
+                'ban_reasons' => (array) ($data['ban_reasons'] ?? []),
                 'top_ips' => $topIps,
                 'trend' => is_array($trends) ? $trends : [],
             ];
@@ -809,9 +816,14 @@ final class SecurityService
             }
 
             if ($ip !== '' && $exp > $now) {
+                // WAF v1.3.0 起快照里每条封禁带 why（形如 probe#57 / cc），
+                // 旧快照没有该字段时退回笼统描述，不伪造 bannedAt 之外的信息
+                $why = is_array($b) ? trim((string) ($b['why'] ?? '')) : '';
                 $items[] = [
                     'ip' => $ip,
-                    'reason' => 'OpenLiteWaf 自动封禁 (CC 或特征触发)',
+                    'reason' => $why === ''
+                        ? 'OpenLiteWaf 自动封禁 (CC 或特征触发)'
+                        : 'OpenLiteWaf 自动封禁（命中规则 ' . $why . '）',
                     'bannedAt' => $now - 60,
                     'expiresAt' => $exp,
                     'operator' => 'OpenLiteWaf',
@@ -928,14 +940,19 @@ final class SecurityService
      * 回写冲掉；而 WAF 侧还需连同封禁槽位一起清理，否则重启时 init 会据快照复活封禁。
      * 走 HTTP 由 Lua 自己清键并立即落盘，一次调用即最终一致。
      *
-     * 未配置 OPENLITEWAF_ADMIN_TOKEN 时静默跳过：应用层封禁（Redis / 文件）已解除，
+     * 未配置 OPENLITEWAF_ADMIN_TOKEN 时返回 skipped：应用层封禁（Redis / 文件）已解除，
      * 边缘封禁等 TTL 自然到期（WAF 端点未配置令牌时一律 404，fail-closed）。
+     *
+     * @return string ok | skipped | failed | invalid
      */
-    private static function syncUnbanToWaf(string $ip): void
+    private static function syncUnbanToWaf(string $ip): string
     {
+        if (filter_var($ip, FILTER_VALIDATE_IP) === false) {
+            return 'invalid';
+        }
         $token = trim((string) (getenv('OPENLITEWAF_ADMIN_TOKEN') ?: ''));
-        if ($token === '' || filter_var($ip, FILTER_VALIDATE_IP) === false) {
-            return;
+        if ($token === '') {
+            return 'skipped';
         }
 
         $ch = null;
@@ -943,25 +960,29 @@ final class SecurityService
             // 与 loadWafData() 同一形态：容器网内直连 nginx，证书是为公网域名签发的，
             // 故关闭校验；令牌走请求头，不进 query，避免落入 access_log
             $ch = curl_init('https://nginx/security/unban?ip=' . rawurlencode($ip));
-            if ($ch !== false) {
-                curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-                curl_setopt($ch, CURLOPT_CUSTOMREQUEST, 'POST');
-                curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, 1);
-                curl_setopt($ch, CURLOPT_TIMEOUT, 3);
-                curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
-                curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, 0);
-                curl_setopt($ch, CURLOPT_HTTPHEADER, [
-                    'Host: api.logshare.cn',
-                    'X-OpenLiteWaf-Token: ' . $token,
-                ]);
-                curl_setopt($ch, CURLOPT_FORBID_REUSE, true);
-                $res = curl_exec($ch);
-                if (!is_string($res) || !str_contains($res, '"ok":true')) {
-                    \App\Syslog::error('SecurityService', 'OpenLiteWaf unban sync failed for ' . $ip);
-                }
+            if ($ch === false) {
+                return 'failed';
             }
+            curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+            curl_setopt($ch, CURLOPT_CUSTOMREQUEST, 'POST');
+            curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, 1);
+            curl_setopt($ch, CURLOPT_TIMEOUT, 3);
+            curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
+            curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, 0);
+            curl_setopt($ch, CURLOPT_HTTPHEADER, [
+                'Host: api.logshare.cn',
+                'X-OpenLiteWaf-Token: ' . $token,
+            ]);
+            curl_setopt($ch, CURLOPT_FORBID_REUSE, true);
+            $res = curl_exec($ch);
+            if (is_string($res) && str_contains($res, '"ok":true')) {
+                return 'ok';
+            }
+            \App\Syslog::error('SecurityService', 'OpenLiteWaf unban sync failed for ' . $ip . ': ' . var_export($res, true));
+            return 'failed';
         } catch (\Throwable $e) {
             \App\Syslog::error('SecurityService', 'OpenLiteWaf unban sync error for ' . $ip . ': ' . $e->getMessage());
+            return 'failed';
         } finally {
             // 常驻协程进程：显式释放句柄，避免 FD 累积（EMFILE）
             $ch = null;

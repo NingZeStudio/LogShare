@@ -388,6 +388,7 @@ class AdminController extends AbstractController
     #[GetMapping(path: 'ai/analyses/{cacheKey}')]
     public function getAnalysis(string $cacheKey): ResponseInterface
     {
+        $cacheKey = $this->decodePathKey($cacheKey);
         $record = AnalysisRecordManager::get($cacheKey);
         if ($record === null) {
             throw new ApiError(404, "Analysis record not found for key: {$cacheKey}");
@@ -399,6 +400,7 @@ class AdminController extends AbstractController
     #[GetMapping(path: 'ai/analyses/{cacheKey}/trace')]
     public function getAnalysisTrace(string $cacheKey): ResponseInterface
     {
+        $cacheKey = $this->decodePathKey($cacheKey);
         $trace = AnalysisRecordManager::getTrace($cacheKey);
         if ($trace === null) {
             throw new ApiError(404, "Analysis trace not found for key: {$cacheKey}");
@@ -410,9 +412,24 @@ class AdminController extends AbstractController
     #[DeleteMapping(path: 'ai/analyses/{cacheKey}')]
     public function deleteAnalysis(string $cacheKey): ResponseInterface
     {
+        $cacheKey = $this->decodePathKey($cacheKey);
         $deleted = AnalysisRecordManager::delete($cacheKey);
         AuditLogManager::record('ai.analyses.delete', $cacheKey, [], $deleted, 'admin', $this->getClientIp());
         return $this->respondSuccess(['deleted' => $deleted, 'cacheKey' => $cacheKey], 'Analysis record deleted successfully');
+    }
+
+    /**
+     * 还原路径参数里的分析键。
+     *
+     * 真实 cacheKey 形如 `ai:analysis:<logId>` / `ai:analysis:hash:<sha256>`（见
+     * AbstractController::runAiAnalysis 调用点），控制台 encodeURIComponent 后冒号变成
+     * %3A，而 FastRoute 的 dispatch 不对路径参数做任何解码（实测拿到的仍是
+     * `ai%3Aanalysis%3A…`），直接查库必然 404 —— 列表正常而详情/Trace/删除全挂即源于此。
+     * 分析键本身不含 %，故重复解码无副作用。
+     */
+    private function decodePathKey(string $key): string
+    {
+        return str_contains($key, '%') ? rawurldecode($key) : $key;
     }
 
     // ── LogAgent 质量评分看板（Scoreboard） ──
@@ -1615,14 +1632,19 @@ class AdminController extends AbstractController
         }
 
         $ip = trim((string) $body['ip']);
-        $success = SecurityService::unbanIp($ip);
+        $wafSync = null;
+        $success = SecurityService::unbanIp($ip, $wafSync);
         AuditLogManager::record('security.unban', $ip, [
             'unbanned' => $success,
+            'waf_sync' => $wafSync,
         ], true, 'admin', $this->getClientIp());
 
+        // waf_sync 必须回传：未配置 OPENLITEWAF_ADMIN_TOKEN 时边缘封禁解不掉，
+        // 客户端仍会 403，控制台不能一律提示"已解封"
         return $this->respondSuccess([
             'ip' => $ip,
             'unbanned' => $success,
+            'waf_sync' => $wafSync,
         ], "IP [{$ip}] unbanned successfully");
     }
 

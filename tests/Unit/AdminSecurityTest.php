@@ -153,10 +153,15 @@ test('AdminController security endpoints respond properly', function () {
     expect($listBody['total'])->toBeGreaterThanOrEqual(1);
 
     // 解封
+    putenv('OPENLITEWAF_ADMIN_TOKEN');
     $unbanReq = (new Request('POST', '/v1/admin/security/unban'))->withParsedBody(['ip' => '203.0.113.88']);
     \Hyperf\Context\Context::set(\Psr\Http\Message\ServerRequestInterface::class, $unbanReq);
     $unbanResp = $controller->unbanIp();
     expect($unbanResp->getStatusCode())->toBe(200);
+    // 边缘同步结果必须回传：未配置令牌时是 skipped（应用层已解封，WAF 仍会在 TTL 内 403），
+    // 控制台据此区分提示，不能一律显示"已成功解封"
+    $unbanBody = json_decode((string) $unbanResp->getBody(), true);
+    expect($unbanBody['waf_sync'] ?? null)->toBe('skipped');
 });
 
 test('SecurityService resolveClientIp handles trusted reverse proxies and prevents spoofing', function () {

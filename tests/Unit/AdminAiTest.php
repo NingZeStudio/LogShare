@@ -17,6 +17,22 @@ beforeEach(function () {
     if (file_exists($logFile)) {
         @unlink($logFile);
     }
+
+    // 控制器级用例需要容器（respondSuccess 经由 Hyperf Response 取用）
+    if (!\Hyperf\Context\ApplicationContext::hasContainer()) {
+        $container = \Mockery::mock(\Psr\Container\ContainerInterface::class);
+        $container->shouldReceive('has')->andReturn(true);
+        $container->shouldReceive('get')->andReturnUsing(function ($class) {
+            if ($class === \Hyperf\HttpServer\Contract\RequestInterface::class) {
+                return new \Hyperf\HttpServer\Request();
+            }
+            if ($class === \Hyperf\HttpServer\Response::class) {
+                return new \Hyperf\HttpServer\Response();
+            }
+            return null;
+        });
+        \Hyperf\Context\ApplicationContext::setContainer($container);
+    }
 });
 
 afterEach(function () {
@@ -77,6 +93,53 @@ test('AnalysisRecordManager records and lists analyses with filtering', function
 
     $deleted = AnalysisRecordManager::delete('sample_cache_key_1');
     expect($deleted)->toBeTrue();
+});
+
+test('analysis detail, trace and delete accept the percent-encoded cacheKey the console sends', function () {
+    // 线上真实 cacheKey 形如 ai:analysis:<logId>（见 AbstractController::runAiAnalysis），
+    // 控制台 encodeURIComponent 后冒号变成 %3A，而 FastRoute 的 dispatch 不解码路径参数
+    // （实测返回的仍是 ai%3Aanalysis%3A…）。控制器不还原就会 404：列表正常、
+    // 详情与 Trace 全挂，正是这次修掉的缺陷。
+    $key = 'ai:analysis:s1a2b3c';
+    $emitter = new class implements \App\Sse\AnalysisEmitter {
+        public function begin(): void {}
+        public function emit(string $event, string $data): void {}
+        public function finish(string $event, string $data): void {}
+    };
+    $ctx = new AgentContext('log content', $key, 's1a2b3c', $emitter, AnalysisMode::DEEP, 'v1');
+    $result = new AnalysisResult(
+        cacheKey: $key,
+        success: true,
+        rounds: 1,
+        toolCallChain: [],
+        metrics: ['durationMs' => 120],
+        validation: [],
+        score: ['overall' => 70.0, 'toolEfficiency' => 70.0, 'evidenceSufficiency' => 70.0, 'conclusionClarity' => 70.0],
+        fullAnswer: 'ok',
+        trace: ['model' => 'test-model', 'startedAt' => '2026-09-24T00:00:00Z']
+    );
+    AnalysisRecordManager::record($result, $ctx);
+
+    expect(AnalysisRecordManager::get(rawurlencode($key)))->toBeNull();
+
+    $controller = new \App\Controller\AdminController();
+    \Hyperf\Context\Context::set(
+        \Psr\Http\Message\ServerRequestInterface::class,
+        new \Hyperf\HttpMessage\Server\Request('GET', '/v1/admin/ai/analyses')
+    );
+    (new \ReflectionProperty($controller, 'request'))->setValue($controller, new \Hyperf\HttpServer\Request());
+
+    $detail = $controller->getAnalysis(rawurlencode($key));
+    expect($detail->getStatusCode())->toBe(200);
+    $body = json_decode((string) $detail->getBody(), true);
+    expect($body['data']['id'] ?? $body['id'] ?? null)->toBe($key);
+
+    expect($controller->getAnalysisTrace(rawurlencode($key))->getStatusCode())->toBe(200);
+    $del = $controller->deleteAnalysis(rawurlencode($key));
+    expect($del->getStatusCode())->toBe(200);
+    // 删除按解码后的键执行，响应回显的也必须是解码形态（否则审计日志里是不成对的键）
+    $delBody = json_decode((string) $del->getBody(), true);
+    expect($delBody['data']['cacheKey'] ?? $delBody['cacheKey'] ?? null)->toBe($key);
 });
 
 test('scoreboard aggregates every record in the window, not just the first page', function () {
