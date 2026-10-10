@@ -140,7 +140,7 @@ php bin/hyperf.php start
 - **部署迁移**：结构不兼容（主键变更 + 移除外键），旧库需清空重建：`php scripts/migrate_partitioned_storage.php --yes`，随后 `php scripts/sync_mariadb_events.php` 并重启 `mariadb-events` 容器。脚本带 `--yes` 保护与幂等判据（已是分区结构且含 `fingerprint` 列则直接退出）。
 - **改 `storage.storageTime` 后**必须重新执行 `scripts/sync_mariadb_events.php` 并重启 `mariadb-events` 容器，否则历史分区窗口与清理边界仍是旧 TTL。
 - **去重指纹**：`MariaDbStorage::fingerprint()` 用 `xxh128`（非加密哈希，速度约为 SHA-256 的十倍量级，10MB 正文开销在毫秒级）计算「正文 + 附加文件（按名称排序，顺序无关）+ source」。`Put()` 先按 `idx_fingerprint` 等值匹配（一次 B-tree 定位，与日志总量无关，故可安全放在上传关键路径），命中则直接返回既有 ID，不再写入新行。旧库缺列时静默降级为不去重，绝不阻断上传。
-- **观测**：`GET /v1/admin/system/storage-health` 现返回 `dataFreeBytes` / `fragmentationRatio` / `partitions`（各表日分区数、覆盖边界、`p_future` 占用）。分区化后 `dataFree` 应接近 0；持续偏高说明有写入绕过了分区维护。
+- **观测**：`GET /v1/admin/system/storage-health` 现返回 `dataFreeBytes` / `fragmentationRatio` / `partitions`（各表日分区数、覆盖边界、`p_future` 占用、`largestFreePartition` 空闲指向）。注意 `fragmentationRatio` 在小数据量下天然偏高（InnoDB extent 预分配，实测 86 行零删除即 0.39），以 `dataFreeBytes` 绝对值与趋势为准；空闲集中在活跃分区属健康，散落旧分区才是真空洞。
 
 ## Implementation rules that are easy to miss
 

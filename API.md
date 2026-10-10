@@ -936,9 +936,9 @@ MariaDB 部分额外返回分区状态，用于判断磁盘压力来源：
 
 | 字段 | 说明 |
 | --- | --- |
-| `dataFreeBytes` | 三张表 `DATA_FREE` 之和。InnoDB 空洞总量，磁盘未归还的空间 |
-| `fragmentationRatio` | `dataFreeBytes / (数据 + 索引)`。分区化之后应接近 0；持续偏高说明有写入绕过了分区维护 |
-| `partitions[]` | 各表分区概览：`dayPartitions`（日分区数量）、`oldestBoundary` / `newestBoundary`（覆盖的时间边界，UTC 秒级）、`totalBytes`、`fallbackPartition`（兜底分区 `p_future` 的行数与占用） |
+| `dataFreeBytes` | 三张表 `DATA_FREE` 之和。未归还空间的绝对值（首要信号）；GB 级且持续增长才需处理 |
+| `fragmentationRatio` | `dataFreeBytes / (数据 + 索引)`，仅作同量级下的横向参考。新库数据量小（MB 级）时该比值天然偏高——InnoDB 按 1MB extent 批量预分配，半满 extent 即计入 `DATA_FREE`（实测 86 行零删除即达 0.39），那是预分配不是空洞；数据量上来后自然收敛 |
+| `partitions[]` | 各表分区概览：`dayPartitions`（日分区数量）、`oldestBoundary` / `newestBoundary`（覆盖的时间边界，UTC 秒级）、`totalBytes`、`fallbackPartition`（兜底分区 `p_future` 的行数、占用与空闲）、`largestFreePartition`（空闲最多的分区名、行数与空闲字节——空闲集中在活跃写入分区属健康预分配，散落在多个旧分区则是 DELETE 空洞） |
 
 ### 25. 手动触发过期日志清理
 

@@ -178,9 +178,12 @@ final class StorageHealthService
                 'totalIndexBytes' => $totalIndexBytes,
                 'totalBytes' => $totalDataBytes + $totalIndexBytes,
                 'tables' => $tableDetails,
-                // 分区表特有指标：碎片率反映「DELETE 未归还空间」的占比，
-                // 分区列表反映当前可回收空间的时间跨度。分区化之后，正常情况下
-                // dataFree 应接近 0；持续偏高说明有写入绕过了分区维护。
+                // 分区表特有指标：dataFreeBytes 是未归还空间的绝对值（首要信号），
+                // fragmentationRatio 仅作同量级下的横向参考——新库数据量小（MB 级）
+                // 时该比值天然偏高：InnoDB 按 1MB extent 批量预分配，半满 extent
+                // 即计入 DATA_FREE（实测 86 行零删除即达 0.39），那是预分配不是
+                // 空洞。判断依据是绝对值与趋势，而非单次比值；空闲集中在哪个分区
+                // 见 partitions[].largestFreePartition。
                 'dataFreeBytes' => $totalDataFree,
                 'fragmentationRatio' => ($totalDataBytes + $totalIndexBytes) > 0
                     ? round($totalDataFree / ($totalDataBytes + $totalIndexBytes), 4)
@@ -208,7 +211,8 @@ final class StorageHealthService
             $rows = Db::select(
                 "SELECT TABLE_NAME as t, PARTITION_NAME as p, PARTITION_DESCRIPTION as d,
                         TABLE_ROWS as r,
-                        (DATA_LENGTH + INDEX_LENGTH) as bytes
+                        (DATA_LENGTH + INDEX_LENGTH) as bytes,
+                        DATA_FREE as free_bytes
                  FROM information_schema.PARTITIONS
                  WHERE TABLE_SCHEMA = DATABASE()
                    AND TABLE_NAME IN ('logs','log_files','log_metadata')
@@ -230,11 +234,23 @@ final class StorageHealthService
                         'dayPartitions' => 0,
                         'oldestBoundary' => null,
                         'newestBoundary' => null,
+                        // 空闲最多的分区：空闲集中在活跃写入分区属 extent 预分配
+                        // （健康），散落在多个旧分区则是 DELETE 空洞（需关注）。
+                        'largestFreePartition' => null,
                     ];
                 }
 
                 $bytes = (int) $row->bytes;
                 $summary[$table]['totalBytes'] += $bytes;
+                $free = (int) $row->free_bytes;
+                $largest = $summary[$table]['largestFreePartition'];
+                if ($free > 0 && ($largest === null || $free > $largest['freeBytes'])) {
+                    $summary[$table]['largestFreePartition'] = [
+                        'name' => $name,
+                        'rows' => (int) $row->r,
+                        'freeBytes' => $free,
+                    ];
+                }
 
                 if ($isFallback) {
                     // 兜底分区承载所有未被日期分区覆盖的行，任何情况下都不能丢弃
@@ -242,6 +258,7 @@ final class StorageHealthService
                         'name' => $name,
                         'rows' => (int) $row->r,
                         'bytes' => $bytes,
+                        'freeBytes' => $free,
                     ];
                     continue;
                 }
