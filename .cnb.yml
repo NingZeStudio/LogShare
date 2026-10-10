@@ -1,9 +1,19 @@
 # .cnb.yml
+# 主仓库 push 时同步代码回 GitHub（NingZeStudio/LogShare）。
+#
+# 2026-10-11 修复（连续 3 次 `sync to github` 失败）：
+#   1) `imports` 与 `- stages:` 同为列表项，被解析成两个独立 pipeline，
+#      密钥那条只有 imports 没有 stages，流水线配置非法，imports 从未生效；
+#      imports 必须与 stages 处于同一个 pipeline 对象内。
+#   2) `imports` 的取值需为列表，指向密钥仓库中的 github.yml。
+#   3) 目标仓库由 git-sync 直接 push，默认非强制推送；GitHub 目标仓库不在
+#      CNB 镜像链条上，提交链长期分叉，推送时会因 non-fast-forward 失败，
+#      因此显式开启 force。
 main:
   push:
     - imports:
-      - https://cnb.cool/MornZe-Dev/secrets/-/blob/main/github.yml
-    - stages:
+        - https://cnb.cool/MornZe-Dev/secrets/-/blob/main/github.yml
+      stages:
         - name: sync to github
           image: tencentcom/git-sync
           settings:
@@ -11,3 +21,4 @@ main:
             auth_type: https
             username: qitry
             password: ${GITHUB_TOKEN}
+            force: true
