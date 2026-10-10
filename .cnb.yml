@@ -1,0 +1,11 @@
+# .cnb.yml
+main:
+  push:
+    - stages:
+        - name: sync to github
+          image: tencentcom/git-sync
+          settings:
+            target_url: https://github.com/NingZeStudio/LogShare.git
+            auth_type: https
+            username: qitry
+            password: ${GITHUB_TOKEN}
