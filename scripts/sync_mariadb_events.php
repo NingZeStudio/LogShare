@@ -212,11 +212,19 @@ BEGIN
     -- 2) 丢弃完全早于过期时刻的分区。只处理具名的日分区，
     --    p_future 兜底分区承载所有未覆盖的行，任何情况下都不能丢弃。
     --
-    --    逐个分区独立 DROP，不做批量拼接。原因：information_schema.PARTITIONS
-    --    在一次会话内可能返回陈旧视图（DDL 之后尤其明显），批量列表里会混入
-    --    已被丢弃的分区名，使整条 ALTER 直接语法失败（ERROR 1064），
-    --    且失败的 DROP 会连带导致该表本次清理全部作废。这里每次只丢弃一个
-    --    分区，且丢弃前重新确认其仍存在，把陈旧视图的影响限制在单次尝试内。
+    --    ⚠ 判定必须以「分区名」而非「各表自己的边界」为准：
+    --    三张表的分区边界在运行期可能已经错位（某次清理只删掉了其中一张表
+    --    的某个分区，随后又因陈旧视图中断）。此时若让每张表各自按
+    --    PARTITION_DESCRIPTION <= cutoff 判定，同一个分区名会在 A 表被判为
+    --    可丢、在 B 表被判为不可丢，分区集合从此永久错位。
+    --
+    --    因此这里取「三表中该分区名的最小上界」作为统一判据：只要任一表
+    --    认为它已完全过期，三张表就一起丢，从而自愈既有的边界错位；
+    --    反之若某表上界更大，则该分区在三表中都判为保留，不会丢半张表。
+    --
+    --    DROP 逐个执行：information_schema.PARTITIONS 在一次会话内可能返回
+    --    陈旧视图（DDL 之后尤其明显），批量拼接会让整条 ALTER 语法失败
+    --    （ERROR 1064）并作废该表本次清理。
     SET v_table = 'logs';
     WHILE v_table IS NOT NULL DO
         SET v_done = 0;
@@ -227,16 +235,22 @@ BEGIN
             IF v_done > 400 THEN
                 LEAVE DECLARE_PART;
             END IF;
-            SELECT PARTITION_NAME INTO v_name
-            FROM information_schema.PARTITIONS
-            WHERE TABLE_SCHEMA = DATABASE()
-              AND TABLE_NAME = v_table
-              AND PARTITION_NAME <> 'p_future'
-              AND PARTITION_DESCRIPTION REGEXP '^[0-9]+\$'
-              -- 必须转 SIGNED：无符号列与有符号 cutoff 比较会发生类型提升，
-              -- 使负 cutoff 变成极大值而导致清理静默失效
-              AND CAST(PARTITION_DESCRIPTION AS SIGNED) <= v_cutoff
-            ORDER BY PARTITION_ORDINAL_POSITION
+
+            SELECT p.PARTITION_NAME INTO v_name
+            FROM information_schema.PARTITIONS p
+            WHERE p.TABLE_SCHEMA = DATABASE()
+              AND p.TABLE_NAME = v_table
+              AND p.PARTITION_NAME <> 'p_future'
+              AND p.PARTITION_DESCRIPTION REGEXP '^[0-9]+\$'
+              AND (
+                    SELECT MAX(CAST(q.PARTITION_DESCRIPTION AS SIGNED))
+                    FROM information_schema.PARTITIONS q
+                    WHERE q.TABLE_SCHEMA = DATABASE()
+                      AND q.TABLE_NAME IN ('logs','log_files','log_metadata')
+                      AND q.PARTITION_NAME = p.PARTITION_NAME
+                      AND q.PARTITION_DESCRIPTION REGEXP '^[0-9]+\$'
+                  ) <= v_cutoff
+            ORDER BY p.PARTITION_ORDINAL_POSITION
             LIMIT 1;
 
             IF v_name IS NULL THEN
