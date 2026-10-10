@@ -7,7 +7,7 @@ main:
         - name: sync to github
           image: tencentcom/git-sync
           settings:
-            target_url: https://github.com/NingZeStudio/LogShare.git
+            target_url: https://github.com/NingZeStudio/LogShare
             auth_type: https
             username: qitry
             password: ${GITHUB_TOKEN}
