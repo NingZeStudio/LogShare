@@ -1,5 +1,0 @@
-.probe-pipeline:
-  - name: probe pipeline from include
-    stages:
-      - name: 来自 include 文件的 pipeline
-        script: echo "reference 展开成功"

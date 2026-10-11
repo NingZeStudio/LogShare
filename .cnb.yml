@@ -1,5 +1,6 @@
 include:
-  - .cnb/probe-frag.yml
+  - .cnb/ci.yml
 
 probe/cnb-dind:
-  push: !reference [.probe-pipeline]
+  push:
+    - !reference [.ci-pipeline]
