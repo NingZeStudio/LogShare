@@ -1,9 +1,54 @@
+# .cnb.yml — LogShare CNB 云原生构建流水线
+#
+# 迁移自 .github/workflows/{ci,release}.yaml，职责与原 GitHub Actions 保持一致：
+#   CI      ：push(main) / pull_request 触发，单测 + 覆盖率 + 静态分析 + 架构测试
+#             + Swoole 启动冒烟，另加真实 docker compose 全栈 E2E。
+#   Release ：提交信息以 [Build] 开头时发布 Release。
+#   Sync    ：push(main) 时把代码同步回 GitHub（NingZeStudio/LogShare）。
+#
+# ── 文件拆分 ────────────────────────────────────────────────────────────────
+#   .cnb/ci.yml          CI 主流水线（单测 / 覆盖率 / 静态分析 / 架构测试 / 冒烟）
+#   .cnb/docker-e2e.yml  生产镜像构建 + 全栈真实环境 E2E
+#   .cnb/release.yml     Release 发布
+#   .cnb/Dockerfile.ci   CI 构建环境镜像（PHP 8.5 + Swoole 6.2 + 覆盖率驱动）
+#
+# 各 include 文件在自己的 `main:` / `pull_request:` 下声明流水线，
+# 靠「分支 + 事件」这一层的合并规则并入本配置；本文件只放 GitHub 同步这条。
+# 之所以不把 stage 抽出来用 `!reference` 拼装：实测 CNB runner 1.73.0 下
+# `push: !reference [.xxx]` 引用整条流水线数组会静默产出空流水线
+# （构建显示成功但零 stage），详见 .cnb/ci.yml 顶部说明。
+#
+# ── 与 GitHub Actions 版本的差异（平台机制差异，非行为变更） ──────────────────
+#   1) PHP 版本矩阵 8.4 / 8.5 收敛为 8.5 单版本。CNB 的构建环境由单个
+#      Dockerfile 决定，跑矩阵要两条流水线各维护一套 Dockerfile，代价高于收益；
+#      版本下限仍由 composer.json 的 `php: >=8.4` 约束守住。
+#   2) 覆盖率改用 CNB 内置任务 testing:coverage 上报平台洞察页，不再上传 codecov。
+#   3) Release 只发 CNB Release。代码由同一条 push 流水线的 git-sync 同步到
+#      GitHub，发布动作保留在 CNB 一侧即可，不再打 GitHub Release。
+#
+# 触发说明：某分支的流水线只由该分支自己的 .cnb.yml 决定，
+# 在 main 下配置别的分支并不会让别的分支按此配置执行。
+
 include:
   - .cnb/ci.yml
+  - .cnb/docker-e2e.yml
+  - .cnb/release.yml
 
-probe/cnb-dind:
+main:
   push:
-    - name: 主文件流水线
+    # 同步代码回 GitHub。注意 imports 必须与 stages 处于同一个 pipeline 对象内，
+    # 拆成两个列表项会被解析成两条独立流水线，密钥那条只有 imports 没有 stages，
+    # 配置非法且 imports 永远不生效（2026-10-11 连续 3 次同步失败的根因）。
+    - imports:
+        - https://cnb.cool/MornZe-Dev/secrets/-/blob/main/github.yml
       stages:
-        - name: t1
-          script: echo "主文件 stage 生效"
+        - name: sync to github
+          image: tencentcom/git-sync
+          settings:
+            target_url: https://github.com/NingZeStudio/LogShare
+            auth_type: https
+            username: qitry
+            password: ${GITHUB_TOKEN}
+            # 目标仓库不在 CNB 镜像链条上，提交链长期分叉，非强制推送必然
+            # non-fast-forward 失败，因此显式开启 force
+            force: true
