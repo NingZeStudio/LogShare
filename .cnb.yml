@@ -1,24 +1,33 @@
-# .cnb.yml
-# 主仓库 push 时同步代码回 GitHub（NingZeStudio/LogShare）。
-#
-# 2026-10-11 修复（连续 3 次 `sync to github` 失败）：
-#   1) `imports` 与 `- stages:` 同为列表项，被解析成两个独立 pipeline，
-#      密钥那条只有 imports 没有 stages，流水线配置非法，imports 从未生效；
-#      imports 必须与 stages 处于同一个 pipeline 对象内。
-#   2) `imports` 的取值需为列表，指向密钥仓库中的 github.yml。
-#   3) 目标仓库由 git-sync 直接 push，默认非强制推送；GitHub 目标仓库不在
-#      CNB 镜像链条上，提交链长期分叉，推送时会因 non-fast-forward 失败，
-#      因此显式开启 force。
-main:
+probe/cnb-dind:
   push:
-    - imports:
-        - https://cnb.cool/MornZe-Dev/secrets/-/blob/main/github.yml
+    - services:
+        - docker
+      docker:
+        image: docker:27-cli
       stages:
-        - name: sync to github
-          image: tencentcom/git-sync
-          settings:
-            target_url: https://github.com/NingZeStudio/LogShare
-            auth_type: https
-            username: qitry
-            password: ${GITHUB_TOKEN}
-            force: true
+        - name: 探测 dind 网络与容器可达性
+          script: |
+            echo "===== CNB 环境变量 ====="
+            env | grep -i "^CNB_" | sort | head -60
+            echo "===== /etc/hosts ====="
+            cat /etc/hosts
+            echo "===== 网络接口 ====="
+            (ip -4 addr show 2>/dev/null || ifconfig 2>/dev/null || true)
+            echo "===== docker network ls ====="
+            docker network ls
+            echo "===== 启动 redis 与 mariadb ====="
+            docker run -d --name probe-redis redis:7.4-alpine
+            docker run -d --name probe-mariadb \
+              -e MARIADB_DATABASE=logshare -e MARIADB_USER=logshare \
+              -e MARIADB_PASSWORD=logshare -e MARIADB_ROOT_PASSWORD=root \
+              mariadb:11.8
+            sleep 20
+            docker ps -a
+            echo "===== 默认 bridge 容器 IP ====="
+            docker inspect -f 'redis={{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' probe-redis
+            docker inspect -f 'mariadb={{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' probe-mariadb
+            echo "===== 本机 127.0.0.1 端口探测 ====="
+            (timeout 3 bash -c 'echo > /dev/tcp/127.0.0.1/6379' && echo '127.0.0.1:6379 可达') || echo '127.0.0.1:6379 不可达'
+            echo "===== host.docker.internal 解析 ====="
+            getent hosts host.docker.internal || echo 'host.docker.internal 无解析'
+            echo "===== 探测完成 ====="
