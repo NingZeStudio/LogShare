@@ -87,12 +87,20 @@
 
         $UP up -d || { echo "=== compose up 失败 ==="; $UP logs; $UP down; exit 1; }
 
-        # docker:27-cli 基于 alpine，**没有 curl**（实测 `sh: curl: not found`，
-        # 会让就绪探测永远失败、整条 E2E 误判为启动超时）。用 busybox wget 探测：
-        # --no-check-certificate 跳过自签证书校验，-q 静默，成功与否看退出码。
+        # nginx 的 server_name 是具体域名（不是 _），请求必须带上与之匹配的 Host，
+        # 否则会落到默认 vhost 而 404/421。域名与证书生成阶段一样从 default.conf 提取。
+        DOMAIN=$(sed -n 's#.*live/\([^/]*\)/fullchain.pem.*#\1#p' docker/nginx/default.conf | head -1)
+        if [ -z "$DOMAIN" ]; then
+          echo "无法从 docker/nginx/default.conf 提取证书域名"; exit 1
+        fi
+        # 就绪探测必须在 **compose 网络内的容器** 里做，不能在流水线容器里做：
+        # docker:27-cli 基于 alpine，既没有 curl，其 wget 对自签证书的
+        # --no-check-certificate 支持也不完整；流水线容器本身也不在 compose
+        # 网络里，`https://localhost` 根本不通。这里用 hyperf 容器（镜像内自带
+        # curl）请求 nginx 容器，并带上真实域名的 Host 头，与线上请求路径一致。
         ready=0
         for i in $(seq 1 40); do
-          if wget -q --no-check-certificate --spider https://localhost/v1/limits 2>/dev/null; then
+          if $UP exec -T hyperf curl -sfk -H "Host: $DOMAIN" https://nginx/v1/limits > /dev/null 2>&1; then
             ready=1; break
           fi
           sleep 3
@@ -103,11 +111,20 @@
 
         # 在 hyperf 容器内执行 E2E：镜像内自带 php 与 curl，且容器已在
         # compose 网络内，可直连 nginx / mariadb / redis。
-        # OPENLITEWAF_ADMIN_TOKEN 与写入 .env 的值保持一致，
-        # 供解封通道自检断言使用。
+        #
+        # E2E 以域名作为 base-url（nginx 的 server_name 是具体域名，Host 头必须
+        # 匹配）。把域名解析到 **nginx 容器** 的 IP，而不是 127.0.0.1——
+        # hyperf 容器的 127.0.0.1 是它自己，指过去只会连到 Hyperf 的 9501 端口。
+        NGINX_IP=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' logshare-nginx)
+        if [ -z "$NGINX_IP" ]; then
+          echo "无法获取 nginx 容器 IP"; $UP logs; $UP down; exit 1
+        fi
+        $UP exec -T hyperf sh -c "grep -q ' $DOMAIN' /etc/hosts || echo '$NGINX_IP $DOMAIN' >> /etc/hosts"
+        echo "已将 $DOMAIN 指向 nginx 容器 $NGINX_IP"
+
         $UP exec -T -e OPENLITEWAF_ADMIN_TOKEN=ci-waf-token hyperf \
           php scripts/ci_e2e_test.php \
-            --base-url=https://localhost \
+            --base-url="https://$DOMAIN" \
             --admin-token=ci-placeholder \
             --rag-token=ci-placeholder \
             --waf-test || {
