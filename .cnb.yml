@@ -38,6 +38,7 @@ include:
 
 main:
   push:
+    # 三条流水线并发执行：CI 与 E2E 互不阻塞，Release 仅在 [Build] 提交时生效
     - !reference [.ci-pipeline]
     - !reference [.docker-e2e]
     - !reference [.release]

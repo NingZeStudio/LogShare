@@ -2,108 +2,109 @@
 #
 # 与原 GitHub Actions 的 docker job 等价：构建 docker/compose.yaml 全栈
 # （Hyperf + Nginx/OpenResty + OpenLiteWaf + OpenLiteStats + MariaDB + Redis），
-# 自签证书起 HTTPS，再跑 scripts/ci_e2e_test.php --waf-test 覆盖
-# 反代、TLS、WAF 拦截与解封、统计页、完整日志生命周期与 Admin/RAG 端点。
+# 自签证书起 HTTPS，再跑 scripts/ci_e2e_test.php --waf-test 覆盖反代、TLS、
+# WAF 拦截与解封、统计页、完整日志生命周期与 Admin/RAG 端点。
 #
 # 这里刻意不使用 .cnb/Dockerfile.ci：E2E 要测的就是生产自带的 hyperf 镜像，
-# 用 CI 镜像会绕开 spin yarn / jemalloc 等真实构建产物。
+# 换成 CI 镜像会绕开 SpinYarn / jemalloc 等真实构建产物。
 
 .docker-e2e:
-  name: Docker 全栈 E2E
-  services:
-    - docker
-  docker:
-    # 只需要 docker CLI 与 compose 插件；真正跑 PHP 的是 compose 里的 hyperf 容器
-    image: docker:27-cli
-  env:
-    # compose.yaml 的必填变量（${VAR:?} 形式）在 build 插值阶段即校验，
-    # 缺任意一个 compose 会直接报错退出。CI 用占位值即可。
-    MARIADB_PASSWORD: ci-placeholder
-    MARIADB_ROOT_PASSWORD: ci-placeholder
-    REDIS_PASSWORD: ci-placeholder
-    ADMIN_TOKEN: ci-placeholder
-    AI_MCP_RAG_AUTH_TOKEN: ci-placeholder
-    OPENLITEWAF_ADMIN_TOKEN: ci-waf-token
-  stages:
-    - name: 构建生产镜像
-      script: |
-        set -euo pipefail
-        # 冒烟经 nginx 挂载 OpenLiteWaf / OpenLiteStats 的 Lua 文件，
-        # submodule 内容必须就位，否则挂载源为空目录、WAF 与统计页全失效。
-        # CNB 的代码拉取已默认递归初始化 submodule，这里断言一次以防回归。
-        test -f OpenLiteWaf/lua/openlitewaf.lua || {
-          echo "OpenLiteWaf submodule 内容缺失"; ls -la OpenLiteWaf; exit 1
-        }
-        test -f OpenLiteStats/lua/log.lua || {
-          echo "OpenLiteStats submodule 内容缺失"; ls -la OpenLiteStats; exit 1
-        }
-        docker compose -f docker/compose.yaml build
+  - name: Docker 全栈 E2E
+    services:
+      - docker
+    docker:
+      # 只需要 docker CLI 与 compose 插件；真正跑 PHP 的是 compose 里的 hyperf 容器
+      image: docker:27-cli
+    env:
+      # compose.yaml 的必填变量（${VAR:?} 形式）在 build 插值阶段即校验，
+      # 缺任意一个 compose 会直接报错退出。CI 用占位值即可。
+      MARIADB_PASSWORD: ci-placeholder
+      MARIADB_ROOT_PASSWORD: ci-placeholder
+      REDIS_PASSWORD: ci-placeholder
+      ADMIN_TOKEN: ci-placeholder
+      AI_MCP_RAG_AUTH_TOKEN: ci-placeholder
+      OPENLITEWAF_ADMIN_TOKEN: ci-waf-token
+    stages:
+      - name: 构建生产镜像
+        script: |
+          set -euo pipefail
+          # 冒烟经 nginx 挂载 OpenLiteWaf / OpenLiteStats 的 Lua 文件，
+          # submodule 内容必须就位，否则挂载源为空目录、WAF 与统计页全失效。
+          # CNB 拉取代码时默认递归初始化 submodule，这里断言一次以防回归。
+          test -f OpenLiteWaf/lua/openlitewaf.lua || {
+            echo "OpenLiteWaf submodule 内容缺失"; ls -la OpenLiteWaf; exit 1
+          }
+          test -f OpenLiteStats/lua/log.lua || {
+            echo "OpenLiteStats submodule 内容缺失"; ls -la OpenLiteStats; exit 1
+          }
+          docker compose -f docker/compose.yaml build
 
-    - name: 准备冒烟配置
-      script: |
-        set -euo pipefail
-        cp Config.inc.example.php Config.inc.php
-        cp .env.example .env
-        sed -i 's/change-me/ci-placeholder/g' .env
-        cat >> .env <<'ENVEOF'
-        ADMIN_ENABLED=true
-        ADMIN_TOKEN=ci-placeholder
-        AI_MCP_RAG_AUTH_TOKEN=ci-placeholder
-        OPENLITEWAF_ADMIN_TOKEN=ci-waf-token
-        ENVEOF
-        # compose 从 docker/ 目录读取 .env，复制一份保持一致
-        cp .env docker/.env
-        # mariadb-events.sql 的边界是编译期常量，重跑生成以覆盖当前日期窗口
-        php scripts/sync_mariadb_events.php || {
-          echo "sync_mariadb_events.php 执行失败（docker:27-cli 无 PHP，属预期）"
-        }
+      - name: 准备冒烟配置
+        script: |
+          set -euo pipefail
+          cp Config.inc.example.php Config.inc.php
+          cp .env.example .env
+          sed -i 's/change-me/ci-placeholder/g' .env
+          cat >> .env <<'ENVEOF'
+          ADMIN_ENABLED=true
+          ADMIN_TOKEN=ci-placeholder
+          AI_MCP_RAG_AUTH_TOKEN=ci-placeholder
+          OPENLITEWAF_ADMIN_TOKEN=ci-waf-token
+          ENVEOF
+          # compose 从 docker/ 目录读 .env，复制一份保持一致
+          cp .env docker/.env
+          # mariadb-events.sql 的分区边界是编译期常量，需按当天日期重新生成。
+          # docker:27-cli 里没有 PHP，生成失败不阻塞（E2E 不校验事件）
+          php scripts/sync_mariadb_events.php || echo "跳过事件 SQL 生成（镜像内无 PHP）"
 
-    - name: 生成自签证书
-      script: |
-        set -euo pipefail
-        # nginx 443 与 healthcheck 需要证书；CI 上 docker/certs/ 为空。
-        # 域名从 default.conf 的证书路径动态提取，避免仓库域名调整后
-        # CI 仍生成旧域名证书导致 nginx 起不来。
-        DOMAIN=$(sed -n 's#.*live/\([^/]*\)/fullchain.pem.*#\1#p' docker/nginx/default.conf | head -1)
-        if [ -z "$DOMAIN" ]; then
-          echo "无法从 docker/nginx/default.conf 提取证书域名"; exit 1
-        fi
-        echo "生成自签证书: $DOMAIN"
-        mkdir -p "docker/certs/live/$DOMAIN"
-        openssl req -x509 -newkey rsa:2048 -nodes \
-          -keyout "docker/certs/live/$DOMAIN/privkey.pem" \
-          -out "docker/certs/live/$DOMAIN/fullchain.pem" \
-          -days 1 -subj "/CN=$DOMAIN"
+      - name: 生成自签证书
+        script: |
+          set -euo pipefail
+          # nginx 443 与 healthcheck 需要证书文件；CI 上 docker/certs/ 为空。
+          # 域名从 default.conf 的证书路径动态提取，避免仓库域名调整后
+          # CI 仍生成旧域名证书导致 nginx 起不来。
+          DOMAIN=$(sed -n 's#.*live/\([^/]*\)/fullchain.pem.*#\1#p' docker/nginx/default.conf | head -1)
+          if [ -z "$DOMAIN" ]; then
+            echo "无法从 docker/nginx/default.conf 提取证书域名"; exit 1
+          fi
+          echo "生成自签证书: $DOMAIN"
+          mkdir -p "docker/certs/live/$DOMAIN"
+          openssl req -x509 -newkey rsa:2048 -nodes \
+            -keyout "docker/certs/live/$DOMAIN/privkey.pem" \
+            -out "docker/certs/live/$DOMAIN/fullchain.pem" \
+            -days 1 -subj "/CN=$DOMAIN"
 
-    - name: 启动全栈并执行 E2E
-      script: |
-        set -euo pipefail
-        UP="docker compose --env-file .env -f docker/compose.yaml"
+      - name: 启动全栈并执行 E2E
+        script: |
+          set -euo pipefail
+          UP="docker compose --env-file .env -f docker/compose.yaml"
 
-        $UP up -d || { echo "=== compose up 失败 ==="; $UP logs; $UP down; exit 1; }
+          $UP up -d || { echo "=== compose up 失败 ==="; $UP logs; $UP down; exit 1; }
 
-        ready=0
-        for i in $(seq 1 40); do
-          if curl -skf https://localhost/v1/limits > /dev/null; then ready=1; break; fi
-          sleep 3
-        done
-        if [ "$ready" != "1" ]; then
-          echo "=== 服务启动超时 ==="; $UP logs; $UP down; exit 1
-        fi
+          ready=0
+          for i in $(seq 1 40); do
+            if curl -skf https://localhost/v1/limits > /dev/null; then ready=1; break; fi
+            sleep 3
+          done
+          if [ "$ready" != "1" ]; then
+            echo "=== 服务启动超时 ==="; $UP logs; $UP down; exit 1
+          fi
 
-        # 在 hyperf 容器内执行 E2E：镜像内自带 php 与 curl，
-        # 且容器本身就在 compose 网络内，能直连 nginx / mariadb / redis
-        $UP exec -T -e OPENLITEWAF_ADMIN_TOKEN=ci-waf-token hyperf \
-          php scripts/ci_e2e_test.php \
-            --base-url=https://localhost \
-            --admin-token=ci-placeholder \
-            --rag-token=ci-placeholder \
-            --waf-test || {
-          echo "=== E2E 失败，输出容器日志 ==="; $UP logs; $UP down; exit 1
-        }
-        echo "Docker 真实生产环境全量 E2E 测试全部通过"
-        $UP down
-  endStages:
-    - name: 清理容器与数据卷
-      script: |
-        docker compose --env-file .env -f docker/compose.yaml down -v 2>/dev/null || true
+          # 在 hyperf 容器内执行 E2E：镜像内自带 php 与 curl，且容器已在
+          # compose 网络内，可直连 nginx / mariadb / redis。
+          # OPENLITEWAF_ADMIN_TOKEN 与写入 .env 的值保持一致，
+          # 供解封通道自检断言使用。
+          $UP exec -T -e OPENLITEWAF_ADMIN_TOKEN=ci-waf-token hyperf \
+            php scripts/ci_e2e_test.php \
+              --base-url=https://localhost \
+              --admin-token=ci-placeholder \
+              --rag-token=ci-placeholder \
+              --waf-test || {
+            echo "=== E2E 失败，输出容器日志 ==="; $UP logs; $UP down; exit 1
+          }
+          echo "Docker 真实生产环境全量 E2E 测试全部通过"
+          $UP down
+    endStages:
+      - name: 清理容器与数据卷
+        script: |
+          docker compose --env-file .env -f docker/compose.yaml down -v 2>/dev/null || true
