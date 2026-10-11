@@ -130,19 +130,25 @@
     script: |
       set -eu
       # sync_mariadb_events.php 以 Config.inc.php 为 TTL 唯一来源生成 SQL；
-      # 事件必须存在且启用，否则存储层的分区/事件断言用例会失败
+      # 事件必须存在且启用，否则存储层的分区/事件断言用例会失败。
+      #
+      # 导入必须走 mariadb 命令行客户端，不能用 PDO->exec(file_get_contents(...))：
+      # mariadb-events.sql 里含 `DELIMITER $$` 包裹的存储过程，DELIMITER 是客户端的
+      # 专有指令而非 SQL 语句，PDO 会直接报 ERROR 1064（原 GitHub Actions 用 PDO
+      # 导入是历史写法，那时该文件还没有存储过程）。
       docker run --rm --network logshare-ci \
         -v "$CNB_BUILD_WORKSPACE:/app" -w /app \
         --env-file .ci-env \
         "$(cat .ci-image)" sh -lc '
           set -e
           php scripts/sync_mariadb_events.php
-          php -r "
-            \$pdo = new PDO(\"mysql:host=\" . getenv(\"DB_HOST\") . \";dbname=logshare\", \"root\", \"root\", [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]);
-            \$pdo->exec(file_get_contents(\"docker/mariadb-init.sql\"));
-            \$pdo->exec(file_get_contents(\"docker/mariadb-events.sql\"));
-            echo \"schema and events initialized\n\";
-          "
+          # Debian 的 default-mysql-client 装的是 MariaDB 客户端，命令名可能是
+          # mariadb 或 mysql，两者都试一次；root 密码与上面起的实例一致
+          CLI=$(command -v mariadb || command -v mysql)
+          if [ -z "$CLI" ]; then echo "未找到 MySQL 客户端"; exit 1; fi
+          "$CLI" -h "$DB_HOST" -uroot -proot logshare < docker/mariadb-init.sql
+          "$CLI" -h "$DB_HOST" -uroot -proot logshare < docker/mariadb-events.sql
+          echo "schema and events initialized"
         '
 
   - name: 单元测试与覆盖率
