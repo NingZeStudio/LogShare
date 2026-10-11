@@ -69,10 +69,16 @@
         fi
         echo "生成自签证书: $DOMAIN"
         mkdir -p "docker/certs/live/$DOMAIN"
-        openssl req -x509 -newkey rsa:2048 -nodes \
-          -keyout "docker/certs/live/$DOMAIN/privkey.pem" \
-          -out "docker/certs/live/$DOMAIN/fullchain.pem" \
-          -days 1 -subj "/CN=$DOMAIN"
+        # docker:27-cli 基于 alpine，**镜像内没有 openssl 命令**，直接调用会
+        # 以退出码 127 中断流水线。改用自带 openssl 的 alpine/openssl 镜像，
+        # 把证书直接生成到宿主工作区目录。
+        docker run --rm -v "$PWD/docker/certs/live/$DOMAIN:/certs" alpine/openssl \
+          req -x509 -newkey rsa:2048 -nodes \
+            -keyout /certs/privkey.pem -out /certs/fullchain.pem \
+            -days 1 -subj "/CN=$DOMAIN"
+        test -s "docker/certs/live/$DOMAIN/fullchain.pem" || {
+          echo "证书生成失败"; exit 1
+        }
 
     - name: 启动全栈并执行 E2E
       script: |

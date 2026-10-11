@@ -4,12 +4,16 @@
 # 与原 GitHub Actions 的 release job 一致 —— tag 与 Release notes 均取自
 # CHANGELOG.md 的最新版本条目，而不是从提交信息里解析版本号。
 #
-# 门控写在 Stage 的 `if` 上而非事件层：CNB 没有 Pipeline 级条件判断，
-# 而 `git:release` 一旦执行就会真的建 Release，误触发代价高。
-#
-# Stage 级 `if` 的语义是「脚本退出码为 0 才执行该 Stage」，因此判据写成
-# if/else 形式而不是简单的短路表达式。
+# ── 门控为什么写在每个 Stage 上 ──────────────────────────────────────────────
+# CNB 没有 Pipeline 级条件判断，只有 Stage / Job 级的 `if`（脚本退出码为 0
+# 才执行该 Stage）。而前一个 Stage 被 `if` 跳过时，**后续 Stage 照常执行**，
+# 并不会连带跳过——实测在第一个 Stage 上加门控，`git:release` 仍然跑了，
+# 把流水线判为失败。因此判据必须落到真正做事的那个 Stage 上，两处都写。
 
+# 门控判据：非 push 事件（手动触发）放行；push 事件要求标题以 [Build] 开头。
+#
+# 注意不能写成 ${VAR#[Build]}：`[Build]` 里的方括号会被当成 glob 字符类，
+# 剥离的只是单个字符，判据会恒为真。必须用 case 做字面前缀匹配。
 .release-pipeline: &release-pipeline
   name: Release
   docker:
@@ -17,9 +21,6 @@
     image: docker:27-cli
   stages:
     - name: 生成 Release 元数据
-      # 非 push 事件（手动触发）直接放行；push 事件要求标题以 [Build] 开头。
-      # 注意不能写成 ${VAR#[Build]}：`[Build]` 里的方括号会被当成 glob 字符类，
-      # 剥离的是单个字符，判据会恒为真 —— 必须用 case 做字面前缀匹配。
       if: |
         if [ "$CNB_EVENT" != "push" ]; then exit 0; fi
         case "$CNB_COMMIT_MESSAGE_TITLE" in
@@ -46,12 +47,19 @@
       # exports 的生命周期是当前 Pipeline，后续 Stage 可直接用 $RELEASE_TAG
 
     - name: 发布 Release
+      # 必须与上一个 Stage 用同一套判据：上一个被跳过时这个仍会执行
+      if: |
+        if [ "$CNB_EVENT" != "push" ]; then exit 0; fi
+        case "$CNB_COMMIT_MESSAGE_TITLE" in
+          "[Build]"*) exit 0 ;;
+          *) echo "提交信息不以 [Build] 开头，跳过发布"; exit 1 ;;
+        esac
       type: git:release
       options:
         tag: $RELEASE_TAG
         title: LogShare $RELEASE_TAG
         descriptionFromFile: RELEASE_NOTES.md
 
-probe/cnb-dind:
+main:
   push:
     - *release-pipeline

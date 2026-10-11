@@ -73,12 +73,17 @@
 
 # CI 的完整 stage 列表。本文件内用 YAML 锚点复用，跨文件复用走 include 合并。
 .ci-stages: &ci-stages
-  # 镜像 tag 与 env-file 写在 ${CNB_BUILD_WORKSPACE} 下，供后续 Stage 读取
+  # 镜像由流水线的 docker.build 交给 CNB 构建并缓存（命中共建缓存时秒级就绪），
+  # 这里只把它的实际 tag 与依赖服务 env-file 落到工作区，供后续 Stage 读取。
+  #
+  # 注意不要在 Stage 里再跑一次 `docker build`：CNB 会先把 docker.build 指定的
+  # Dockerfile 构建成 docker.cnb.cool/<slug>/dockerfile-caches:<hash> 并推入制品库，
+  # Stage 内重复构建既浪费几分钟，还会因 cache 包尚未就位而 170ms 立即失败。
   - name: 准备构建环境
     script: |
       set -euo pipefail
-      docker build -t "logshare-ci:${CNB_BUILD_ID}" -f .cnb/Dockerfile.ci .
-      printf 'logshare-ci:%s' "$CNB_BUILD_ID" > .ci-image
+      printf '%s' "${CNB_PIPELINE_DOCKER_IMAGE}" > .ci-image
+      echo "CI 镜像: $(cat .ci-image)"
 
       # 依赖服务地址：容器名靠自定义网络解析，不是 127.0.0.1
       cat > .ci-env <<'ENVEOF'
