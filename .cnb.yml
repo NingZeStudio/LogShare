@@ -1,7 +1,7 @@
 include:
   - .cnb/ci.yml
 
-main:
+probe/cnb-dind:
   push:
     - name: 来自 .cnb.yml
       stages:

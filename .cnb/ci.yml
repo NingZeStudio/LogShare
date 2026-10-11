@@ -1,5 +1,4 @@
-# 测试：include 文件使用 main 分支
-main:
+probe/cnb-dind:
   push:
     - name: 来自 ci.yml
       stages:
