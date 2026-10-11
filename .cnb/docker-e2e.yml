@@ -87,9 +87,14 @@
 
         $UP up -d || { echo "=== compose up 失败 ==="; $UP logs; $UP down; exit 1; }
 
+        # docker:27-cli 基于 alpine，**没有 curl**（实测 `sh: curl: not found`，
+        # 会让就绪探测永远失败、整条 E2E 误判为启动超时）。用 busybox wget 探测：
+        # --no-check-certificate 跳过自签证书校验，-q 静默，成功与否看退出码。
         ready=0
         for i in $(seq 1 40); do
-          if curl -skf https://localhost/v1/limits > /dev/null; then ready=1; break; fi
+          if wget -q --no-check-certificate --spider https://localhost/v1/limits 2>/dev/null; then
+            ready=1; break
+          fi
           sleep 3
         done
         if [ "$ready" != "1" ]; then
