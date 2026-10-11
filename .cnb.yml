@@ -5,23 +5,22 @@ probe/cnb-dind:
       docker:
         image: docker:27-cli
       stages:
-        - name: 探测容器 IP 连通性
+        - name: 探测 docker run --network host 可达性
           script: |
-            docker run -d --name probe-redis redis:7.4-alpine
-            docker run -d --name probe-mariadb \
-              -e MARIADB_DATABASE=logshare -e MARIADB_USER=logshare \
-              -e MARIADB_PASSWORD=logshare -e MARIADB_ROOT_PASSWORD=root \
-              mariadb:11.8
-            sleep 25
-            RIP=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' probe-redis)
-            MIP=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' probe-mariadb)
-            echo "redis_ip=$RIP mariadb_ip=$MIP"
-            # 本机网关（docker0 的宿主侧）是否可达
-            echo "--- 默认网关 ---"
-            ip route
-            GW=$(ip route | awk '/default/ {print $3}')
-            echo "default_gw=$GW"
-            echo "--- 直连容器 IP ---"
-            (timeout 5 bash -c "echo > /dev/tcp/$RIP/6379" && echo "redis $RIP:6379 可达") || echo "redis $RIP:6379 不可达"
-            (timeout 5 bash -c "echo > /dev/tcp/$MIP/3306" && echo "mariadb $MIP:3306 可达") || echo "mariadb $MIP:3306 不可达"
+            echo "===== 方案A: --network host 启动服务 ====="
+            docker run -d --name ph-redis --network host redis:7.4-alpine 2>&1 | tail -2
+            (timeout 5 bash -c "echo > /dev/tcp/127.0.0.1/6379" && echo "A: 127.0.0.1:6379 可达") || echo "A: 127.0.0.1:6379 不可达"
+
+            echo "===== 方案B: 在 dind 内跑一个容器，从容器内访问服务 ====="
+            docker run -d --name pn-redis -p 6379:6379 redis:7.4-alpine 2>&1 | tail -2
+            sleep 5
+            docker run --rm redis:7.4-alpine sh -c 'apk add --no-cache bash >/dev/null 2>&1; (timeout 5 bash -c "echo > /dev/tcp/pn-redis/6379" && echo "B: 容器间 6379 可达") || echo "B: 容器间 6379 不可达"'
+
+            echo "===== 方案C: 从流水线容器经 docker exec 使用服务 ====="
+            docker exec pn-redis redis-cli ping 2>&1 | head -2
+
+            echo "===== 方案D: 端口映射到宿主 dind 后，流水线容器能否访问 dind 网关 ====="
+            DIND_GW=$(docker network inspect bridge -f '{{(index .IPAM.Config 0).Gateway}}')
+            echo "dind bridge gw=$DIND_GW"
+            (timeout 5 bash -c "echo > /dev/tcp/$DIND_GW/6379" && echo "D: $DIND_GW:6379 可达") || echo "D: $DIND_GW:6379 不可达"
             echo "--- 探测完成 ---"
