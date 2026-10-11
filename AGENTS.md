@@ -75,7 +75,7 @@ php bin/hyperf.php start
 ```
 
 - Tests use Pest and bootstrap through `tests/bootstrap.php`; that bootstrap creates `Config.inc.php` when absent and supplies a Redis mock when ext-redis is unavailable. Run one file with `php vendor/bin/pest tests/Unit/FilterTest.php` or filter by name with `php vendor/bin/pest --filter=...`; architecture tests are the `architecture` Pest group (`php vendor/bin/pest --group=architecture` / `composer test:architecture`). `tests/Unit/ControllersUnitTest.php` covers HTTP controllers via direct reflection instantiation to ensure line coverage is captured by PCOV without Hyperf AOP proxy interference.
-- Integration tests need MariaDB and Redis (missing MariaDB locally will skip `MariaDbStorageTest` without failing). CI initializes MariaDB with `docker/mariadb-init.sql` followed by `scripts/sync_mariadb_events.php` and `docker/mariadb-events.sql` so that `cleanup_expired_logs` event checks pass. CI runners include `brotli` extension to fully test compressed requests. `RequestParser::decodeBody` and `ContentParser` decompress brotli via single-argument `brotli_uncompress($body)` and validate against decompressed size limits in application code (ext-brotli second argument is dictionary `?string`, passing integer throws TypeError). `RedisClient::setTestConnection(?object $conn)` enables unit tests (such as `AnalysisQueueTest`) to run deterministically against `RedisMock` regardless of whether `ext-redis` is loaded, eliminating unnecessary skips. Local Docker services are started with `docker compose -f docker/compose.yaml up -d`. CI (`.github/workflows/ci.yaml`) runs comprehensive live environment integration tests via `scripts/ci_e2e_test.php` against both the booted resident Swoole server (port 9501) and the production Docker stack with Nginx SSL, OpenLiteWaf attack blocking, OpenLiteStats analytics, complete log lifecycle (create/read/raw/files/meta/insights/telemetry/delete/404), and Admin/RAG MCP endpoints.
+- Integration tests need MariaDB and Redis (missing MariaDB locally will skip `MariaDbStorageTest` without failing). CI initializes MariaDB with `docker/mariadb-init.sql` followed by `scripts/sync_mariadb_events.php` and `docker/mariadb-events.sql` so that `cleanup_expired_logs` event checks pass. CI runners include `brotli` extension to fully test compressed requests. `RequestParser::decodeBody` and `ContentParser` decompress brotli via single-argument `brotli_uncompress($body)` and validate against decompressed size limits in application code (ext-brotli second argument is dictionary `?string`, passing integer throws TypeError). `RedisClient::setTestConnection(?object $conn)` enables unit tests (such as `AnalysisQueueTest`) to run deterministically against `RedisMock` regardless of whether `ext-redis` is loaded, eliminating unnecessary skips. Local Docker services are started with `docker compose -f docker/compose.yaml up -d`. CI runs comprehensive live environment integration tests via `scripts/ci_e2e_test.php` against both the booted resident Swoole server (port 9501) and the production Docker stack with Nginx SSL, OpenLiteWaf attack blocking, OpenLiteStats analytics, complete log lifecycle (create/read/raw/files/meta/insights/telemetry/delete/404), and Admin/RAG MCP endpoints. CI 已从 GitHub Actions 迁移到 CNB 云原生构建，配置见 `.cnb.yml` 与 `.cnb/`（详见下方「CNB 流水线」章节）；`.github/workflows/` 保留仅为历史参考。
 - Lua regression tests (Termux): `php OpenLiteWaf/tests/openlitewaf_regex_test.php`, `lua5.1 OpenLiteWaf/tests/openlitewaf_logic_test.lua`, `lua5.1 OpenLiteStats/tests/openlitestats_logic_test.lua`, `luac5.1 -p OpenLiteWaf/lua/*.lua OpenLiteStats/lua/*.lua`. The two Lua test suites stub ngx and use real file IO under `/data/data/com.termux/files/usr/tmp/` for persistence cases.
 - PHPStan analyzes `app/` at level 5. The existing `ignoreErrors` entries in `phpstan.neon` are intentional (Codex type hierarchy in `app/Log.php`, Hyperf Response `getConnection()` in `app/Sse/SseWriter.php`, whole-file `method.unused` in `app/Agent/LogAgent.php` because its remaining private thin delegates are a reflection-compatibility shell for 40+ legacy reflection tests), and `app/Client/SpinYarnClient.php` is excluded because it depends on the spinyarn PHP extension that is absent in the CI static-analysis environment; do not add suppressions or exclusions casually.
 - There is no configured formatter. Before finishing code changes, run the relevant Pest tests, architecture tests, and `PHPSTAN_TURBO=0 php vendor/bin/phpstan analyse app --level=5 --memory-limit=512M` on Termux.
@@ -169,10 +169,37 @@ php bin/hyperf.php start
 - 客户端接入与上传规范：客户端（各类启动器生态）上传时强烈建议同时提交「游戏主日志 + 崩溃报告 + 启动器日志」（通过 `files` 数组或 ZIP 归档），并注明 `source` 来源标识（格式如 `pojav/3.4.0`、`fcl/1.2.0`、`zl2/2.1.0` 等）；若请求体未显式提交 `source`，服务端自动从 HTTP `User-Agent` 中提取并过滤规范的“启动器/版本”结构（排除通用浏览器与通用 HTTP 客户端黑名单）；若未提供且 UA 非启动器格式，统一标为 `'未指定'`（存储与 Admin 检索统一兜底为 `'未指定'`，支持按 `source=未指定` 联合过滤 NULL、空串与未指定记录）；使 Admin 控制台能精准分类与检索启动器生态来源；上报公开遥测（`POST /{version}/telemetry/report`）支持 raw body 与 Beacon 兜底解析。
 - If an API route or response changes, update `API.md`, `openapi.yaml`, and `postman_collection.json` together.
 
+## CNB 流水线（CI / E2E / Release）
+
+CI 已从 GitHub Actions 迁移到 CNB 云原生构建，配置拆分如下；`.github/workflows/` 保留仅为历史参考，不再执行。
+
+| 文件 | 职责 |
+| --- | --- |
+| `.cnb.yml` | include 三份子配置 + GitHub 代码同步（git-sync，push main 时） |
+| `.cnb/ci.yml` | 单测/覆盖率、composer 校验、PHPStan、架构测试、Swoole 启动冒烟 |
+| `.cnb/docker-e2e.yml` | 生产镜像构建 + docker compose 全栈真实环境 E2E |
+| `.cnb/release.yml` | `[Build]` 提交触发 Release |
+| `.cnb/Dockerfile.ci` | CI 构建环境镜像（PHP 8.5 + Swoole 6.2 + pcov） |
+| `scripts/ci_init_mariadb.sh` | CI 用 MariaDB 结构与事件初始化 |
+| `scripts/clover_to_lcov.php` | Clover → LCOV 覆盖率转换 |
+
+平台机制约束（都是踩过的坑，改配置前务必先读 `.cnb/ci.yml` 顶部注释）：
+
+- **`include` 在「分支 + 事件」层合并**：子配置各自写 `main:` / `pull_request:`，不要试图用 `!reference` 把整条流水线数组塞进主文件 —— 实测 CNB runner 1.73.0 下 `push: !reference [.xxx]` 会静默产出**空流水线**（构建成功但零 stage）。属性级引用（`docker: !reference [.ci-docker]`）正常。
+- **`script` 由 sh（dash）执行**，不是 bash：`set -o pipefail` 会直接以退出码 2 失败，统一用 `set -eu`。
+- **`services` 只支持 docker / vscode**，没有 mariadb / redis 服务容器，需自行 `docker run`。
+- **dind 容器与流水线容器网络不互通**：流水线容器既连不上 `127.0.0.1`（端口发布发生在 dind 自己的网络命名空间），也连不上服务容器的 `172.18.x.x`。唯一可行做法是让测试容器 `--network logshare-ci` 加入与服务容器相同的自定义网络，用容器名做 DNS。
+- **CNB 会预构建 `docker.build` 指定的 Dockerfile** 并推入制品库缓存；Stage 里再跑一次 `docker build` 会因缓存包冲突而立即失败，改用 `${CNB_PIPELINE_DOCKER_IMAGE}` 取已构建镜像的 tag。
+- **`docker:27-cli` 里没有 `curl`、没有 `openssl`**：就绪探测用 busybox `wget`，证书生成借 `alpine/openssl` 容器。
+- **Stage 的 `if` 不继承**：前一个 Stage 被 `if` 跳过时后续 Stage 照常执行，门控必须写在真正做事的那个 Stage 上（Release 的两处 `if` 由此而来）。
+- **`mariadb-events.sql` 含 `DELIMITER $$` 存储过程**，只能由 mysql/mariadb 客户端导入，PDO `exec()` 会报 ERROR 1064。
+- **覆盖率格式**：Pest 只出 clover/cobertura/crap/html/php/text/xml，而 `testing:coverage` 只认 lcov/coverage.json/jacoco/golang，因此经 `scripts/clover_to_lcov.php` 中转。
+- **已知差异（待决策）**：`scripts/ci_init_mariadb.sh` 刻意剔除 `CALL logshare_install_partitions()`，因为 `MariaDbStorageTest::testAllLogTablesArePartitionedWithFallback` 假设表上只有 `p_future`，与安装期铺满的 14 天未来分区冲突（REORGANIZE 报 ERROR 1493）。该断言写于「运行期补齐分区」时代（见提交 `559d65e`），在 GitHub Actions 上同样会失败。按用户要求迁移期不改动 PHP 与测试，故把差异隔离在 CI 初始化环节。
+
 ## Release and submodule workflow
 
 - Version constant lives in `app/Version.php` (`App\Version::VERSION`); keep `README.md` and `openapi.yaml` version fields aligned when bumping.
-- Release flow: add a `## x.y.z — date` entry at the top of `CHANGELOG.md`, align `app/Version.php` / `README.md` / `openapi.yaml`, then commit with a message starting with `[Build]` — `.github/workflows/release.yaml` triggers on that prefix, takes the tag (`v` + version) and release notes from the first CHANGELOG entry. `workflow_dispatch` also publishes.
+- Release flow: add a `## x.y.z — date` entry at the top of `CHANGELOG.md`, align `app/Version.php` / `README.md` / `openapi.yaml`, then commit with a message starting with `[Build]` — `.cnb/release.yml` 在该前缀下触发发布，tag（`v` + 版本号）与 Release notes 均取自 CHANGELOG 首条。
 - Submodule commit order matters: `OpenLiteWaf/` and `OpenLiteStats/` are separate GitHub repos (NingZeStudio org). Commit and push the change inside the submodule repo FIRST, then update the submodule pointer in this repo as a separate commit (`chore: 更新 OpenLiteWaf submodule 指针（…）` is the established style).
 - PHP code is baked into the Docker image (only `Config.inc.php`, `.env`, `mappings/` are mounted): server-side PHP changes require rebuilding the `hyperf` image, not just a container restart. Compose commands need `--env-file .env` (required `${MARIADB_PASSWORD:?}` interpolation). 重建前若宿主机挂载了 `runtime/` 且开启了 `SCAN_CACHEABLE: "true"`，必须先执行 `rm -rf runtime/container` 清理扫描缓存，避免旧容器代理类锁死导致新代码不生效。
 
