@@ -154,17 +154,18 @@
   - name: 单元测试与覆盖率
     script: |
       set -eu
-      # 同时产出 clover 与 lcov：testing:coverage 内置任务只认
-      # lcov / json / jacoco / golang，clover 不在其列
+      # Pest 只支持 --coverage-clover / cobertura / crap / html / php / text / xml，
+      # **没有** --coverage-lcov，而 testing:coverage 内置任务只认
+      # lcov / coverage.json / jacoco / golang。因此先出 clover，
+      # 再用 scripts/clover_to_lcov.php 转成 lcov（逐行命中次数无损转换）。
       docker run --rm --network logshare-ci \
         -v "$CNB_BUILD_WORKSPACE:/app" -w /app \
         --env-file .ci-env \
         "$(cat .ci-image)" sh -lc '
           set -e
-          php vendor/bin/pest --coverage \
-            --coverage-clover=coverage/clover.xml \
-            --coverage-lcov --coverage-lcov="coverage/lcov.info"
+          php vendor/bin/pest --coverage --coverage-clover=coverage/clover.xml
           test -s coverage/clover.xml
+          php scripts/clover_to_lcov.php coverage/clover.xml coverage/lcov.info
           test -s coverage/lcov.info
         '
 
