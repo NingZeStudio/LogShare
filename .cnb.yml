@@ -1,35 +1,65 @@
-probe/cnb-dind:
-  push:
-    - services:
-        - docker
-      stages:
-        # 1) 构建 PHP 镜像（用 dind 内 docker build 验证 Dockerfile 可用）
-        - name: 构建 CI 镜像
-          script: |
-            set -euo pipefail
-            docker build -t logshare-ci-probe -f .cnb/Dockerfile.ci .
-        # 2) 起服务 + 用镜像跑 composer install 与 pest
-        - name: 跑通依赖安装与单测
-          script: |
-            set -euo pipefail
-            docker network create probe-net3 2>/dev/null || true
-            docker rm -f p-mariadb p-redis 2>/dev/null || true
-            docker run -d --name p-mariadb --network probe-net3 \
-              -e MARIADB_DATABASE=logshare -e MARIADB_USER=logshare \
-              -e MARIADB_PASSWORD=logshare -e MARIADB_ROOT_PASSWORD=root mariadb:11.8
-            docker run -d --name p-redis --network probe-net3 redis:7.4-alpine
-            for i in $(seq 1 60); do
-              docker exec p-mariadb healthcheck.sh --connect --innodb_initialized >/dev/null 2>&1 && break
-              [ "$i" = 60 ] && { docker logs p-mariadb; exit 1; }
-              sleep 2
-            done
-            docker exec p-redis redis-cli ping
+# .cnb.yml — LogShare CNB 云原生构建流水线
+#
+# 迁移自 .github/workflows/{ci,release}.yaml，职责与原 GitHub Actions 保持一致：
+#   CI      ：push(main) / pull_request 触发，单测 + 覆盖率 + 静态分析 + 架构测试
+#             + 启动冒烟，另加真实 docker compose 全量 E2E（nginx/HTTPS/WAF/Stats）。
+#   Release ：提交信息以 [Build] 开头时发布 Release，tag 与说明取自 CHANGELOG.md 首条。
+#   Sync    ：push(main) 时把代码同步回 GitHub（NingZeStudio/LogShare），沿用原有配置。
+#
+# 具体配置拆分在同目录 .cnb/ 下，本文件只负责把事件与流水线绑定起来：
+#   .cnb/ci.yml        单测、覆盖率、静态分析、架构测试、启动冒烟
+#   .cnb/docker-e2e.yml 生产镜像构建 + 全栈真实环境 E2E
+#   .cnb/release.yml   Release 发布
+#
+# ── 与 GitHub Actions 版本的差异（平台机制差异，非行为变更） ──────────────────
+#   1) PHP 版本矩阵 8.4 / 8.5 收敛为 8.5 单版本。CNB 的构建环境由单个
+#      Dockerfile 决定，跑矩阵要两条流水线各维护一套 Dockerfile，代价高于收益；
+#      版本下限仍由 composer.json 的 `php: >=8.4` 约束守住。
+#   2) 覆盖率改用 CNB 内置任务 testing:coverage 上报平台洞察页，
+#      不再上传 codecov（CNB 侧没有对应的凭证与徽章体系）。
+#   3) Release 只发布到 CNB，不再同时打 GitHub Release——代码由同一条
+#      push 流水线的 git-sync 同步到 GitHub，发布动作保留在 CNB 一侧即可。
+#
+# ── 平台机制约束（踩过的坑，改配置前务必先读） ────────────────────────────────
+#   * services 只支持 docker / vscode，没有 GitHub 那样的 mariadb / redis 服务容器，
+#     依赖服务必须自行用 docker run 拉起。
+#   * dind 里起的容器与流水线容器**网络不互通**：实测流水线容器既连不上
+#     127.0.0.1（dind 的端口发布发生在 dind 自己的网络命名空间内），
+#     也连不上服务容器的 172.18.x.x 地址（不在同一网络）。唯一可用做法是让
+#     执行测试的容器加入与服务容器相同的自定义 docker 网络，用容器名做 DNS 解析。
+#     因此单测与冒烟一律以 `docker run --network logshare-ci` 在容器内执行。
+#   * 触发说明：某分支的流水线只由该分支自己的 .cnb.yml 决定，
+#     在 main 下配置别的分支并不会让别的分支按此配置执行。
 
-            docker run --rm --network probe-net3 \
-              -v "$CNB_BUILD_WORKSPACE:/app" -w /app \
-              -e DB_HOST=p-mariadb -e DB_PORT=3306 -e DB_DATABASE=logshare \
-              -e DB_USERNAME=logshare -e DB_PASSWORD=logshare \
-              -e REDIS_HOST=p-redis -e REDIS_PORT=6379 \
-              logshare-ci-probe \
-              sh -c 'php -v && php -m | grep -iE "swoole|redis|pdo_mysql|pcov|brotli" && composer install --prefer-dist --no-progress --no-interaction && cp Config.inc.example.php Config.inc.php && php vendor/bin/pest --filter=FilterTest'
-            echo "=== 探测完成 ==="
+include:
+  - .cnb/ci.yml
+  - .cnb/docker-e2e.yml
+  - .cnb/release.yml
+
+main:
+  push:
+    - !reference [.ci-pipeline]
+    - !reference [.docker-e2e]
+    - !reference [.release]
+    # 同步代码回 GitHub。注意 imports 必须与 stages 处于同一个 pipeline 对象内，
+    # 拆成两个列表项会被解析成两条独立流水线，密钥那条只有 imports 没有 stages，
+    # 配置非法且 imports 永远不生效（2026-10-11 连续 3 次同步失败的根因）。
+    - imports:
+        - https://cnb.cool/MornZe-Dev/secrets/-/blob/main/github.yml
+      stages:
+        - name: sync to github
+          image: tencentcom/git-sync
+          settings:
+            target_url: https://github.com/NingZeStudio/LogShare
+            auth_type: https
+            username: qitry
+            password: ${GITHUB_TOKEN}
+            # 目标仓库不在 CNB 镜像链条上，提交链长期分叉，非强制推送必然
+            # non-fast-forward 失败，因此显式开启 force
+            force: true
+
+  pull_request:
+    - !reference [.ci-pipeline]
+
+  pull_request.target:
+    - !reference [.docker-e2e]
