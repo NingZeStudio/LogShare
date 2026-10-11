@@ -1,0 +1,145 @@
+# .cnb/docker-e2e.yml — 生产镜像构建 + 全栈真实环境 E2E
+#
+# 与原 GitHub Actions 的 docker job 等价：构建 docker/compose.yaml 全栈
+# （Hyperf + Nginx/OpenResty + OpenLiteWaf + OpenLiteStats + MariaDB + Redis），
+# 自签证书起 HTTPS，再跑 scripts/ci_e2e_test.php --waf-test 覆盖反代、TLS、
+# WAF 拦截与解封、统计页、完整日志生命周期与 Admin/RAG 端点。
+#
+# 这里刻意不使用 .cnb/Dockerfile.ci：E2E 要测的就是生产自带的 hyperf 镜像，
+# 换成 CI 镜像会绕开 SpinYarn / jemalloc 等真实构建产物。
+
+.docker-e2e: &docker-e2e
+  name: Docker 全栈 E2E
+  services:
+    - docker
+  docker:
+    # 只需要 docker CLI 与 compose 插件；真正跑 PHP 的是 compose 里的 hyperf 容器
+    image: docker:27-cli
+  env:
+    # compose.yaml 的必填变量（${VAR:?} 形式）在 build 插值阶段即校验，
+    # 缺任意一个 compose 会直接报错退出。CI 用占位值即可。
+    MARIADB_PASSWORD: ci-placeholder
+    MARIADB_ROOT_PASSWORD: ci-placeholder
+    REDIS_PASSWORD: ci-placeholder
+    ADMIN_TOKEN: ci-placeholder
+    AI_MCP_RAG_AUTH_TOKEN: ci-placeholder
+    OPENLITEWAF_ADMIN_TOKEN: ci-waf-token
+  stages:
+    - name: 构建生产镜像
+      script: |
+        set -eu
+        # 冒烟经 nginx 挂载 OpenLiteWaf / OpenLiteStats 的 Lua 文件，
+        # submodule 内容必须就位，否则挂载源为空目录、WAF 与统计页全失效。
+        # CNB 拉取代码时默认递归初始化 submodule，这里断言一次以防回归。
+        test -f OpenLiteWaf/lua/openlitewaf.lua || {
+          echo "OpenLiteWaf submodule 内容缺失"; ls -la OpenLiteWaf; exit 1
+        }
+        test -f OpenLiteStats/lua/log.lua || {
+          echo "OpenLiteStats submodule 内容缺失"; ls -la OpenLiteStats; exit 1
+        }
+        docker compose -f docker/compose.yaml build
+
+    - name: 准备冒烟配置
+      script: |
+        set -eu
+        cp Config.inc.example.php Config.inc.php
+        cp .env.example .env
+        sed -i 's/change-me/ci-placeholder/g' .env
+        cat >> .env <<'ENVEOF'
+        ADMIN_ENABLED=true
+        ADMIN_TOKEN=ci-placeholder
+        AI_MCP_RAG_AUTH_TOKEN=ci-placeholder
+        OPENLITEWAF_ADMIN_TOKEN=ci-waf-token
+        ENVEOF
+        # compose 从 docker/ 目录读 .env，复制一份保持一致
+        cp .env docker/.env
+        # mariadb-events.sql 的分区边界是编译期常量，需按当天日期重新生成。
+        # docker:27-cli 里没有 PHP，生成失败不阻塞（E2E 不校验事件）
+        php scripts/sync_mariadb_events.php || echo "跳过事件 SQL 生成（镜像内无 PHP）"
+
+    - name: 生成自签证书
+      script: |
+        set -eu
+        # nginx 443 与 healthcheck 需要证书文件；CI 上 docker/certs/ 为空。
+        # 域名从 default.conf 的证书路径动态提取，避免仓库域名调整后
+        # CI 仍生成旧域名证书导致 nginx 起不来。
+        DOMAIN=$(sed -n 's#.*live/\([^/]*\)/fullchain.pem.*#\1#p' docker/nginx/default.conf | head -1)
+        if [ -z "$DOMAIN" ]; then
+          echo "无法从 docker/nginx/default.conf 提取证书域名"; exit 1
+        fi
+        echo "生成自签证书: $DOMAIN"
+        mkdir -p "docker/certs/live/$DOMAIN"
+        # docker:27-cli 基于 alpine，**镜像内没有 openssl 命令**，直接调用会
+        # 以退出码 127 中断流水线。改用自带 openssl 的 alpine/openssl 镜像，
+        # 把证书直接生成到宿主工作区目录。
+        docker run --rm -v "$PWD/docker/certs/live/$DOMAIN:/certs" alpine/openssl \
+          req -x509 -newkey rsa:2048 -nodes \
+            -keyout /certs/privkey.pem -out /certs/fullchain.pem \
+            -days 1 -subj "/CN=$DOMAIN"
+        test -s "docker/certs/live/$DOMAIN/fullchain.pem" || {
+          echo "证书生成失败"; exit 1
+        }
+
+    - name: 启动全栈并执行 E2E
+      script: |
+        set -eu
+        UP="docker compose --env-file .env -f docker/compose.yaml"
+
+        $UP up -d || { echo "=== compose up 失败 ==="; $UP logs; $UP down; exit 1; }
+
+        # nginx 的 server_name 是具体域名（不是 _），请求必须带上与之匹配的 Host，
+        # 否则会落到默认 vhost 而 404/421。域名与证书生成阶段一样从 default.conf 提取。
+        DOMAIN=$(sed -n 's#.*live/\([^/]*\)/fullchain.pem.*#\1#p' docker/nginx/default.conf | head -1)
+        if [ -z "$DOMAIN" ]; then
+          echo "无法从 docker/nginx/default.conf 提取证书域名"; exit 1
+        fi
+        # 就绪探测必须在 **compose 网络内的容器** 里做，不能在流水线容器里做：
+        # docker:27-cli 基于 alpine，既没有 curl，其 wget 对自签证书的
+        # --no-check-certificate 支持也不完整；流水线容器本身也不在 compose
+        # 网络里，`https://localhost` 根本不通。这里用 hyperf 容器（镜像内自带
+        # curl）请求 nginx 容器，并带上真实域名的 Host 头，与线上请求路径一致。
+        ready=0
+        for i in $(seq 1 40); do
+          if $UP exec -T hyperf curl -sfk -H "Host: $DOMAIN" https://nginx/v1/limits > /dev/null 2>&1; then
+            ready=1; break
+          fi
+          sleep 3
+        done
+        if [ "$ready" != "1" ]; then
+          echo "=== 服务启动超时 ==="; $UP logs; $UP down; exit 1
+        fi
+
+        # 在 hyperf 容器内执行 E2E：镜像内自带 php 与 curl，且容器已在
+        # compose 网络内，可直连 nginx / mariadb / redis。
+        #
+        # E2E 以域名作为 base-url（nginx 的 server_name 是具体域名，Host 头必须
+        # 匹配）。把域名解析到 **nginx 容器** 的 IP，而不是 127.0.0.1——
+        # hyperf 容器的 127.0.0.1 是它自己，指过去只会连到 Hyperf 的 9501 端口。
+        NGINX_IP=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' logshare-nginx)
+        if [ -z "$NGINX_IP" ]; then
+          echo "无法获取 nginx 容器 IP"; $UP logs; $UP down; exit 1
+        fi
+        $UP exec -T hyperf sh -c "grep -q ' $DOMAIN' /etc/hosts || echo '$NGINX_IP $DOMAIN' >> /etc/hosts"
+        echo "已将 $DOMAIN 指向 nginx 容器 $NGINX_IP"
+
+        $UP exec -T -e OPENLITEWAF_ADMIN_TOKEN=ci-waf-token hyperf \
+          php scripts/ci_e2e_test.php \
+            --base-url="https://$DOMAIN" \
+            --admin-token=ci-placeholder \
+            --rag-token=ci-placeholder \
+            --waf-test || {
+          echo "=== E2E 失败，输出容器日志 ==="; $UP logs; $UP down; exit 1
+        }
+        echo "Docker 真实生产环境全量 E2E 测试全部通过"
+        $UP down
+  endStages:
+    - name: 清理容器与数据卷
+      script: |
+        docker compose --env-file .env -f docker/compose.yaml down -v 2>/dev/null || true
+
+main:
+  push:
+    - *docker-e2e
+
+  pull_request.target:
+    - *docker-e2e

@@ -1,0 +1,216 @@
+# .cnb/ci.yml — CI 主流水线：单测 / 覆盖率 / 静态分析 / 架构测试 / 启动冒烟
+#
+# ── 本文件与主配置如何协作（改配置前务必先读） ────────────────────────────────
+# CNB 的 include 在「分支 + 事件」这一层做合并：include 文件里声明的
+# `main.push` 会与主 .cnb.yml 的 `main.push` 合并成同一事件下的多条流水线并发执行。
+# 所以这里直接写分支与事件键，不靠外部引用把 stage 塞进主文件。
+#
+# 实测结论（2026-10-12，CNB runner 1.73.0）：`push: !reference [.xxx]` 引用
+# 整条流水线数组会静默产出**空流水线**——构建显示成功，但零 stage、数秒结束，
+# 同文件与跨文件都是如此；属性级 `!reference`（如 `docker: !reference [.ci-docker]`）
+# 正常。因此整条流水线的复用一律走 include 的分支级合并，不要用 !reference。
+#
+# ── 依赖服务 ────────────────────────────────────────────────────────────────
+# services 只支持 docker / vscode，没有 GitHub Actions 那样的 mariadb / redis
+# 服务容器，必须自行 docker run 拉起。
+#
+# dind 里起的容器与流水线容器**网络不互通**：实测流水线容器既连不上
+# 127.0.0.1（dind 的端口发布发生在 dind 自己的网络命名空间内），也连不上
+# 服务容器的 172.18.x.x 地址（不在同一网络）。唯一可用做法是让执行测试的
+# 容器加入与服务容器相同的自定义 docker 网络，用容器名做 DNS 解析。
+# 所以下面所有要连数据库的步骤都是 `docker run --network logshare-ci`。
+#
+# ── 脚本解释器 ──────────────────────────────────────────────────────────────
+# CNB 的 `script` 由 **sh（dash）** 执行，不是 bash。`set -o pipefail` 这类
+# bash 专有选项会直接以 `sh: 1: set: Illegal option -o pipefail` 退出码 2 失败，
+# 因此本文件统一用 `set -eu`。容器内的 `sh -lc '...'` 同理，不要依赖 bash 特性。
+
+# 构建环境：仓库内 Dockerfile 构建 CI 镜像；vendor 依赖走节点缓存
+.ci-docker:
+  build:
+    dockerfile: .cnb/Dockerfile.ci
+    # by 决定镜像版本哈希，Dockerfile 自身变更即触发重建
+    by:
+      - .cnb/Dockerfile.ci
+  volumes:
+    - /root/.composer/cache:copy-on-write
+
+# 拉起 MariaDB / Redis 并等待就绪
+.start-services: &start-services
+  name: 启动依赖服务（MariaDB / Redis）
+  script: |
+    set -eu
+    docker network create logshare-ci 2>/dev/null || true
+    docker rm -f mariadb redis 2>/dev/null || true
+
+    docker run -d --name mariadb --network logshare-ci \
+      -e MARIADB_DATABASE=logshare \
+      -e MARIADB_USER=logshare \
+      -e MARIADB_PASSWORD=logshare \
+      -e MARIADB_ROOT_PASSWORD=root \
+      mariadb:11.8
+    docker run -d --name redis --network logshare-ci redis:7.4-alpine
+
+    # healthcheck.sh 是 mariadb 镜像自带探针，比端口探测可靠
+    for i in $(seq 1 60); do
+      if docker exec mariadb healthcheck.sh --connect --innodb_initialized >/dev/null 2>&1; then
+        echo "MariaDB 就绪"; break
+      fi
+      if [ "$i" = "60" ]; then echo "MariaDB 启动超时"; docker logs mariadb; exit 1; fi
+      sleep 2
+    done
+
+    for i in $(seq 1 30); do
+      if docker exec redis redis-cli ping 2>/dev/null | grep -q PONG; then
+        echo "Redis 就绪"; break
+      fi
+      if [ "$i" = "30" ]; then echo "Redis 启动超时"; docker logs redis; exit 1; fi
+      sleep 2
+    done
+
+# 清理 Stage：stages 末尾与 endStages 都要用（stages 失败会跳过其后任务，
+# 靠 endStages 兜底，避免残留容器占着节点）
+.cleanup-stage: &cleanup-stage
+  name: 清理依赖服务
+  script: |
+    docker rm -f mariadb redis 2>/dev/null || true
+    docker network rm logshare-ci 2>/dev/null || true
+
+# CI 的完整 stage 列表。本文件内用 YAML 锚点复用，跨文件复用走 include 合并。
+.ci-stages: &ci-stages
+  # 镜像由流水线的 docker.build 交给 CNB 构建并缓存（命中共建缓存时秒级就绪），
+  # 这里只把它的实际 tag 与依赖服务 env-file 落到工作区，供后续 Stage 读取。
+  #
+  # 注意不要在 Stage 里再跑一次 `docker build`：CNB 会先把 docker.build 指定的
+  # Dockerfile 构建成 docker.cnb.cool/<slug>/dockerfile-caches:<hash> 并推入制品库，
+  # Stage 内重复构建既浪费几分钟，还会因 cache 包尚未就位而 170ms 立即失败。
+  - name: 准备构建环境
+    script: |
+      set -eu
+      printf '%s' "${CNB_PIPELINE_DOCKER_IMAGE}" > .ci-image
+      echo "CI 镜像: $(cat .ci-image)"
+
+      # 依赖服务地址：容器名靠自定义网络解析，不是 127.0.0.1
+      cat > .ci-env <<'ENVEOF'
+      DB_HOST=mariadb
+      DB_PORT=3306
+      DB_DATABASE=logshare
+      DB_USERNAME=logshare
+      DB_PASSWORD=logshare
+      REDIS_HOST=redis
+      REDIS_PORT=6379
+      ADMIN_ENABLED=true
+      ADMIN_TOKEN=ci-test-token
+      ENVEOF
+
+  - name: composer 校验与代码风格
+    script: |
+      set -eu
+      docker run --rm -v "$CNB_BUILD_WORKSPACE:/app" -w /app \
+        "$(cat .ci-image)" sh -lc '
+          set -e
+          composer validate --strict
+          echo "composer.json 校验通过"
+        '
+
+  - *start-services
+
+  - name: 安装依赖
+    script: |
+      set -eu
+      docker run --rm --network logshare-ci \
+        -v "$CNB_BUILD_WORKSPACE:/app" -w /app \
+        "$(cat .ci-image)" sh -lc '
+          set -e
+          composer install --prefer-dist --no-progress --no-interaction
+          cp Config.inc.example.php Config.inc.php
+        '
+
+  - name: 初始化 MariaDB 表结构与事件
+    script: |
+      set -eu
+      # 具体导入逻辑放在 scripts/ci_init_mariadb.sh：其中有 DELIMITER 存储过程
+      # 必须走客户端、以及为何剔除安装期分区铺设等说明，写在这里会与引号层层嵌套
+      # 难以阅读（CNB 的 script 由 sh/dash 执行，嵌套命令替换极易踩解析坑）。
+      docker run --rm --network logshare-ci \
+        -v "$CNB_BUILD_WORKSPACE:/app" -w /app \
+        --env-file .ci-env \
+        "$(cat .ci-image)" sh scripts/ci_init_mariadb.sh
+
+  - name: 单元测试与覆盖率
+    script: |
+      set -eu
+      # Pest 只支持 --coverage-clover / cobertura / crap / html / php / text / xml，
+      # **没有** --coverage-lcov，而 testing:coverage 内置任务只认
+      # lcov / coverage.json / jacoco / golang。因此先出 clover，
+      # 再用 scripts/clover_to_lcov.php 转成 lcov（逐行命中次数无损转换）。
+      docker run --rm --network logshare-ci \
+        -v "$CNB_BUILD_WORKSPACE:/app" -w /app \
+        --env-file .ci-env \
+        "$(cat .ci-image)" sh -lc '
+          set -e
+          php vendor/bin/pest --coverage --coverage-clover=coverage/clover.xml
+          test -s coverage/clover.xml
+          php scripts/clover_to_lcov.php coverage/clover.xml coverage/lcov.info
+          test -s coverage/lcov.info
+        '
+
+  - name: 上报覆盖率
+    type: testing:coverage
+    options:
+      pattern: coverage/lcov.info
+      # 取不到报告时不中断流水线，避免覆盖率基建问题阻塞真实回归
+      breakIfNoCoverage: false
+
+  - name: 静态分析（PHPStan level 5）
+    script: |
+      set -eu
+      docker run --rm -v "$CNB_BUILD_WORKSPACE:/app" -w /app \
+        "$(cat .ci-image)" sh -lc 'set -e; composer stan'
+
+  - name: 架构测试
+    script: |
+      set -eu
+      docker run --rm -v "$CNB_BUILD_WORKSPACE:/app" -w /app \
+        "$(cat .ci-image)" sh -lc 'set -e; composer test:architecture'
+
+  - name: 启动冒烟测试（Swoole 常驻进程）
+    script: |
+      set -eu
+      docker run --rm --network logshare-ci \
+        -v "$CNB_BUILD_WORKSPACE:/app" -w /app \
+        --env-file .ci-env \
+        "$(cat .ci-image)" sh -lc '
+          set -e
+          # 注解扫描是否可用：路由没注册成功时 list 不报错，但 start 起不来
+          php bin/hyperf.php list > /dev/null
+          php bin/hyperf.php start > /tmp/hyperf.log 2>&1 &
+          ready=0
+          for i in $(seq 1 30); do
+            if curl -sf http://127.0.0.1:9501/v1/limits > /dev/null; then ready=1; break; fi
+            sleep 2
+          done
+          if [ "$ready" != "1" ]; then
+            echo "=== 服务启动超时 ==="; cat /tmp/hyperf.log; exit 1
+          fi
+          php scripts/ci_e2e_test.php --base-url=http://127.0.0.1:9501 --admin-token=ci-test-token || {
+            echo "=== hyperf.log ==="; cat /tmp/hyperf.log; exit 1
+          }
+        '
+
+  - *cleanup-stage
+
+# push 与 pull_request 跑同一套 CI。锚点定义在 main.push 首项上，
+# 再被 pull_request 引用，避免两处维护同一份 stage 列表。
+main:
+  push:
+    - &ci-pipeline
+      name: CI
+      services:
+        - docker
+      docker: !reference [.ci-docker]
+      stages: *ci-stages
+      endStages:
+        - *cleanup-stage
+  pull_request:
+    - *ci-pipeline
