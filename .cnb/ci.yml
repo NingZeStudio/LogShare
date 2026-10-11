@@ -129,43 +129,13 @@
   - name: 初始化 MariaDB 表结构与事件
     script: |
       set -eu
-      # sync_mariadb_events.php 以 Config.inc.php 为 TTL 唯一来源生成 SQL；
-      # 事件必须存在且启用，否则存储层的分区/事件断言用例会失败。
-      #
-      # 导入必须走 mariadb 命令行客户端，不能用 PDO->exec(file_get_contents(...))：
-      # mariadb-events.sql 里含 `DELIMITER $$` 包裹的存储过程，DELIMITER 是客户端的
-      # 专有指令而非 SQL 语句，PDO 会直接报 ERROR 1064（原 GitHub Actions 用 PDO
-      # 导入是历史写法，那时该文件还没有存储过程）。
+      # 具体导入逻辑放在 scripts/ci_init_mariadb.sh：其中有 DELIMITER 存储过程
+      # 必须走客户端、以及为何剔除安装期分区铺设等说明，写在这里会与引号层层嵌套
+      # 难以阅读（CNB 的 script 由 sh/dash 执行，嵌套命令替换极易踩解析坑）。
       docker run --rm --network logshare-ci \
         -v "$CNB_BUILD_WORKSPACE:/app" -w /app \
         --env-file .ci-env \
-        "$(cat .ci-image)" sh -lc '
-          set -e
-          php scripts/sync_mariadb_events.php
-
-          # Debian 的 default-mysql-client 装的是 MariaDB 客户端，命令名可能是
-          # mariadb 或 mysql，两者都试一次；root 密码与上面起的实例一致
-          CLI=$(command -v mariadb || command -v mysql)
-          if [ -z "$CLI" ]; then echo "未找到 MySQL 客户端"; exit 1; fi
-
-          "$CLI" -h "$DB_HOST" -uroot -proot logshare < docker/mariadb-init.sql
-
-          # ── 为什么剔除 CALL logshare_install_partitions() ────────────────────
-          # 该调用会一次性铺出 [今天-TTL-1, 今天+13] 的具名分区。而
-          # MariaDbStorageTest::testAllLogTablesArePartitionedWithFallback 假设
-          # 表上只有 p_future，自行 REORGANIZE 出边界为「明天」的 p_test。
-          # 两者同时存在时，明天已被安装期分区覆盖，REORGANIZE 因上界非严格递增
-          # 报 ERROR 1493，测试失败。
-          #
-          # 这是测试与安装期分区模型之间的既有矛盾（该断言写于「运行期补齐分区」
-          # 时代，见 559d65e），在 GitHub Actions 上同样会失败——原 CI 的
-          # 「Initialize MariaDB Schema & Events」步骤就是 init.sql + events.sql
-          # 顺序执行。此处先按测试的假设装结构、只保留事件定义，把这条差异
-          # 隔离在 CI 配置里，**不改动 PHP 与测试代码**。
-          grep -v '^CALL logshare_install_partitions();' docker/mariadb-events.sql \
-            | "$CLI" -h "$DB_HOST" -uroot -proot logshare
-          echo "schema and events initialized"
-        '
+        "$(cat .ci-image)" sh scripts/ci_init_mariadb.sh
 
   - name: 单元测试与覆盖率
     script: |
