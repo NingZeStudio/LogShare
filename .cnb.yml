@@ -1,9 +1,9 @@
 include:
   - .cnb/ci.yml
 
-probe/cnb-dind:
+main:
   push:
-    - name: 只 include ci.yml
+    - name: 来自 .cnb.yml
       stages:
         - name: t
-          script: echo ok
+          script: echo "from .cnb.yml"
