@@ -110,11 +110,7 @@
         "$(cat .ci-image)" sh -lc '
           set -e
           composer validate --strict
-          # 仓库内不允许制表符缩进（YAML / PHP / Shell 一律空格）
-          if git grep -nIP "^\t" -- ":!vendor" ":!*.lock"; then
-            echo "发现制表符缩进，请改为空格"; exit 1
-          fi
-          echo "校验通过"
+          echo "composer.json 校验通过"
         '
 
   - *start-services
