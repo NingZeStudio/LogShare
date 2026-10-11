@@ -1,9 +1,5 @@
-# probe: 仅验证 include 是否生效（不含 !reference）
 include:
-  - .cnb/ci.yml
+  - .cnb/probe-frag.yml
 
 probe/cnb-dind:
-  push:
-    - stages:
-        - name: 确认 include 文件被加载
-          script: echo "include ok"
+  push: !reference [.probe-pipeline]
