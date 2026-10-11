@@ -27,7 +27,7 @@
   stages:
     - name: 构建生产镜像
       script: |
-        set -euo pipefail
+        set -eu
         # 冒烟经 nginx 挂载 OpenLiteWaf / OpenLiteStats 的 Lua 文件，
         # submodule 内容必须就位，否则挂载源为空目录、WAF 与统计页全失效。
         # CNB 拉取代码时默认递归初始化 submodule，这里断言一次以防回归。
@@ -41,7 +41,7 @@
 
     - name: 准备冒烟配置
       script: |
-        set -euo pipefail
+        set -eu
         cp Config.inc.example.php Config.inc.php
         cp .env.example .env
         sed -i 's/change-me/ci-placeholder/g' .env
@@ -59,7 +59,7 @@
 
     - name: 生成自签证书
       script: |
-        set -euo pipefail
+        set -eu
         # nginx 443 与 healthcheck 需要证书文件；CI 上 docker/certs/ 为空。
         # 域名从 default.conf 的证书路径动态提取，避免仓库域名调整后
         # CI 仍生成旧域名证书导致 nginx 起不来。
@@ -82,7 +82,7 @@
 
     - name: 启动全栈并执行 E2E
       script: |
-        set -euo pipefail
+        set -eu
         UP="docker compose --env-file .env -f docker/compose.yaml"
 
         $UP up -d || { echo "=== compose up 失败 ==="; $UP logs; $UP down; exit 1; }

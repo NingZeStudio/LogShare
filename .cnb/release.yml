@@ -28,7 +28,7 @@
           *) echo "提交信息不以 [Build] 开头，跳过发布"; exit 1 ;;
         esac
       script: |
-        set -euo pipefail
+        set -eu
         # 取 CHANGELOG 首条 `## x.y.z — date` 的版本号
         VER=$(grep -m1 '^## ' CHANGELOG.md | sed 's/^## //; s/ .*//')
         if [ -z "$VER" ]; then

@@ -19,6 +19,11 @@
 # 服务容器的 172.18.x.x 地址（不在同一网络）。唯一可用做法是让执行测试的
 # 容器加入与服务容器相同的自定义 docker 网络，用容器名做 DNS 解析。
 # 所以下面所有要连数据库的步骤都是 `docker run --network logshare-ci`。
+#
+# ── 脚本解释器 ──────────────────────────────────────────────────────────────
+# CNB 的 `script` 由 **sh（dash）** 执行，不是 bash。`set -o pipefail` 这类
+# bash 专有选项会直接以 `sh: 1: set: Illegal option -o pipefail` 退出码 2 失败，
+# 因此本文件统一用 `set -eu`。容器内的 `sh -lc '...'` 同理，不要依赖 bash 特性。
 
 # 构建环境：仓库内 Dockerfile 构建 CI 镜像；vendor 依赖走节点缓存
 .ci-docker:
@@ -34,7 +39,7 @@
 .start-services: &start-services
   name: 启动依赖服务（MariaDB / Redis）
   script: |
-    set -euo pipefail
+    set -eu
     docker network create logshare-ci 2>/dev/null || true
     docker rm -f mariadb redis 2>/dev/null || true
 
@@ -81,7 +86,7 @@
   # Stage 内重复构建既浪费几分钟，还会因 cache 包尚未就位而 170ms 立即失败。
   - name: 准备构建环境
     script: |
-      set -euo pipefail
+      set -eu
       printf '%s' "${CNB_PIPELINE_DOCKER_IMAGE}" > .ci-image
       echo "CI 镜像: $(cat .ci-image)"
 
@@ -100,7 +105,7 @@
 
   - name: composer 校验与代码风格
     script: |
-      set -euo pipefail
+      set -eu
       docker run --rm -v "$CNB_BUILD_WORKSPACE:/app" -w /app \
         "$(cat .ci-image)" sh -lc '
           set -e
@@ -116,7 +121,7 @@
 
   - name: 安装依赖
     script: |
-      set -euo pipefail
+      set -eu
       docker run --rm --network logshare-ci \
         -v "$CNB_BUILD_WORKSPACE:/app" -w /app \
         "$(cat .ci-image)" sh -lc '
@@ -127,7 +132,7 @@
 
   - name: 初始化 MariaDB 表结构与事件
     script: |
-      set -euo pipefail
+      set -eu
       # sync_mariadb_events.php 以 Config.inc.php 为 TTL 唯一来源生成 SQL；
       # 事件必须存在且启用，否则存储层的分区/事件断言用例会失败
       docker run --rm --network logshare-ci \
@@ -146,7 +151,7 @@
 
   - name: 单元测试与覆盖率
     script: |
-      set -euo pipefail
+      set -eu
       # 同时产出 clover 与 lcov：testing:coverage 内置任务只认
       # lcov / json / jacoco / golang，clover 不在其列
       docker run --rm --network logshare-ci \
@@ -170,19 +175,19 @@
 
   - name: 静态分析（PHPStan level 5）
     script: |
-      set -euo pipefail
+      set -eu
       docker run --rm -v "$CNB_BUILD_WORKSPACE:/app" -w /app \
         "$(cat .ci-image)" sh -lc 'set -e; composer stan'
 
   - name: 架构测试
     script: |
-      set -euo pipefail
+      set -eu
       docker run --rm -v "$CNB_BUILD_WORKSPACE:/app" -w /app \
         "$(cat .ci-image)" sh -lc 'set -e; composer test:architecture'
 
   - name: 启动冒烟测试（Swoole 常驻进程）
     script: |
-      set -euo pipefail
+      set -eu
       docker run --rm --network logshare-ci \
         -v "$CNB_BUILD_WORKSPACE:/app" -w /app \
         --env-file .ci-env \
