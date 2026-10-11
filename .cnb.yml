@@ -5,29 +5,23 @@ probe/cnb-dind:
       docker:
         image: docker:27-cli
       stages:
-        - name: 探测 dind 网络与容器可达性
+        - name: 探测容器 IP 连通性
           script: |
-            echo "===== CNB 环境变量 ====="
-            env | grep -i "^CNB_" | sort | head -60
-            echo "===== /etc/hosts ====="
-            cat /etc/hosts
-            echo "===== 网络接口 ====="
-            (ip -4 addr show 2>/dev/null || ifconfig 2>/dev/null || true)
-            echo "===== docker network ls ====="
-            docker network ls
-            echo "===== 启动 redis 与 mariadb ====="
             docker run -d --name probe-redis redis:7.4-alpine
             docker run -d --name probe-mariadb \
               -e MARIADB_DATABASE=logshare -e MARIADB_USER=logshare \
               -e MARIADB_PASSWORD=logshare -e MARIADB_ROOT_PASSWORD=root \
               mariadb:11.8
-            sleep 20
-            docker ps -a
-            echo "===== 默认 bridge 容器 IP ====="
-            docker inspect -f 'redis={{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' probe-redis
-            docker inspect -f 'mariadb={{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' probe-mariadb
-            echo "===== 本机 127.0.0.1 端口探测 ====="
-            (timeout 3 bash -c 'echo > /dev/tcp/127.0.0.1/6379' && echo '127.0.0.1:6379 可达') || echo '127.0.0.1:6379 不可达'
-            echo "===== host.docker.internal 解析 ====="
-            getent hosts host.docker.internal || echo 'host.docker.internal 无解析'
-            echo "===== 探测完成 ====="
+            sleep 25
+            RIP=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' probe-redis)
+            MIP=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' probe-mariadb)
+            echo "redis_ip=$RIP mariadb_ip=$MIP"
+            # 本机网关（docker0 的宿主侧）是否可达
+            echo "--- 默认网关 ---"
+            ip route
+            GW=$(ip route | awk '/default/ {print $3}')
+            echo "default_gw=$GW"
+            echo "--- 直连容器 IP ---"
+            (timeout 5 bash -c "echo > /dev/tcp/$RIP/6379" && echo "redis $RIP:6379 可达") || echo "redis $RIP:6379 不可达"
+            (timeout 5 bash -c "echo > /dev/tcp/$MIP/3306" && echo "mariadb $MIP:3306 可达") || echo "mariadb $MIP:3306 不可达"
+            echo "--- 探测完成 ---"
