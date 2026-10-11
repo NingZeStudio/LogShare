@@ -7,10 +7,6 @@
 #
 # 这里刻意不使用 .cnb/Dockerfile.ci：E2E 要测的就是生产自带的 hyperf 镜像，
 # 换成 CI 镜像会绕开 SpinYarn / jemalloc 等真实构建产物。
-#
-# 事件绑定：push(main) 与 pull_request.target 各跑一次 —— 对 PR 而言，
-# 用源分支代码、目标分支配置（pull_request.target）能让配置改动先经受保护分支
-# 的规则检查，与原 Actions 里 `needs: [...]` 的门控意图一致。
 
 .docker-e2e: &docker-e2e
   name: Docker 全栈 E2E
@@ -113,7 +109,7 @@
       script: |
         docker compose --env-file .env -f docker/compose.yaml down -v 2>/dev/null || true
 
-main:
+probe/cnb-dind:
   push:
     - *docker-e2e
 

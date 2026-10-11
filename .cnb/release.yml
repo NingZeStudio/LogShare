@@ -6,6 +6,9 @@
 #
 # 门控写在 Stage 的 `if` 上而非事件层：CNB 没有 Pipeline 级条件判断，
 # 而 `git:release` 一旦执行就会真的建 Release，误触发代价高。
+#
+# Stage 级 `if` 的语义是「脚本退出码为 0 才执行该 Stage」，因此判据写成
+# if/else 形式而不是简单的短路表达式。
 
 .release-pipeline: &release-pipeline
   name: Release
@@ -49,6 +52,6 @@
         title: LogShare $RELEASE_TAG
         descriptionFromFile: RELEASE_NOTES.md
 
-main:
+probe/cnb-dind:
   push:
     - *release-pipeline
