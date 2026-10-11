@@ -3,4 +3,7 @@ include:
 
 probe/cnb-dind:
   push:
-    - !reference [.ci-pipeline]
+    - name: 用锚点方式在 include 文件里定义
+      stages:
+        - name: t
+          script: echo ok
