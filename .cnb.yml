@@ -1,12 +1,9 @@
 include:
   - .cnb/ci.yml
 
-# 同文件内定义整条流水线供引用（文档中的 .common-pipeline 用法）
-.common-pipeline:
-  - name: 同文件引用测试
-    stages:
-      - name: t1
-        script: echo "同文件 reference 生效"
-
 probe/cnb-dind:
-  push: !reference [.common-pipeline]
+  push:
+    - name: 主文件流水线
+      stages:
+        - name: t1
+          script: echo "主文件 stage 生效"

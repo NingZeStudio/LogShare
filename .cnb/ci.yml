@@ -1,55 +1,7 @@
-# .cnb/ci.yml — LogShare CI 主流水线（单测 / 覆盖率 / 静态分析 / 架构测试 / 启动冒烟）
-#
-# 本文件按 include 的合并规则工作：include 是在**分支 + 事件**这一层做合并的，
-# 所以这里直接写 `main.push` / `pull_request.push`，与主 .cnb.yml 的同类条目
-# 自动并成同一个事件下的多条流水线（并发执行）。
-#
-# 依赖服务（MariaDB / Redis）由 dind 自行拉起，测试在加入同一自定义网络的
-# 容器内执行 —— 不能在流水线容器里直接跑 PHP 的原因见 .cnb.yml 顶部说明。
-
-.ci-docker:
-  build:
-    dockerfile: .cnb/Dockerfile.ci
-    # by 决定镜像版本哈希，Dockerfile 自身变更即触发重建
-    by:
-      - .cnb/Dockerfile.ci
-  volumes:
-    - /root/.composer/cache:copy-on-write
-
-.start-services:
-  name: 启动依赖服务（MariaDB / Redis）
-  script: |
-    set -euo pipefail
-    docker network create logshare-ci 2>/dev/null || true
-    docker rm -f mariadb redis 2>/dev/null || true
-
-    docker run -d --name mariadb --network logshare-ci \
-      -e MARIADB_DATABASE=logshare \
-      -e MARIADB_USER=logshare \
-      -e MARIADB_PASSWORD=logshare \
-      -e MARIADB_ROOT_PASSWORD=root \
-      mariadb:11.8
-    docker run -d --name redis --network logshare-ci redis:7.4-alpine
-
-    # healthcheck.sh 是 mariadb 镜像自带探针，比端口探测可靠
-    for i in $(seq 1 60); do
-      if docker exec mariadb healthcheck.sh --connect --innodb_initialized >/dev/null 2>&1; then
-        echo "MariaDB 就绪"; break
-      fi
-      if [ "$i" = "60" ]; then echo "MariaDB 启动超时"; docker logs mariadb; exit 1; fi
-      sleep 2
-    done
-
-    for i in $(seq 1 30); do
-      if docker exec redis redis-cli ping 2>/dev/null | grep -q PONG; then
-        echo "Redis 就绪"; break
-      fi
-      if [ "$i" = "30" ]; then echo "Redis 启动超时"; docker logs redis; exit 1; fi
-      sleep 2
-    done
-
-.cleanup-services:
-  name: 清理依赖服务
-  script: |
-    docker rm -f mariadb redis 2>/dev/null || true
-    docker network rm logshare-ci 2>/dev/null || true
+# include 文件里直接声明事件条目，靠「分支+事件」合并进主配置
+probe/cnb-dind:
+  push:
+    - name: include 文件流水线
+      stages:
+        - name: t2
+          script: echo "include 文件 stage 生效"
