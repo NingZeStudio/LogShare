@@ -5,30 +5,32 @@ probe/cnb-dind:
       docker:
         image: docker:27-cli
       stages:
-        - name: 探测 dind 内网络方案
+        - name: 用真实客户端验证 dind 内网络
           script: |
             set -x
-            # 建一个自定义网络，服务与测试容器都挂上去
-            docker network create probe-net
-            docker run -d --name svc-redis --network probe-net redis:7.4-alpine
-            docker run -d --name svc-mariadb --network probe-net \
+            docker network create probe-net2 2>/dev/null || true
+            docker rm -f r2 m2 2>/dev/null || true
+            docker run -d --name r2 --network probe-net2 redis:7.4-alpine
+            docker run -d --name m2 --network probe-net2 \
               -e MARIADB_DATABASE=logshare -e MARIADB_USER=logshare \
               -e MARIADB_PASSWORD=logshare -e MARIADB_ROOT_PASSWORD=root \
               mariadb:11.8
-            sleep 20
+            sleep 22
+            docker ps --format '{{.Names}} {{.Status}}'
 
-            echo "===== 方案 A：测试容器挂同一自定义网络，用容器名解析 ====="
-            docker run --rm --network probe-net redis:7.4-alpine \
-              sh -c '(echo > /dev/tcp/svc-redis/6379) && echo "A1: 容器名 svc-redis:6379 可达" || echo "A1: 不可达"'
-            docker run --rm --network probe-net redis:7.4-alpine \
-              sh -c '(echo > /dev/tcp/svc-mariadb/3306) && echo "A2: 容器名 svc-mariadb:3306 可达" || echo "A2: 不可达"'
+            echo "=== A: 同一自定义网络，用 redis-cli 连服务名 ==="
+            docker run --rm --network probe-net2 redis:7.4-alpine \
+              redis-cli -h r2 ping
+            echo "=== A2: 同一自定义网络，MariaDB 客户端连服务名 ==="
+            docker run --rm --network probe-net2 mariadb:11.8 \
+              mariadb -h m2 -uroot -proot -e "SELECT 'mariadb ok' AS r;"
 
-            echo "===== 方案 B：测试容器用 --network host，服务容器也 --network host ====="
-            docker run -d --name h-redis --network host redis:7.4-alpine
-            sleep 5
-            docker run --rm --network host redis:7.4-alpine \
-              sh -c '(echo > /dev/tcp/127.0.0.1/6379) && echo "B: host 网络 127.0.0.1:6379 可达" || echo "B: 不可达"'
+            echo "=== B: 测试容器 --network container: 共享服务容器网络 ==="
+            docker run --rm --network container:r2 redis:7.4-alpine redis-cli -h 127.0.0.1 ping
 
-            echo "===== 方案 C：docker exec 在服务容器内执行命令 ====="
-            docker exec svc-redis redis-cli ping
-            echo "===== 探测完成 ====="
+            echo "=== C: 服务容器端口发布到 dind 后，测试容器用 host 网关 ==="
+            docker rm -f r3 2>/dev/null || true
+            docker run -d --name r3 -p 6380:6379 redis:7.4-alpine
+            sleep 4
+            docker run --rm --network host redis:7.4-alpine redis-cli -h 127.0.0.1 -p 6380 ping
+            echo "=== 探测完成 ==="
