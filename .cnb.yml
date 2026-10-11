@@ -2,35 +2,34 @@ probe/cnb-dind:
   push:
     - services:
         - docker
-      docker:
-        image: docker:27-cli
       stages:
-        - name: 用真实客户端验证 dind 内网络
+        # 1) 构建 PHP 镜像（用 dind 内 docker build 验证 Dockerfile 可用）
+        - name: 构建 CI 镜像
           script: |
-            set -x
-            docker network create probe-net2 2>/dev/null || true
-            docker rm -f r2 m2 2>/dev/null || true
-            docker run -d --name r2 --network probe-net2 redis:7.4-alpine
-            docker run -d --name m2 --network probe-net2 \
+            set -euo pipefail
+            docker build -t logshare-ci-probe -f .cnb/Dockerfile.ci .
+        # 2) 起服务 + 用镜像跑 composer install 与 pest
+        - name: 跑通依赖安装与单测
+          script: |
+            set -euo pipefail
+            docker network create probe-net3 2>/dev/null || true
+            docker rm -f p-mariadb p-redis 2>/dev/null || true
+            docker run -d --name p-mariadb --network probe-net3 \
               -e MARIADB_DATABASE=logshare -e MARIADB_USER=logshare \
-              -e MARIADB_PASSWORD=logshare -e MARIADB_ROOT_PASSWORD=root \
-              mariadb:11.8
-            sleep 22
-            docker ps --format '{{.Names}} {{.Status}}'
+              -e MARIADB_PASSWORD=logshare -e MARIADB_ROOT_PASSWORD=root mariadb:11.8
+            docker run -d --name p-redis --network probe-net3 redis:7.4-alpine
+            for i in $(seq 1 60); do
+              docker exec p-mariadb healthcheck.sh --connect --innodb_initialized >/dev/null 2>&1 && break
+              [ "$i" = 60 ] && { docker logs p-mariadb; exit 1; }
+              sleep 2
+            done
+            docker exec p-redis redis-cli ping
 
-            echo "=== A: 同一自定义网络，用 redis-cli 连服务名 ==="
-            docker run --rm --network probe-net2 redis:7.4-alpine \
-              redis-cli -h r2 ping
-            echo "=== A2: 同一自定义网络，MariaDB 客户端连服务名 ==="
-            docker run --rm --network probe-net2 mariadb:11.8 \
-              mariadb -h m2 -uroot -proot -e "SELECT 'mariadb ok' AS r;"
-
-            echo "=== B: 测试容器 --network container: 共享服务容器网络 ==="
-            docker run --rm --network container:r2 redis:7.4-alpine redis-cli -h 127.0.0.1 ping
-
-            echo "=== C: 服务容器端口发布到 dind 后，测试容器用 host 网关 ==="
-            docker rm -f r3 2>/dev/null || true
-            docker run -d --name r3 -p 6380:6379 redis:7.4-alpine
-            sleep 4
-            docker run --rm --network host redis:7.4-alpine redis-cli -h 127.0.0.1 -p 6380 ping
+            docker run --rm --network probe-net3 \
+              -v "$CNB_BUILD_WORKSPACE:/app" -w /app \
+              -e DB_HOST=p-mariadb -e DB_PORT=3306 -e DB_DATABASE=logshare \
+              -e DB_USERNAME=logshare -e DB_PASSWORD=logshare \
+              -e REDIS_HOST=p-redis -e REDIS_PORT=6379 \
+              logshare-ci-probe \
+              sh -c 'php -v && php -m | grep -iE "swoole|redis|pdo_mysql|pcov|brotli" && composer install --prefer-dist --no-progress --no-interaction && cp Config.inc.example.php Config.inc.php && php vendor/bin/pest --filter=FilterTest'
             echo "=== 探测完成 ==="
