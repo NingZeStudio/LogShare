@@ -5,22 +5,30 @@ probe/cnb-dind:
       docker:
         image: docker:27-cli
       stages:
-        - name: 探测 docker run --network host 可达性
+        - name: 探测 dind 内网络方案
           script: |
-            echo "===== 方案A: --network host 启动服务 ====="
-            docker run -d --name ph-redis --network host redis:7.4-alpine 2>&1 | tail -2
-            (timeout 5 bash -c "echo > /dev/tcp/127.0.0.1/6379" && echo "A: 127.0.0.1:6379 可达") || echo "A: 127.0.0.1:6379 不可达"
+            set -x
+            # 建一个自定义网络，服务与测试容器都挂上去
+            docker network create probe-net
+            docker run -d --name svc-redis --network probe-net redis:7.4-alpine
+            docker run -d --name svc-mariadb --network probe-net \
+              -e MARIADB_DATABASE=logshare -e MARIADB_USER=logshare \
+              -e MARIADB_PASSWORD=logshare -e MARIADB_ROOT_PASSWORD=root \
+              mariadb:11.8
+            sleep 20
 
-            echo "===== 方案B: 在 dind 内跑一个容器，从容器内访问服务 ====="
-            docker run -d --name pn-redis -p 6379:6379 redis:7.4-alpine 2>&1 | tail -2
+            echo "===== 方案 A：测试容器挂同一自定义网络，用容器名解析 ====="
+            docker run --rm --network probe-net redis:7.4-alpine \
+              sh -c '(echo > /dev/tcp/svc-redis/6379) && echo "A1: 容器名 svc-redis:6379 可达" || echo "A1: 不可达"'
+            docker run --rm --network probe-net redis:7.4-alpine \
+              sh -c '(echo > /dev/tcp/svc-mariadb/3306) && echo "A2: 容器名 svc-mariadb:3306 可达" || echo "A2: 不可达"'
+
+            echo "===== 方案 B：测试容器用 --network host，服务容器也 --network host ====="
+            docker run -d --name h-redis --network host redis:7.4-alpine
             sleep 5
-            docker run --rm redis:7.4-alpine sh -c 'apk add --no-cache bash >/dev/null 2>&1; (timeout 5 bash -c "echo > /dev/tcp/pn-redis/6379" && echo "B: 容器间 6379 可达") || echo "B: 容器间 6379 不可达"'
+            docker run --rm --network host redis:7.4-alpine \
+              sh -c '(echo > /dev/tcp/127.0.0.1/6379) && echo "B: host 网络 127.0.0.1:6379 可达" || echo "B: 不可达"'
 
-            echo "===== 方案C: 从流水线容器经 docker exec 使用服务 ====="
-            docker exec pn-redis redis-cli ping 2>&1 | head -2
-
-            echo "===== 方案D: 端口映射到宿主 dind 后，流水线容器能否访问 dind 网关 ====="
-            DIND_GW=$(docker network inspect bridge -f '{{(index .IPAM.Config 0).Gateway}}')
-            echo "dind bridge gw=$DIND_GW"
-            (timeout 5 bash -c "echo > /dev/tcp/$DIND_GW/6379" && echo "D: $DIND_GW:6379 可达") || echo "D: $DIND_GW:6379 不可达"
-            echo "--- 探测完成 ---"
+            echo "===== 方案 C：docker exec 在服务容器内执行命令 ====="
+            docker exec svc-redis redis-cli ping
+            echo "===== 探测完成 ====="
