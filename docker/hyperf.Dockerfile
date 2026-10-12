@@ -3,9 +3,15 @@
 # rust ≥1.88：SpinYarn v1.1.0 依赖链（url→idna→icu 2.x）的 MSRV 要求
 # v1.1.1：映射缓存 bincode + 常驻连接 + Redis 侧版本高低水位（修 consumer 堆高水位）
 FROM rust:1.90.0 AS spinyarn-capi
-RUN git clone --depth 1 --branch v1.1.1 https://github.com/NingZeStudio/SpinYarn /spinyarn
+# SpinYarn 源码 pin 到 commit（v1.1.1 的 sha，2026-10-12 经 git ls-remote 核验），防 tag 漂移
+ARG SPINYARN_REF=d4687036ceaad50d2630ef3ae026ae01d6c828cd
+RUN git clone https://github.com/NingZeStudio/SpinYarn /spinyarn \
+    && cd /spinyarn \
+    && git fetch --depth 1 origin ${SPINYARN_REF} \
+    && git checkout ${SPINYARN_REF}
 WORKDIR /spinyarn
-RUN cargo build --release --workspace
+# 仅编译 C ABI 库（PHP 扩展的链接对象），不编 Web binary（Axum 服务本镜像用不到）
+RUN cargo build --release -p spinyarn-capi
 
 # 阶段 2：最终镜像（php:8.5-cli，Hyperf 常驻进程）
 FROM php:8.5.0-cli-bookworm
@@ -40,18 +46,27 @@ ENV LD_PRELOAD=/usr/local/lib/libjemalloc.so.2 \
     MALLOC_CONF=dirty_decay_ms:1000,muzzy_decay_ms:1000,background_thread:true
 
 # 编译 SpinYarn PHP 扩展（C ABI 来自阶段 1），编译完成后删除源码与构建产物，
-# 仅保留 /usr/local/lib 下的共享库，减小镜像体积与攻击面
-COPY --from=spinyarn-capi /spinyarn /spinyarn
+# 仅保留 /usr/local/lib 下的共享库，减小镜像体积与攻击面。
+# 只取构建所需的子路径（扩展源码 + C 头文件 + 已编译的 C ABI 库），不整目录 COPY，
+# 避免把 Rust target 缓存与 Web binary 产物带入本阶段
+COPY --from=spinyarn-capi /spinyarn/crates/php /spinyarn/crates/php
+COPY --from=spinyarn-capi /spinyarn/crates/capi/include /spinyarn/crates/capi/include
+COPY --from=spinyarn-capi /spinyarn/target/release/libspinyarn_capi.so /spinyarn/target/release/libspinyarn_capi.so
 RUN cd /spinyarn/crates/php \
     && phpize \
     && ./configure --enable-spinyarn --with-spinyarn-libdir=/spinyarn/target/release \
     && make \
     && make install \
     && docker-php-ext-enable spinyarn \
-    && rm -rf /spinyarn
+    && cp /spinyarn/target/release/libspinyarn_capi.so /usr/local/lib/libspinyarn_capi.so \
+    && rm -rf /spinyarn \
+    && apt-get purge -y autoconf build-essential libcurl4-openssl-dev libssl-dev zlib1g-dev libc-ares-dev libbrotli-dev \
+    && rm -rf /var/lib/apt/lists/*
+# 说明：扩展装完后 purge 编译期依赖以收敛体积与攻击面；libjemalloc2 为运行时保留；
+# 不用 --auto-remove，避免连带删掉 Swoole 运行时仍需的共享库（libcurl/libssl 等）；
+# 不用 BuildKit cache mount，保证普通 docker build 兼容性。
 
 # C ABI 共享库 + 动态链接器路径
-COPY --from=spinyarn-capi /spinyarn/target/release/libspinyarn_capi.so /usr/local/lib/libspinyarn_capi.so
 RUN echo '/usr/local/lib' > /etc/ld.so.conf.d/spinyarn.conf && ldconfig
 
 # 项目依赖 + 代码（代码打进镜像，避免依赖运行时挂载 vendor）
@@ -66,3 +81,5 @@ COPY . .
 # 启动：先清理挂载的陈旧注解容器缓存，再构建 RAG 索引并启动服务。
 # `exec` 让 Hyperf 成为 PID 1，保证信号能正确传递。
 CMD ["sh", "-c", "rm -rf /app/runtime/container; php bin/hyperf.php rag:build || echo '[entrypoint] rag:build failed, starting server with existing index'; exec php bin/hyperf.php start"]
+
+# 版本断言：spinyarn 扩展版本须与阶段 1 的 SPINYARN_REF 对应（`php --ri spinyarn` 核验由 CI 保障，本任务不改 CI）。

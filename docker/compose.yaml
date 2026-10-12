@@ -73,7 +73,8 @@ services:
     expose:
       - "9501"
     volumes:
-      - ../mappings:/app/mappings
+      # 映射表只读挂载：宿主机目录为空时反混淆全透传（返回原文，属预期降级），部署前请确认映射表已下载
+      - ../mappings:/app/mappings:ro
       - ../OpenLiteWaf/data:/app/OpenLiteWaf/data:ro
       # 完整业务配置（AI 密钥、语义 RAG、生产域名等）挂载到容器内，
       # 文件不存在时自动回退 Config.inc.example.php；该文件已被 .gitignore 排除

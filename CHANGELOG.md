@@ -16,6 +16,7 @@
 
 ### 修复
 
+- **SpinYarn 接入审查修复**：`getHandle` 初始化失败不再永久缓存 false，失败后 60s 节流、过期自动重试，成功句柄仍复用；对 mappingsDir + redisUrl + 三水位算 hash，配置变化时重建句柄（新成功才替换）。`deobfuscate` 入口先校验版本格式、再归一化映射类型（非法均透传 + 日志，不再默认 yarn），常量取值前 `defined()` 兜底，失败返回打 warn 日志（仅版本/类型/正文长度，不记正文），成功经可选第四参 `&$stats` 回传三计数与耗时。代码兜底水位改为 10/10/7 并与示例一致；`resolveRedisUrl` 改走 `spinyarn.redis_enabled`（缺省跟随 `cache.enabled`），经 `buildRedisUrl` 拼串（支持 username，端口/库号非法打 error 日志）；“本地缓存”措辞统一为按需解析（无缓存）。管理探针同时接受 `mappingType`/`mapping_type`（camelCase 优先），版本/类型非法与 content 超 256KB 返回 400，回显 `stats` 与 `changed`；状态新增 `redisConfigured`（仅 bool）、`redisSupported`、三水位、`extensionVersion` 及最新 1-2 个版本的 `has_mapping` 抽查，版本正则放宽允许 `+` 与 `_`。示例配置新增 `spinyarn.redis_enabled` 与 `cache.redis.username`。
 - **过期日志的空间从未真正归还**：MariaDB 后端原先按行 `DELETE` 过期日志，InnoDB 只回收 `.ibd` 文件内部的空闲页，磁盘占用随运行时长单调递增直至爆满。现按天分区并丢弃整日分区，空间在丢弃瞬间归还操作系统，空间回收最多滞后一天（跨越过期时刻当天的分区会保留到次日，属刻意的保守设计）。
 - **`Renew()` 导致父子表分区错位**：续期会更新父表 `created`，InnoDB 随之把行移动到新分区，而子表 `created` 未同步，父子行落入不同分区，父表分区被丢弃后子表残留成为永久无法回收的孤儿数据。现同步更新子表。
 - **存储过程中有符号/无符号类型提升导致清理静默失效**：`information_schema.PARTITIONS.PARTITION_DESCRIPTION` 是无符号列，与有符号的过期时刻比较时负值被提升为巨大无符号数，使「没有任何分区可丢弃」且不报任何错误。现统一按 `SIGNED` 比较。

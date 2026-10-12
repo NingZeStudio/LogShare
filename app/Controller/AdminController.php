@@ -1695,8 +1695,23 @@ class AdminController extends AbstractController
         }
 
         $content = (string) $body['content'];
+        if (strlen($content) > 256 * 1024) {
+            throw new ApiError(400, 'Content exceeds 256KB limit');
+        }
         $version = trim((string) $body['version']);
-        $mappingType = isset($body['mappingType']) && $body['mappingType'] === 'vanilla' ? 'vanilla' : 'yarn';
+        if (!\App\Client\SpinYarnClient::isValidVersion($version)) {
+            throw new ApiError(400, 'Invalid version format');
+        }
+
+        // 同时接受 mappingType（优先）与 mapping_type，非法时 400（不再静默默认 yarn）
+        $rawType = $body['mappingType'] ?? $body['mapping_type'] ?? 'yarn';
+        if (!is_string($rawType)) {
+            throw new ApiError(400, 'Invalid mappingType, expected yarn or vanilla');
+        }
+        $mappingType = \App\Client\SpinYarnClient::normalizeMappingType($rawType);
+        if ($mappingType === null) {
+            throw new ApiError(400, 'Invalid mappingType, expected yarn or vanilla');
+        }
 
         $result = SpinYarnManager::testDeobfuscate($content, $version, $mappingType);
         return $this->respondSuccess($result, 'SpinYarn deobfuscation test completed');

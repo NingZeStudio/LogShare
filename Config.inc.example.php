@@ -33,8 +33,8 @@ return [
     'cache' => [
         'cacheId' => '\\App\\Cache\\RedisCache',
         'enabled' => true,
-        // password / database 为可选项：Redis 开启 requirepass 或 ACL 时填 password
-        'redis' => ['host' => 'redis', 'port' => 6379, 'password' => '${REDIS_PASSWORD}', 'database' => 0],
+        // password / database / username 为可选项：Redis 开启 requirepass 或 ACL 时填 password（ACL 用户填 username）
+        'redis' => ['host' => 'redis', 'port' => 6379, 'username' => '', 'password' => '${REDIS_PASSWORD}', 'database' => 0],
         'ttl' => 30 * 60,
         'maxSize' => 5 * 1024 * 1024,
     ],
@@ -225,6 +225,14 @@ return [
         // 映射表由下载脚本（scripts/download_mappings.sh + download_vanilla_mappings.py）
         // 预先生成并提交进仓库；Docker 部署时 bind mount 宿主机 ./mappings。
         'mappings_dir' => 'mappings',
+        // 是否允许 SpinYarn 使用 Redis 共享映射缓存。默认 true：跟随 cache.enabled
+        // 并用 cache.redis 拼出 redis_url 透给扩展；设为 false 则强制按需解析
+        // （on-demand，无缓存）：每次反混淆独立加载映射表，用完即释。
+        'redis_enabled' => true,
+        // Redis 共享缓存池水位（仅 redis_url 非空时生效）：解析后的映射表序列化存
+        // Redis（key 为 spinyarn:mapping/<type>:<version>，7 天 TTL），recency 经
+        // spinyarn:mapping:lru 有序集合维护；成员数达 high 时批量淘汰最旧者至 low。
+        // 生产水位 10/10/7；无 redis_url 时三值无意义（按需解析，无缓存）。
         'cache_max_entries' => 10,
         'cache_high_watermark' => 10,
         'cache_low_watermark' => 7,
