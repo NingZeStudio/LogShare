@@ -476,7 +476,7 @@ if ($testWaf) {
         }
 
         // 尝试发送典型 SQL 注入请求
-        $sqliRes = httpRequest('GET', "{$baseUrl}/v1/limits?union=SELECT%201,version()");
+        $sqliRes = httpRequest('GET', "{$baseUrl}/v1/limits?id=1%20UNION%20SELECT%201,version()");
         if ($sqliRes['status'] !== 403) {
             throw new RuntimeException("OpenLiteWaf 未拦截 SQL 注入请求，状态: {$sqliRes['status']}");
         }
