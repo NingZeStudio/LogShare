@@ -23,7 +23,7 @@
     REDIS_PASSWORD: ci-placeholder
     ADMIN_TOKEN: ci-placeholder
     AI_MCP_RAG_AUTH_TOKEN: ci-placeholder
-    OPENLITEWAF_ADMIN_TOKEN: ci-waf-token
+    OPENLITEWAF_ADMIN_TOKEN: ci-openlitewaf-token
   stages:
     - name: 构建生产镜像
       script: |
@@ -49,7 +49,7 @@
         ADMIN_ENABLED=true
         ADMIN_TOKEN=ci-placeholder
         AI_MCP_RAG_AUTH_TOKEN=ci-placeholder
-        OPENLITEWAF_ADMIN_TOKEN=ci-waf-token
+        OPENLITEWAF_ADMIN_TOKEN=ci-openlitewaf-token
         ENVEOF
         # compose 从 docker/ 目录读 .env，复制一份保持一致
         cp .env docker/.env
@@ -122,7 +122,7 @@
         $UP exec -T hyperf sh -c "grep -q ' $DOMAIN' /etc/hosts || echo '$NGINX_IP $DOMAIN' >> /etc/hosts"
         echo "已将 $DOMAIN 指向 nginx 容器 $NGINX_IP"
 
-        $UP exec -T -e OPENLITEWAF_ADMIN_TOKEN=ci-waf-token hyperf \
+        $UP exec -T -e OPENLITEWAF_ADMIN_TOKEN=ci-openlitewaf-token hyperf \
           php scripts/ci_e2e_test.php \
             --base-url="https://$DOMAIN" \
             --admin-token=ci-placeholder \

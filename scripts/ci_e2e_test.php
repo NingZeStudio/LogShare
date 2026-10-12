@@ -500,7 +500,7 @@ if ($testWaf) {
     // 顺序纪律：以下用例会累积 strike 计数并封禁 CI 出口 IP，必须排在全部正向断言之后
     runCheck('OpenLiteWaf 特征命中累计封禁与运行时解封', function () use ($baseUrl) {
         for ($i = 0; $i < 3; $i++) {
-            httpRequest('GET', "{$baseUrl}/v1/limits?union=SELECT%201,version()");
+            httpRequest('GET', "{$baseUrl}/v1/limits?id=1%20UNION%20SELECT%201,version()");
         }
         $banned = httpRequest('GET', "{$baseUrl}/v1/limits");
         if ($banned['status'] !== 403) {
