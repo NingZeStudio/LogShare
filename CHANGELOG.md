@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.8.3 — 未发布
+## 1.8.3 — 2026-10-13
 
 ### 新增
 
@@ -30,6 +30,13 @@
   - `OpenLiteWaf`：攻击日志与封禁记录新增命中规则序号（`rule`）与匹配对象（`via`），`/security/stats` 新增 `ban_reasons` 封禁原因分布；命中片段与请求体内容一律不记录，公开页隐私口径不变。
   - `OpenLiteWaf`：新增特权运维端点 `GET /security/bans` 与 `POST /security/unban`（令牌 `OPENLITEWAF_ADMIN_TOKEN` 走请求头，未配置时 404 fail-closed），解封同时清除封禁键、命中计数、CC 窗口计数与封禁槽位并立即重写快照，`docker restart` 不再复活误封。后台「解封」此前对边缘层完全无效（`syncUnbanToWaf` 只改快照文件，而该目录在应用容器内是只读挂载），现改走内部 HTTPS 调用，应用容器的 `OpenLiteWaf/data` 维持只读。
 - **站点访问统计口径修正（子模块更新）**：`OpenLiteStats` v1.1.0 将遥测上报（`/v1|/1/telemetry`）与管理后台（`/v1|/1/admin`）排除出全部计数——线上热门端点榜首曾是 `/v1/telemetry/report`（占环形窗口近半），且每个上报方都占一个独立 IP 位；同时不再计入 CORS `OPTIONS` 预检；热门端点聚合键按后端 `TelemetryService::cleanEndpoint` 同口径做路径模板化（`/v1/raw/{id}/main.log` → `/v1/raw/:id/main.log`，长十六进制 cacheKey → `:hash`），`recent` 列表保留原始路径。排除前缀改为按路径段边界判定并拒绝空前缀（此前 `/v1/administrator` 也会被排除，而列表里混入空串会静默停掉全站统计）。
+
+### 构建与 CI
+
+- **CI 从 GitHub Actions 迁移至 CNB 云原生构建**：新增 `.cnb.yml` 与 `.cnb/` 目录，职责与原 GitHub Actions 一致——单测/覆盖率、composer 校验、PHPStan level 5、架构测试、Swoole 启动冒烟，另加生产镜像构建与 docker compose 全栈真实环境 E2E（覆盖反代、TLS、WAF 拦截与解封、统计页、日志完整生命周期与 Admin/RAG 端点）。`.cnb/release.yml` 在提交信息以 `[Build]` 开头时发布 Release，tag 与 Release notes 均取自 `CHANGELOG.md` 首条版本条目。
+- **GitHub 代码同步**：push `main` 时经 git-sync 将代码同步回 `NingZeStudio/LogShare` 镜像仓库（目标仓库不在 CNB 镜像链条上，提交链长期分叉，故显式开启强制推送）。
+- **CI 环境镜像 `.cnb/Dockerfile.ci`**：PHP 8.5 + Swoole 6.2 + pcov，刻意不编译 SpinYarn 扩展（CI 不验证反混淆链路，`phpstan.neon` 已排除 `SpinYarnClient`）、不安装 jemalloc（常驻进程专用）。
+- **平台机制适配**（已记录在配置注释中，改配置前需先读）：`include` 在「分支 + 事件」层合并，整条流水线数组不能用 `!reference` 引用（CNB runner 1.73.0 下会静默产出零 stage 的空流水线），属性级引用可用；`script` 由 sh（dash）执行，统一用 `set -eu` 而非 bash 专有的 `set -o pipefail`；`services` 只支持 docker/vscode，MariaDB 与 Redis 需自行 `docker run`，且 dind 与流水线容器网络不互通，须令测试容器加入同一自定义网络用容器名解析；Stage 的 `if` 不继承，门控必须落在真正做事的 Stage 上。覆盖率经 `scripts/clover_to_lcov.php` 由 Clover 转为 LCOV 后上报平台洞察页。
 
 ### 协议与文档
 

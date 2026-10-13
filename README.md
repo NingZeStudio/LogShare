@@ -4,7 +4,7 @@ LogShare 是一个面向 Minecraft 与 Hytale 等沙盒游戏的高性能日志�
 
 在此之上，平台搭载工业级解耦重构的 LogAgent 智能排障诊断引擎，内建 `deep`（深度推理排障）、`launcher`（启动器崩溃优先）与 `quick`（极速直答）三种分析模式。支持自主调度 Exa 多源网络搜索、内置本地向量与全文检索（RAG）、日志精确定位检索及 GitHub 启动器排障工具链，结合动态日志窗口（LogWindowManager）聚焦真实崩溃上下文，以 SSE 流式输出思维链、排障建议及严格结构化 JSON 诊断块，并由四维评估引擎（AnalysisScorer）与链路追踪系统（AnalysisTracer）保障诊断质量。
 
-服务端基于 Hyperf 3.2 框架与 Swoole 6.2 高性能协程常驻进程引擎，原生要求 PHP 8.4 及以上。存储后端支持 MariaDB 与文件系统二选一，Redis 作为缓存、限流与事件流消息总线。当前版本 `v1.8.2-beta.2`，更新记录见 [`CHANGELOG.md`](CHANGELOG.md)。
+服务端基于 Hyperf 3.2 框架与 Swoole 6.2 高性能协程常驻进程引擎，原生要求 PHP 8.4 及以上。存储后端支持 MariaDB 与文件系统二选一，Redis 作为缓存、限流与事件流消息总线。当前版本 `v1.8.3`，更新记录见 [`CHANGELOG.md`](CHANGELOG.md)。
 
 ## 环境要求
 
