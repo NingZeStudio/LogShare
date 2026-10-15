@@ -20,7 +20,7 @@ use App\Syslog;
  */
 class GitHubClient
 {
-    private const USER_AGENT = 'LogShare-Agent/1.0 (+https://github.com/NingZeStudio/LogShare)';
+    private const USER_AGENT = 'LogShare-Agent/1.0 (+https://github.com/anylyralabs/LogShare)';
     private const MAX_CONTENT_BYTES = 12000;
     private const MAX_RETRIES_PER_CALL = 3;
 

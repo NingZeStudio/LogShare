@@ -4,7 +4,7 @@
 #   CI      ：push(main) / pull_request 触发，单测 + 覆盖率 + 静态分析 + 架构测试
 #             + Swoole 启动冒烟，另加真实 docker compose 全栈 E2E。
 #   Release ：提交信息以 [Build] 开头时发布 Release。
-#   Sync    ：push(main) 时把代码同步回 GitHub（NingZeStudio/LogShare）。
+#   Sync    ：push(main) 时把代码同步回 GitHub（anylyralabs/LogShare）。
 #
 # ── 文件拆分 ────────────────────────────────────────────────────────────────
 #   .cnb/ci.yml          CI 主流水线（单测 / 覆盖率 / 静态分析 / 架构测试 / 冒烟）
@@ -45,7 +45,7 @@ main:
         - name: sync to github
           image: tencentcom/git-sync
           settings:
-            target_url: https://github.com/NingZeStudio/LogShare
+            target_url: https://github.com/anylyralabs/LogShare
             auth_type: https
             username: qitry
             password: ${GITHUB_TOKEN}
